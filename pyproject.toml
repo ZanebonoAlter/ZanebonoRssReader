@@ -1,0 +1,16 @@
+[project]
+name = "my-robot"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "beautifulsoup4==4.12.2",
+    "crawl4ai>=0.7.8",
+    "feedparser>=6.0.11",
+    "flask==3.0.0",
+    "flask-cors==4.0.0",
+    "flask-sqlalchemy>=3.1.1",
+    "pyjwt==2.8.0",
+    "requests==2.31.0",
+]

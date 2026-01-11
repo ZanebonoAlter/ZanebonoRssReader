@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm add:*)",
+      "Bash(pnpm dev:*)",
+      "Bash(uv sync:*)",
+      "Bash(uv run:*)",
+      "Bash(curl:*)",
+      "Bash(python:*)",
+      "Bash(ls:*)",
+      "Bash(sqlite3:*)",
+      "Bash(py:*)",
+      "Bash(py -m pip:*)",
+      "Bash(.venv/Scripts/python.exe:*)",
+      "Bash(pnpm build:*)",
+      "Bash(dir:*)",
+      "Bash(uv pip compile:*)",
+      "Bash(uv export:*)"
+    ]
+  }
+}
