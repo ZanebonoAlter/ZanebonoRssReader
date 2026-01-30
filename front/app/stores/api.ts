@@ -115,6 +115,7 @@ export const useApiStore = defineStore('api', () => {
         refreshStatus: feed.refresh_status || 'idle',
         refreshError: feed.refresh_error,
         lastRefreshAt: feed.last_refresh_at,
+        aiSummaryEnabled: feed.ai_summary_enabled !== undefined ? feed.ai_summary_enabled : true, // Default to true if not set
       }))
 
       feeds.value = mappedFeeds

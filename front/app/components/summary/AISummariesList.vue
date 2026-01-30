@@ -31,6 +31,7 @@ const loading = ref(false)
 const summaries = ref<AISummary[]>([])
 const error = ref<string | null>(null)
 const generating = ref(false)
+const selectedSummaryId = ref<number | null>(null)
 
 // Generation status tracking
 interface GenerationStatus {
@@ -159,11 +160,12 @@ async function generateSummary() {
       status: 'pending' as const
     }))
 
-    // Generate summaries for all categories in parallel with individual error handling
-    const promises = categories.map(async (category, index) => {
+    // Generate summaries for all categories sequentially (one at a time)
+    for (let index = 0; index < categories.length; index++) {
+      const category = categories[index]
       // Update status to generating
       const statusItem = generationStatus.value[index]
-      if (!statusItem) return
+      if (!statusItem || !category) continue
 
       statusItem.status = 'generating'
 
@@ -188,10 +190,7 @@ async function generateSummary() {
         statusItem.status = 'failed'
         statusItem.error = (err as Error).message
       }
-    })
-
-    // Wait for all promises to settle (both resolved and rejected)
-    await Promise.allSettled(promises)
+    }
 
     generating.value = false
 
@@ -251,6 +250,7 @@ function truncateSummary(summary: string, maxLength = 150): string {
 }
 
 function selectSummary(summary: AISummary) {
+  selectedSummaryId.value = summary.id
   emit('select', summary)
 }
 
@@ -387,7 +387,10 @@ defineExpose({
         <div
           v-for="summary in summaries"
           :key="summary.id"
-          class="bg-white rounded-lg p-3 hover:shadow-md transition-shadow cursor-pointer border border-gray-100"
+          class="rounded-lg p-3 hover:shadow-md transition-all cursor-pointer border"
+          :class="selectedSummaryId === summary.id
+            ? 'bg-purple-50 border-purple-300 shadow-sm'
+            : 'bg-white border-gray-100'"
           @click="selectSummary(summary)"
         >
           <div class="flex items-start justify-between mb-2">
