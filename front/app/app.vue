@@ -1,19 +1,19 @@
 <script setup lang="ts">
-import { Icon } from "@iconify/vue";
+import { Icon } from '@iconify/vue'
 
 const apiStore = useApiStore()
 const loading = ref(true)
 const error = ref<string | null>(null)
 
-// Initialize API store on app load
+// 初始化 API Store
 onMounted(async () => {
   try {
     await apiStore.initialize()
-    // Sync API data to local stores
+    // 同步 API 数据到本地 Store
     apiStore.syncToLocalStores()
   } catch (e) {
-    error.value = e instanceof Error ? e.message : 'Failed to load data'
-    console.error('Initialization error:', e)
+    error.value = e instanceof Error ? e.message : '加载数据失败'
+    console.error('初始化错误:', e)
   } finally {
     loading.value = false
   }

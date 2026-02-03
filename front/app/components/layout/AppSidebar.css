@@ -1,0 +1,259 @@
+.app-sidebar {
+  display: flex;
+  flex-shrink: 0;
+  position: relative;
+  margin: 0.5rem;
+  border-radius: 1rem;
+  overflow: hidden;
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.8) 0%,
+    rgba(255, 255, 255, 0.6) 100%
+  );
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  box-shadow:
+    0 4px 16px rgba(100, 100, 120, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+
+.resize-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 0.375rem;
+  height: 100%;
+  cursor: col-resize;
+  transition: background-color 0.2s ease;
+  z-index: 10;
+}
+
+.resize-handle::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 0.0625rem;
+  height: 2rem;
+  background: #a5b6fc;
+  border-radius: 9999px;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.resize-handle:hover {
+  background: rgba(167, 139, 250, 0.5);
+}
+
+.resize-handle:hover::after {
+  opacity: 1;
+}
+
+.resize-handle.active {
+  background: rgba(167, 139, 250, 0.5);
+}
+
+.sidebar-content {
+  height: 100%;
+  overflow-y: auto;
+  padding: 0.5rem;
+}
+
+.sidebar-content::-webkit-scrollbar {
+  width: 0.375rem;
+}
+
+.sidebar-content::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 4px;
+}
+
+.sidebar-content::-webkit-scrollbar-thumb {
+  background: rgba(100, 100, 120, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+}
+
+.sidebar-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 100, 120, 0.25);
+}
+
+/* 侧边栏项目 */
+.sidebar-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.625rem 0.75rem;
+  border-radius: 0.75rem;
+  transition: all 0.2s ease;
+  margin-bottom: 0.25rem;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.sidebar-item:hover {
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.sidebar-item.active {
+  background: rgba(219, 234, 254, 0.8);
+  color: #4338ca;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.badge {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.125rem 0.625rem;
+  border-radius: 9999px;
+  background: rgba(219, 234, 254, 0.8);
+  color: #4338ca;
+}
+
+.badge-amber {
+  background: rgba(251, 191, 36, 0.2);
+  color: #d97706;
+}
+
+.badge-sm {
+  font-size: 0.6875rem;
+  padding: 0.0625rem 0.5rem;
+}
+
+.divider {
+  margin: 0.625rem 0;
+  border-top: 1px solid rgba(226, 232, 240, 0.5);
+}
+
+/* 分类 */
+.categories {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.category-group {
+  margin-bottom: 0.25rem;
+}
+
+.category-item {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.75rem;
+  transition: all 0.2s ease;
+}
+
+.category-item:hover {
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.category-item.active {
+  background: rgba(219, 234, 254, 0.8);
+}
+
+.category-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  text-align: left;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.count {
+  font-size: 0.75rem;
+  opacity: 0.5;
+}
+
+.category-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.category-item:hover .category-actions {
+  opacity: 1;
+}
+
+.action-btn {
+  padding: 0.375rem;
+  border-radius: 0.5rem;
+  transition: all 0.2s ease;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.action-btn:hover {
+  background: rgba(255, 255, 255, 0.6);
+}
+
+/* 订阅源列表 */
+.feeds-list {
+  margin-left: 1rem;
+  margin-top: 0.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.feed-item {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.75rem;
+  transition: all 0.2s ease;
+  font-size: 0.875rem;
+}
+
+.feed-item:hover {
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.feed-item.active {
+  background: rgba(239, 246, 255, 0.8);
+  color: #4338ca;
+}
+
+.feed-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  text-align: left;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.feed-btn .truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 未分类 */
+.uncategorized {
+  margin-top: 0.5rem;
+}
+
+/* 折叠视图 */
+.collapsed-view {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.collapsed-item {
+  justify-content: center;
+}

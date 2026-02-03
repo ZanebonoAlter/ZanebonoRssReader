@@ -431,6 +431,10 @@ def refresh_feed_worker(feed_id, app):
             except:
                 pass
             print(f"Error refreshing feed {feed_id}: {str(e)}")
+        finally:
+            # 确保数据库会话被正确关闭，释放连接
+            # 在多线程环境中，显式关闭会话可以防止连接泄漏
+            db.session.remove()
 
 
 @feeds_bp.route('/refresh-all', methods=['POST'])

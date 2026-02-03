@@ -529,5 +529,9 @@ def _generate_summary_worker(data, app):
             except Exception as e:
                 logger.error(f"[Worker] Error in auto-summary worker for category {data.get('category_id')}: {e}", exc_info=True)
                 db.session.rollback()
+            finally:
+                # 确保数据库会话被正确关闭，释放连接
+                # 在多线程环境中，显式关闭会话可以防止连接泄漏
+                db.session.remove()
     else:
         logger.error("No Flask app context available for auto-summary worker")

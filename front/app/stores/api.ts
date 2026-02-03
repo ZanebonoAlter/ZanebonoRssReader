@@ -1,5 +1,10 @@
-import { api } from '~/composables/useApi'
+import { apiClient } from '~/composables/api'
 import type { Category, RssFeed, Article } from '~/types'
+import { useCategoriesApi } from '~/composables/api/categories'
+import { useFeedsApi } from '~/composables/api/feeds'
+import { useArticlesApi } from '~/composables/api/articles'
+import { useOpmlApi } from '~/composables/api/opml'
+import { useSummariesApi } from '~/composables/api/summaries'
 
 export const useApiStore = defineStore('api', () => {
   const loading = ref(false)
@@ -12,7 +17,8 @@ export const useApiStore = defineStore('api', () => {
     loading.value = true
     error.value = null
 
-    const response = await api.getCategories()
+    const categoriesApi = useCategoriesApi()
+    const response = await categoriesApi.getCategories()
 
     if (response.success && response.data) {
       // Transform backend data to frontend format
@@ -40,7 +46,8 @@ export const useApiStore = defineStore('api', () => {
     description?: string
   }) {
     loading.value = true
-    const response = await api.createCategory(data)
+    const categoriesApi = useCategoriesApi()
+    const response = await categoriesApi.createCategory(data)
     loading.value = false
 
     if (response.success) {
@@ -61,7 +68,8 @@ export const useApiStore = defineStore('api', () => {
     }
   ) {
     loading.value = true
-    const response = await api.updateCategory(Number(id), data)
+    const categoriesApi = useCategoriesApi()
+    const response = await categoriesApi.updateCategory(Number(id), data)
     loading.value = false
 
     if (response.success) {
@@ -74,7 +82,8 @@ export const useApiStore = defineStore('api', () => {
 
   async function deleteCategory(id: string) {
     loading.value = true
-    const response = await api.deleteCategory(Number(id))
+    const categoriesApi = useCategoriesApi()
+    const response = await categoriesApi.deleteCategory(Number(id))
     loading.value = false
 
     if (response.success) {
@@ -93,7 +102,8 @@ export const useApiStore = defineStore('api', () => {
     loading.value = true
     error.value = null
 
-    const response = await api.getFeeds(params)
+    const feedsApi = useFeedsApi()
+    const response = await feedsApi.getFeeds(params)
 
     if (response.success && response.data) {
       const data = response.data as any
@@ -142,7 +152,8 @@ export const useApiStore = defineStore('api', () => {
     color?: string
   }) {
     loading.value = true
-    const response = await api.createFeed(data)
+    const feedsApi = useFeedsApi()
+    const response = await feedsApi.createFeed(data)
     loading.value = false
 
     if (response.success) {
@@ -156,7 +167,8 @@ export const useApiStore = defineStore('api', () => {
 
   async function deleteFeed(id: string) {
     loading.value = true
-    const response = await api.deleteFeed(Number(id))
+    const feedsApi = useFeedsApi()
+    const response = await feedsApi.deleteFeed(Number(id))
     loading.value = false
 
     if (response.success) {
@@ -180,7 +192,8 @@ export const useApiStore = defineStore('api', () => {
     }
   ) {
     loading.value = true
-    const response = await api.updateFeed(Number(id), data)
+    const feedsApi = useFeedsApi()
+    const response = await feedsApi.updateFeed(Number(id), data)
     loading.value = false
 
     if (response.success) {
@@ -194,14 +207,16 @@ export const useApiStore = defineStore('api', () => {
 
   async function refreshFeed(id: string) {
     loading.value = true
-    const response = await api.refreshFeed(Number(id))
+    const feedsApi = useFeedsApi()
+    const response = await feedsApi.refreshFeed(Number(id))
     loading.value = false
     return response
   }
 
   async function refreshAllFeeds() {
     loading.value = true
-    const response = await api.refreshAllFeeds()
+    const feedsApi = useFeedsApi()
+    const response = await feedsApi.refreshAllFeeds()
     loading.value = false
     return response
   }
@@ -226,7 +241,8 @@ export const useApiStore = defineStore('api', () => {
     // Set a high default per_page to get all articles
     const params = { per_page: 10000, ...filters }
 
-    const response = await api.getArticles(params)
+    const articlesApi = useArticlesApi()
+    const response = await articlesApi.getArticles(params)
 
     if (response.success && response.data) {
       const data = response.data as any
@@ -260,7 +276,8 @@ export const useApiStore = defineStore('api', () => {
     id: string,
     data: { read?: boolean; favorite?: boolean }
   ) {
-    const response = await api.updateArticle(Number(id), data)
+    const articlesApi = useArticlesApi()
+    const response = await articlesApi.updateArticle(Number(id), data)
 
     if (response.success) {
       // Update local article store
@@ -300,7 +317,8 @@ export const useApiStore = defineStore('api', () => {
       ? articles.value.filter((a) => a.feedId === feedId).map((a) => Number(a.id))
       : articles.value.map((a) => Number(a.id))
 
-    const response = await api.bulkUpdateArticles({
+    const articlesApi = useArticlesApi()
+    const response = await articlesApi.bulkUpdateArticles({
       ids,
       read: true,
     })
@@ -322,7 +340,8 @@ export const useApiStore = defineStore('api', () => {
   // OPML
   async function importOpml(file: File) {
     loading.value = true
-    const response = await api.importOpml(file)
+    const opmlApi = useOpmlApi()
+    const response = await opmlApi.importOpml(file)
     loading.value = false
 
     if (response.success) {
@@ -335,11 +354,13 @@ export const useApiStore = defineStore('api', () => {
   }
 
   async function exportOpml() {
-    return api.exportOpml()
+    const opmlApi = useOpmlApi()
+    return opmlApi.exportOpml()
   }
 
   async function fetchArticlesStats() {
-    const response = await api.getArticlesStats()
+    const articlesApi = useArticlesApi()
+    const response = await articlesApi.getArticlesStats()
     return response
   }
 
@@ -347,7 +368,8 @@ export const useApiStore = defineStore('api', () => {
   async function getSummaries(params: { category_id?: number; page?: number; per_page?: number } = {}) {
     loading.value = true
     error.value = null
-    const response = await api.getSummaries(params)
+    const summariesApi = useSummariesApi()
+    const response = await summariesApi.getSummaries(params)
     loading.value = false
     return response
   }
@@ -361,7 +383,8 @@ export const useApiStore = defineStore('api', () => {
   }) {
     loading.value = true
     error.value = null
-    const response = await api.generateSummary(data)
+    const summariesApi = useSummariesApi()
+    const response = await summariesApi.generateSummary(data)
     loading.value = false
     return response
   }
@@ -369,7 +392,8 @@ export const useApiStore = defineStore('api', () => {
   async function deleteSummary(id: number) {
     loading.value = true
     error.value = null
-    const response = await api.deleteSummary(id)
+    const summariesApi = useSummariesApi()
+    const response = await summariesApi.deleteSummary(id)
     loading.value = false
     return response
   }

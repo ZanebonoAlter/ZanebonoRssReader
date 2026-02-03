@@ -93,45 +93,53 @@ class AutoRefreshScheduler:
                     continue
 
                 with self.app.app_context():
-                    # Reload state from database at the start of each cycle
-                    self.task_state = SchedulerTask.query.filter_by(
-                        name='auto_refresh'
-                    ).first()
+                    try:
+                        # Reload state from database at the start of each cycle
+                        self.task_state = SchedulerTask.query.filter_by(
+                            name='auto_refresh'
+                        ).first()
 
-                    # Pre-execution state update
-                    if self.task_state:
-                        self.state_manager.pre_execute(self.task_state)
+                        # Pre-execution state update
+                        if self.task_state:
+                            self.state_manager.pre_execute(self.task_state)
 
-                    # Execute the refresh check
-                    self._check_and_refresh_feeds()
+                        # Execute the refresh check
+                        self._check_and_refresh_feeds()
 
-                    # Post-execution success update
-                    duration = time.time() - start_time
-                    if self.task_state:
-                        # Get feed count within the same app context
-                        try:
-                            feed_count = Feed.query.filter(Feed.refresh_interval > 0).count()
-                            result_msg = f"Checked {feed_count} feeds"
-                        except Exception as e:
-                            logger.warning(f"Failed to get feed count: {e}", exc_info=True)
-                            result_msg = "Completed refresh check"
+                        # Post-execution success update
+                        duration = time.time() - start_time
+                        if self.task_state:
+                            # Get feed count within the same app context
+                            try:
+                                feed_count = Feed.query.filter(Feed.refresh_interval > 0).count()
+                                result_msg = f"Checked {feed_count} feeds"
+                            except Exception as e:
+                                logger.warning(f"Failed to get feed count: {e}", exc_info=True)
+                                result_msg = "Completed refresh check"
 
-                        self.state_manager.post_execute_success(
-                            self.task_state,
-                            duration=duration,
-                            result=result_msg
-                        )
+                            self.state_manager.post_execute_success(
+                                self.task_state,
+                                duration=duration,
+                                result=result_msg
+                            )
+                    finally:
+                        # 确保数据库会话被正确关闭，释放连接
+                        db.session.remove()
 
             except Exception as e:
                 logger.error(f"Error in auto-refresh scheduler: {str(e)}", exc_info=True)
                 # Post-execution error update
                 try:
                     with self.app.app_context():
-                        self.task_state = SchedulerTask.query.filter_by(
-                            name='auto_refresh'
-                        ).first()
-                        if self.task_state:
-                            self.state_manager.post_execute_error(self.task_state, str(e))
+                        try:
+                            self.task_state = SchedulerTask.query.filter_by(
+                                name='auto_refresh'
+                            ).first()
+                            if self.task_state:
+                                self.state_manager.post_execute_error(self.task_state, str(e))
+                        finally:
+                            # 确保数据库会话被正确关闭
+                            db.session.remove()
                 except Exception as db_error:
                     logger.error(f"Failed to update error state: {db_error}")
 

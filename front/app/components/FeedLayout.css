@@ -1,0 +1,40 @@
+.feed-layout {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+  background: linear-gradient(
+    135deg,
+    #f0f4ff 0%,
+    #e8f0fe 25%,
+    #f0f4ff 50%,
+    #e8f0fe 75%,
+    #f0f4ff 100%
+  );
+  background-size: 400% 400%;
+  animation: gradient-shift 15s ease infinite;
+}
+
+@keyframes gradient-shift {
+  0%, 100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+.main-content {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+.content-panel {
+  flex: 1;
+  overflow-y: auto;
+  background: rgba(255, 255, 255, 0.3);
+  backdrop-filter: blur(12px);
+  margin: 0.5rem 0.5rem 0.5rem 0;
+  border-radius: 1rem;
+}

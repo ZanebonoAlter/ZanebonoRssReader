@@ -1,4 +1,5 @@
 import type { RssFeed, Article, FeedResponse } from '~/types'
+import { getCategoryColor } from '~/utils/text'
 
 export function useRssParser() {
   const config = useRuntimeConfig()
@@ -81,43 +82,3 @@ export function useRssParser() {
   }
 }
 
-/**
- * Helper function to clean HTML from descriptions
- */
-function cleanDescription(html: string): string {
-  if (!html) return ''
-
-  // Remove HTML tags
-  const text = html.replace(/<[^>]*>/g, '')
-
-  // Decode HTML entities
-  const textarea = document.createElement('textarea')
-  textarea.innerHTML = text
-  return textarea.value.substring(0, 200) // Limit to 200 characters
-}
-
-/**
- * Helper function to extract first image from HTML content
- */
-function extractFirstImage(html: string): string | undefined {
-  if (!html) return undefined
-
-  const imgMatch = html.match(/<img[^>]+src="([^">]+)"/i)
-  return imgMatch?.[1] || undefined
-}
-
-/**
- * Helper function to get color for category
- */
-function getCategoryColor(categoryId: string): string {
-  const colors: Record<string, string> = {
-    tech: '#3b82f6',
-    news: '#ef4444',
-    design: '#8b5cf6',
-    blog: '#10b981',
-    ai: '#f59e0b',
-    product: '#ec4899'
-  }
-
-  return colors[categoryId] || '#6b7280'
-}

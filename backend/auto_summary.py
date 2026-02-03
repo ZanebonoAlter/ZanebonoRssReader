@@ -151,62 +151,70 @@ class AutoSummaryScheduler:
 
             try:
                 with self.app.app_context():
-                    # Reload state from database at the start of each cycle
-                    self.task_state = SchedulerTask.query.filter_by(
-                        name='auto_summary'
-                    ).first()
+                    try:
+                        # Reload state from database at the start of each cycle
+                        self.task_state = SchedulerTask.query.filter_by(
+                            name='auto_summary'
+                        ).first()
 
-                    # Check if AI config is set
-                    if not self.ai_config:
-                        logger.debug("AI config not set, skipping summary generation")
-                        # Still update state to idle
-                        if self.task_state:
-                            self.task_state.status = 'idle'
-                            db.session.commit()
-                    else:
-                        # Check if it's time to execute (check next_execution_time)
-                        should_execute = True
-                        if self.task_state and self.task_state.next_execution_time:
-                            now = datetime.utcnow()
-                            if now < self.task_state.next_execution_time:
-                                should_execute = False
-                                time_until_next = (self.task_state.next_execution_time - now).total_seconds()
-                                logger.debug(f"Not time to execute yet, next execution in {time_until_next:.0f} seconds")
-
-                        if should_execute:
-                            # Pre-execution state update
-                            if self.task_state:
-                                self.state_manager.pre_execute(self.task_state)
-
-                            logger.info("Starting auto-summary generation cycle")
-                            self._generate_summaries_for_categories()
-                            logger.info("Auto-summary generation cycle completed")
-
-                            # Post-execution success update
-                            duration = time.time() - start_time
-                            if self.task_state:
-                                category_count = Category.query.count()
-                                self.state_manager.post_execute_success(
-                                    self.task_state,
-                                    duration=duration,
-                                    result=f"Generated summaries for {category_count} categories"
-                                )
-                        else:
-                            # Update status to idle even when not executing
+                        # Check if AI config is set
+                        if not self.ai_config:
+                            logger.debug("AI config not set, skipping summary generation")
+                            # Still update state to idle
                             if self.task_state:
                                 self.task_state.status = 'idle'
                                 db.session.commit()
+                        else:
+                            # Check if it's time to execute (check next_execution_time)
+                            should_execute = True
+                            if self.task_state and self.task_state.next_execution_time:
+                                now = datetime.utcnow()
+                                if now < self.task_state.next_execution_time:
+                                    should_execute = False
+                                    time_until_next = (self.task_state.next_execution_time - now).total_seconds()
+                                    logger.debug(f"Not time to execute yet, next execution in {time_until_next:.0f} seconds")
+
+                            if should_execute:
+                                # Pre-execution state update
+                                if self.task_state:
+                                    self.state_manager.pre_execute(self.task_state)
+
+                                logger.info("Starting auto-summary generation cycle")
+                                self._generate_summaries_for_categories()
+                                logger.info("Auto-summary generation cycle completed")
+
+                                # Post-execution success update
+                                duration = time.time() - start_time
+                                if self.task_state:
+                                    category_count = Category.query.count()
+                                    self.state_manager.post_execute_success(
+                                        self.task_state,
+                                        duration=duration,
+                                        result=f"Generated summaries for {category_count} categories"
+                                    )
+                            else:
+                                # Update status to idle even when not executing
+                                if self.task_state:
+                                    self.task_state.status = 'idle'
+                                    db.session.commit()
+                    finally:
+                        # 确保数据库会话被正确关闭，释放连接
+                        db.session.remove()
 
             except Exception as e:
                 logger.error(f"Error in auto-summary scheduler: {str(e)}", exc_info=True)
                 # Post-execution error update
                 try:
                     with self.app.app_context():
-                        self.task_state = SchedulerTask.query.filter_by(
-                            name='auto_summary'
-                        ).first()
-                        if self.task_state:
-                            self.state_manager.post_execute_error(self.task_state, str(e))
+                        try:
+                            self.task_state = SchedulerTask.query.filter_by(
+                                name='auto_summary'
+                            ).first()
+                            if self.task_state:
+                                self.state_manager.post_execute_error(self.task_state, str(e))
+                        finally:
+                            # 确保数据库会话被正确关闭
+                            db.session.remove()
                 except Exception as db_error:
                     logger.error(f"Failed to update error state: {db_error}")
 

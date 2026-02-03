@@ -2,6 +2,8 @@
 import { Icon } from '@iconify/vue'
 import type { Article, RssFeed } from '~/types'
 
+import './ArticleCard.css'
+
 interface Props {
   article: Article
   compact?: boolean

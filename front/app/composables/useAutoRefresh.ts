@@ -1,4 +1,4 @@
-import { api } from './useApi'
+import { useFeedsApi } from './api'
 
 interface RefreshTimer {
   feedId: string
@@ -34,6 +34,8 @@ export const useAutoRefresh = () => {
     const intervalMs = intervalMinutes * 60 * 1000
 
     // Create new timer
+    const api = useFeedsApi()
+
     const timer = setInterval(async () => {
       try {
         await api.refreshFeed(Number(feedId))
