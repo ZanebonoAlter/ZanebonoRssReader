@@ -32,6 +32,8 @@ export interface ArticleFilters {
   read?: boolean
   favorite?: boolean
   search?: string
+  start_date?: string
+  end_date?: string
 }
 
 /**

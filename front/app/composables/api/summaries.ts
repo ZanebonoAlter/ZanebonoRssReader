@@ -16,6 +16,8 @@ export function useSummariesApi() {
     category_id?: number
     page?: number
     per_page?: number
+    start_date?: string
+    end_date?: string
   } = {}): Promise<ApiResponse<AISummary[]>> {
     const query = apiClient.buildQueryParams(params)
     return apiClient.get<AISummary[]>(`/summaries${query ? `?${query}` : ''}`)

@@ -234,6 +234,8 @@ export const useApiStore = defineStore('api', () => {
     read?: boolean
     favorite?: boolean
     search?: string
+    start_date?: string
+    end_date?: string
   } = {}) {
     loading.value = true
     error.value = null
