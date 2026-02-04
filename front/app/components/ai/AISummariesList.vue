@@ -37,7 +37,43 @@ const selectedSummaryId = ref<number | null>(null)
 const currentPage = ref(1)
 const pageSize = ref(20)
 const totalItems = ref(0)
-const totalPages = computed(() => Math.ceil(totalItems.value / pageSize.value))
+const totalPages = ref(0)
+const paginationData = ref<any>(null)
+
+// Generate page numbers with ellipsis
+const pageNumbers = computed(() => {
+  const pages: (number | string)[] = []
+  const current = currentPage.value
+  const total = totalPages.value
+  const delta = 1
+
+  if (total <= 7) {
+    for (let i = 1; i <= total; i++) {
+      pages.push(i)
+    }
+  } else {
+    pages.push(1)
+
+    const rangeStart = Math.max(2, current - delta)
+    const rangeEnd = Math.min(total - 1, current + delta)
+
+    if (rangeStart > 2) {
+      pages.push('...')
+    }
+
+    for (let i = rangeStart; i <= rangeEnd; i++) {
+      pages.push(i)
+    }
+
+    if (rangeEnd < total - 1) {
+      pages.push('...')
+    }
+
+    pages.push(total)
+  }
+
+  return pages
+})
 
 // Date filter
 const startDate = ref<string | undefined>('')
@@ -100,6 +136,11 @@ watch(() => props.categoryId, () => {
   fetchSummaries(true)
 })
 
+// Reset page when date filters change
+watch([startDate, endDate], () => {
+  currentPage.value = 1
+})
+
 function loadAISettings() {
   const settings = localStorage.getItem('aiSettings')
   if (settings) {
@@ -140,16 +181,16 @@ async function fetchSummaries(resetPage = false) {
   const response = await apiStore.getSummaries(params)
   loading.value = false
 
-  if (response.success && response.data) {
-    // Handle both array response and paginated response with items/total
-    const data = response.data as any
-    if (Array.isArray(data)) {
-      summaries.value = data as AISummary[]
-      totalItems.value = data.length
-    } else if (data.items) {
-      summaries.value = data.items as AISummary[]
-      totalItems.value = data.total || data.items.length
-    }
+  if (response.success && response.data && response.pagination) {
+    summaries.value = response.data as AISummary[]
+    totalItems.value = response.pagination.total || 0
+    totalPages.value = response.pagination.pages || 0
+    paginationData.value = response.pagination
+  } else if (response.success && Array.isArray(response.data)) {
+    summaries.value = response.data as AISummary[]
+    totalItems.value = response.data.length
+    totalPages.value = Math.ceil(totalItems.value / pageSize.value)
+    paginationData.value = null
   } else {
     error.value = response.error || '加载失败'
   }
@@ -171,7 +212,6 @@ function changePageSize(size: number) {
 // Quick date filter function
 function applyQuickDateFilter(days: number) {
   if (selectedQuickDate.value === days) {
-    // Toggle off if already selected
     selectedQuickDate.value = null
     clearDateFilter()
     return
@@ -185,12 +225,6 @@ function applyQuickDateFilter(days: number) {
   endDate.value = end.toISOString().split('T')[0]
   startDate.value = start.toISOString().split('T')[0]
 
-  fetchSummaries(true)
-}
-
-function applyDateFilter() {
-  showDateFilter.value = false
-  selectedQuickDate.value = null
   fetchSummaries(true)
 }
 
@@ -416,18 +450,6 @@ defineExpose({
             />
             <Icon icon="mdi:calendar-filter" width="14" height="14" />
             <span>日期筛选</span>
-            <span v-if="selectedQuickDate" class="filter-badge">
-              {{ quickDateOptions.find(o => o.days === selectedQuickDate)?.label }}
-            </span>
-          </button>
-
-          <!-- Clear Filter Button -->
-          <button
-            v-if="startDate || endDate || selectedQuickDate"
-            class="clear-filter-btn-compact"
-            @click="clearDateFilter"
-          >
-            <Icon icon="mdi:close-circle" width="12" height="12" />
           </button>
         </div>
 
@@ -468,19 +490,41 @@ defineExpose({
           </div>
         </div>
 
+        <!-- Custom Date Row -->
+        <div class="custom-date-row-vertical">
+          <div class="date-input-row">
+            <span class="row-label">开始日期</span>
+            <input
+              v-model="startDate"
+              type="date"
+              class="date-input"
+              @change="selectedQuickDate = null; fetchSummaries(true)"
+            />
+          </div>
+          <div class="date-input-row">
+            <span class="row-label">结束日期</span>
+            <input
+              v-model="endDate"
+              type="date"
+              class="date-input"
+              @change="selectedQuickDate = null; fetchSummaries(true)"
+            />
+          </div>
+        </div>
+
         <!-- Panel Actions -->
         <div class="panel-actions">
+          <button
+            class="btn-secondary-sm"
+            @click="clearDateFilter"
+          >
+            清除筛选
+          </button>
           <button
             class="btn-secondary-sm"
             @click="showDateFilter = false"
           >
             收起
-          </button>
-          <button
-            class="btn-primary-sm"
-            @click="applyDateFilter"
-          >
-            应用筛选
           </button>
         </div>
       </div>
@@ -612,41 +656,40 @@ defineExpose({
     <!-- Pagination -->
     <div
       v-if="!loading && summaries.length > 0 && totalPages > 1"
-      class="px-4 py-2 border-t border-white/20 bg-white/40 flex-shrink-0"
+      class="pagination-bar"
     >
-      <div class="flex items-center justify-between">
-        <span class="text-xs text-gray-500">
-          共 {{ totalItems }} 条，第 {{ currentPage }}/{{ totalPages }} 页
-        </span>
-        <div class="flex items-center gap-1">
-          <button
-            class="p-1.5 rounded-lg hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed"
-            :disabled="currentPage <= 1"
-            @click="changePage(currentPage - 1)"
-          >
-            <Icon icon="mdi:chevron-left" width="16" height="16" class="text-gray-600" />
-          </button>
+      <span class="pagination-text">
+        共 {{ totalItems }} 条
+      </span>
+      <div class="pagination-controls">
+        <button
+          class="pagination-btn"
+          :disabled="currentPage <= 1"
+          @click="changePage(currentPage - 1)"
+        >
+          <Icon icon="mdi:chevron-left" width="16" height="16" class="text-gray-600" />
+        </button>
 
-          <div class="flex items-center gap-0.5">
-            <button
-              v-for="page in Math.min(5, totalPages)"
-              :key="page"
-              class="min-w-[28px] px-1.5 py-1 text-xs rounded-lg transition-colors"
-              :class="page === currentPage ? 'bg-purple-600 text-white' : 'hover:bg-gray-100 text-gray-600'"
-              @click="changePage(page)"
-            >
-              {{ page }}
-            </button>
-          </div>
-
+        <div class="pagination-pages">
           <button
-            class="p-1.5 rounded-lg hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed"
-            :disabled="currentPage >= totalPages"
-            @click="changePage(currentPage + 1)"
+            v-for="page in pageNumbers"
+            :key="page"
+            class="page-btn"
+            :class="{ active: page === currentPage, ellipsis: page === '...' }"
+            :disabled="page === '...'"
+            @click="page !== '...' && changePage(page as number)"
           >
-            <Icon icon="mdi:chevron-right" width="16" height="16" class="text-gray-600" />
+            {{ page }}
           </button>
         </div>
+
+        <button
+          class="pagination-btn"
+          :disabled="currentPage >= totalPages"
+          @click="changePage(currentPage + 1)"
+        >
+          <Icon icon="mdi:chevron-right" width="16" height="16" class="text-gray-600" />
+        </button>
       </div>
     </div>
   </div>
@@ -699,36 +742,6 @@ defineExpose({
 
 .toggle-icon {
   transition: transform 0.2s ease;
-}
-
-.filter-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 3px 8px;
-  background: rgba(255, 255, 255, 0.3);
-  border-radius: 4px;
-  font-size: 11px;
-  margin-left: 4px;
-}
-
-.clear-filter-btn-compact {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  background: rgba(156, 163, 175, 0.1);
-  border: 1px solid rgba(156, 163, 175, 0.2);
-  border-radius: 6px;
-  color: #6b7280;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.clear-filter-btn-compact:hover {
-  background: rgba(156, 163, 175, 0.2);
-  border-color: rgba(156, 163, 175, 0.3);
-  color: #374151;
 }
 
 /* Date Filter Expand Panel */
@@ -790,23 +803,21 @@ defineExpose({
   box-shadow: 0 2px 8px rgba(139, 92, 246, 0.3);
 }
 
-/* Custom Date Row */
-.custom-date-row {
+/* Custom Date Row - Vertical Layout */
+.custom-date-row-vertical {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.date-input-row {
   display: flex;
   align-items: center;
   gap: 12px;
 }
 
-.custom-date-inputs {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-
-.date-input-group {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.date-input-row .row-label {
+  min-width: 80px;
 }
 
 .input-label {
@@ -873,6 +884,98 @@ defineExpose({
 .btn-primary-sm:hover {
   box-shadow: 0 4px 12px rgba(139, 92, 246, 0.4);
   transform: translateY(-1px);
+}
+
+/* Pagination */
+.pagination-bar {
+  padding: 0.75rem 1rem;
+  background: rgba(255, 255, 255, 0.4);
+  border-top: 1px solid rgba(255, 255, 255, 0.2);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.pagination-text {
+  font-size: 0.75rem;
+  color: #6b7280;
+  white-space: nowrap;
+}
+
+.pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.pagination-btn {
+  padding: 0.25rem;
+  border: none;
+  border-radius: 0.375rem;
+  background: transparent;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.pagination-btn:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.pagination-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.pagination-pages {
+  display: flex;
+  align-items: center;
+  gap: 0.125rem;
+}
+
+.page-btn {
+  min-width: 1.75rem;
+  padding: 0.25rem 0.375rem;
+  font-size: 0.75rem;
+  border: none;
+  border-radius: 0.375rem;
+  background: transparent;
+  color: #4b5563;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.page-btn:hover:not(:disabled):not(.ellipsis) {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.page-btn.active {
+  background: #9333ea;
+  color: white;
+}
+
+.page-btn.ellipsis {
+  cursor: default;
+  color: #9ca3af;
+}
+
+.page-btn:disabled {
+  cursor: default;
+}
+
+/* Page Size Selector */
+.page-size-selector {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.page-size-select {
+  font-size: 0.75rem;
+  padding: 0.125rem 0.25rem;
+  border: 1px solid #d1d5db;
+  border-radius: 0.25rem;
 }
 
 /* Animation */

@@ -8,3 +8,12 @@ wheels/
 
 # Virtual environments
 .venv
+backend-go/main.exe
+backend-go/rss_reader.db
+backend-go/rss-server.exe
+backend-go/server.exe
+backend-go/bin/fresh.exe
+backend-go/bin/server.exe
+backend-go/bin/server.exe~
+backend-go/bin/test.exe
+backend-go/cmd/server/rss_reader.db

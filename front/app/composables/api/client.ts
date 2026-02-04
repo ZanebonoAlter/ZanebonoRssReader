@@ -45,6 +45,7 @@ class ApiClient {
       return {
         success: true,
         data: data.data,
+        pagination: data.pagination,
         message: data.message,
       }
     } catch (error) {

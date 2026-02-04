@@ -11,6 +11,12 @@
   opacity: 0.6;
 }
 
+.glass-card.selected {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.15) 0%, rgba(124, 58, 237, 0.1) 100%) !important;
+  border-left: 3px solid #8b5cf6;
+  box-shadow: 0 2px 12px rgba(139, 92, 246, 0.25);
+}
+
 .article-card .image-container {
   aspect-ratio: 16 / 9;
   width: 100%;

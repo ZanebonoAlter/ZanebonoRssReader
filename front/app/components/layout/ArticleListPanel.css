@@ -175,23 +175,21 @@
   box-shadow: 0 2px 8px rgba(139, 92, 246, 0.3);
 }
 
-/* 自定义日期行 */
-.custom-date-row {
+/* 自定义日期行 - 垂直布局 */
+.custom-date-row-vertical {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.date-input-row {
   display: flex;
   align-items: center;
   gap: 12px;
 }
 
-.custom-date-inputs {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-
-.date-input-group {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.date-input-row .row-label {
+  min-width: 80px;
 }
 
 .input-label {
@@ -291,37 +289,6 @@
 
 .toggle-icon {
   transition: transform 0.2s ease;
-}
-
-.filter-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 8px;
-  background: rgba(255, 255, 255, 0.3);
-  border-radius: 4px;
-  font-size: 11px;
-  margin-left: 4px;
-}
-
-/* 清除筛选按钮 */
-.clear-filter-btn-compact {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  background: rgba(156, 163, 175, 0.1);
-  border: 1px solid rgba(156, 163, 175, 0.2);
-  border-radius: 6px;
-  color: #6b7280;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.clear-filter-btn-compact:hover {
-  background: rgba(156, 163, 175, 0.2);
-  border-color: rgba(156, 163, 175, 0.3);
-  color: #374151;
 }
 
 /* 分页栏 */

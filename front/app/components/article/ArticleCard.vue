@@ -7,10 +7,12 @@ import './ArticleCard.css'
 interface Props {
   article: Article
   compact?: boolean
+  selected?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  compact: false
+  compact: false,
+  selected: false
 })
 
 const emit = defineEmits<{
@@ -28,7 +30,7 @@ const category = computed(() => feedsStore.getCategoryBySlug(props.article.categ
 <template>
   <article
     class="glass-card group cursor-pointer overflow-hidden mx-2 mb-2 first:mt-2"
-    :class="{ 'opacity-60': article.read }"
+    :class="{ 'opacity-60': article.read, 'selected': selected }"
     @click="emit('click', article)"
   >
     <div

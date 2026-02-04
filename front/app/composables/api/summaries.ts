@@ -1,6 +1,7 @@
 import { apiClient } from './client'
 import type {
   ApiResponse,
+  PaginatedApiResponse,
   AISummary,
   GenerateSummaryData,
 } from '~/types'
@@ -18,9 +19,9 @@ export function useSummariesApi() {
     per_page?: number
     start_date?: string
     end_date?: string
-  } = {}): Promise<ApiResponse<AISummary[]>> {
+  } = {}): Promise<PaginatedApiResponse<AISummary>> {
     const query = apiClient.buildQueryParams(params)
-    return apiClient.get<AISummary[]>(`/summaries${query ? `?${query}` : ''}`)
+    return apiClient.get<AISummary[]>(`/summaries${query ? `?${query}` : ''}`) as any
   }
 
   /**

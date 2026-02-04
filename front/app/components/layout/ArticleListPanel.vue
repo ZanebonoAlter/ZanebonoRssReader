@@ -6,12 +6,14 @@ interface Props {
   articles: Article[]
   selectedCategory?: string | null
   selectedFeed?: string | null
+  selectedArticle?: Article | null
   loading?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
   selectedCategory: null,
   selectedFeed: null,
+  selectedArticle: null,
   loading: false,
 })
 
@@ -164,12 +166,6 @@ function applyQuickDateFilter(days: number) {
   currentPage.value = 1
 }
 
-// Date filter functions
-function applyDateFilter() {
-  showDateFilter.value = false
-  selectedQuickDate.value = null
-}
-
 function clearDateFilter() {
   startDate.value = ''
   endDate.value = ''
@@ -226,19 +222,6 @@ import './ArticleListPanel.css'
           />
           <Icon icon="mdi:calendar-filter" width="14" height="14" />
           <span>日期筛选</span>
-          <span v-if="selectedQuickDate" class="filter-badge">
-            {{ quickDateOptions.find(o => o.days === selectedQuickDate)?.label }}
-          </span>
-          <span v-else-if="startDate || endDate" class="filter-badge">自定义</span>
-        </button>
-
-        <!-- Clear Filter Button -->
-        <button
-          v-if="startDate || endDate || selectedQuickDate"
-          class="clear-filter-btn-compact"
-          @click="clearDateFilter"
-        >
-          <Icon icon="mdi:close-circle" width="12" height="12" />
         </button>
       </div>
 
@@ -276,13 +259,35 @@ import './ArticleListPanel.css'
         </div>
       </div>
 
+      <!-- Custom Date Row -->
+      <div class="custom-date-row-vertical">
+        <div class="date-input-row">
+          <span class="row-label">开始日期</span>
+          <input
+            v-model="startDate"
+            type="date"
+            class="date-input"
+            @change="selectedQuickDate = null"
+          />
+        </div>
+        <div class="date-input-row">
+          <span class="row-label">结束日期</span>
+          <input
+            v-model="endDate"
+            type="date"
+            class="date-input"
+            @change="selectedQuickDate = null"
+          />
+        </div>
+      </div>
+
       <!-- Panel Actions -->
       <div class="panel-actions">
+        <button class="btn-secondary-sm" @click="clearDateFilter">
+          清除筛选
+        </button>
         <button class="btn-secondary-sm" @click="showDateFilter = false">
           收起
-        </button>
-        <button class="btn-primary-sm" @click="applyDateFilter">
-          应用筛选
         </button>
       </div>
     </div>
@@ -303,6 +308,7 @@ import './ArticleListPanel.css'
           v-for="article in paginatedArticles"
           :key="article.id"
           :article="article"
+          :selected="props.selectedArticle?.id === article.id"
           compact
           @click="handleArticleClick"
           @favorite="handleFavorite"

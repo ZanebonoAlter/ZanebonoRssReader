@@ -403,6 +403,7 @@ import './FeedLayout.css'
         :articles="filteredArticles"
         :selected-category="selectedCategory"
         :selected-feed="selectedFeed"
+        :selected-article="selectedArticle"
         @article-click="handleArticleClick"
         @article-favorite="handleArticleFavorite"
       />

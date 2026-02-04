@@ -34,7 +34,7 @@ func (s *FeedService) RefreshFeed(feedID uint) error {
 		return err
 	}
 
-	now := time.Now()
+	now := time.Now().In(time.FixedZone("CST", 8*3600))
 	feed.Title = parsed.Title
 	feed.Description = parsed.Description
 	feed.LastUpdated = &now
@@ -76,7 +76,7 @@ func (s *FeedService) RefreshFeed(feedID uint) error {
 		}
 
 		if article.PubDate == nil {
-			now := time.Now()
+			now := time.Now().In(time.FixedZone("CST", 8*3600))
 			article.PubDate = &now
 		}
 
@@ -100,7 +100,7 @@ func (s *FeedService) RefreshFeed(feedID uint) error {
 }
 
 func (s *FeedService) updateFeedError(feed *models.Feed, err error) {
-	now := time.Now()
+	now := time.Now().In(time.FixedZone("CST", 8*3600))
 	feed.RefreshStatus = "error"
 	feed.RefreshError = err.Error()
 	feed.LastRefreshAt = &now

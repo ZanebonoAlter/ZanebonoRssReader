@@ -109,11 +109,15 @@ func extractContent(item *gofeed.Item) string {
 }
 
 func parseDate(item *gofeed.Item) *time.Time {
+	cstZone := time.FixedZone("CST", 8*3600)
+
 	if item.PublishedParsed != nil {
-		return item.PublishedParsed
+		cstTime := item.PublishedParsed.In(cstZone)
+		return &cstTime
 	}
 	if item.UpdatedParsed != nil {
-		return item.UpdatedParsed
+		cstTime := item.UpdatedParsed.In(cstZone)
+		return &cstTime
 	}
 	return nil
 }

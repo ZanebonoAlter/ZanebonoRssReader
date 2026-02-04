@@ -414,9 +414,10 @@ func joinStrings(strs []string, sep string) string {
 }
 
 type AutoSummaryConfig struct {
-	BaseURL string `json:"base_url"`
-	APIKey  string `json:"api_key"`
-	Model   string `json:"model"`
+	BaseURL   string `json:"base_url"`
+	APIKey    string `json:"api_key"`
+	Model     string `json:"model"`
+	TimeRange int    `json:"time_range"` // Time range in minutes for auto-summary
 }
 
 func AutoGenerateSummary(c *gin.Context) {
@@ -626,11 +627,37 @@ func generateSummaryWorker(req GenerateSummaryRequest) {
 }
 
 func GetAutoSummaryStatus(c *gin.Context) {
+	var settings models.AISettings
+	err := database.DB.Where("key = ?", "summary_config").First(&settings).Error
+
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"data": gin.H{
+				"enabled": false,
+				"status":  "not_configured",
+			},
+		})
+		return
+	}
+
+	var config AutoSummaryConfig
+	if err := json.Unmarshal([]byte(settings.Value), &config); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "Failed to parse configuration",
+		})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
-			"enabled": false,
-			"status":  "not_configured",
+			"enabled":    true,
+			"status":     "configured",
+			"base_url":   config.BaseURL,
+			"model":      config.Model,
+			"time_range": config.TimeRange,
 		},
 	})
 }
@@ -649,16 +676,17 @@ func UpdateAutoSummaryConfig(c *gin.Context) {
 	configJSON, _ := json.Marshal(req)
 
 	var settings models.AISettings
-	err := database.DB.Where("key = ?", "auto_summary_config").First(&settings).Error
+	err := database.DB.Where("key = ?", "summary_config").First(&settings).Error
 
 	if err == nil {
 		settings.Value = string(configJSON)
+		settings.Description = "AI summary generation configuration (including auto-summary)"
 		database.DB.Save(&settings)
 	} else {
 		settings = models.AISettings{
-			Key:         "auto_summary_config",
+			Key:         "summary_config",
 			Value:       string(configJSON),
-			Description: "Auto summary generation configuration",
+			Description: "AI summary generation configuration (including auto-summary)",
 		}
 		database.DB.Create(&settings)
 	}
@@ -666,9 +694,9 @@ func UpdateAutoSummaryConfig(c *gin.Context) {
 	// Also update in-memory scheduler config if available
 	if AutoSummarySchedulerInterface != nil {
 		if scheduler, ok := AutoSummarySchedulerInterface.(interface {
-			SetAIConfig(baseURL, apiKey, model string) error
+			SetAIConfig(baseURL, apiKey, model string, timeRange int) error
 		}); ok {
-			if err := scheduler.SetAIConfig(req.BaseURL, req.APIKey, req.Model); err != nil {
+			if err := scheduler.SetAIConfig(req.BaseURL, req.APIKey, req.Model, req.TimeRange); err != nil {
 				// Log but don't fail the request
 				// The config is saved in DB, scheduler will pick it up on next cycle
 			}

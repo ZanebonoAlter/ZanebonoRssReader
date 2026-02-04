@@ -8,6 +8,7 @@
 export interface ApiResponse<T = any> {
   success: boolean
   data?: T
+  pagination?: PaginationMeta
   message?: string
   error?: string
 }
@@ -21,11 +22,30 @@ export interface PaginationParams {
 }
 
 /**
- * 分页响应数据
+ * 分页元数据
  */
-export interface PaginatedResponse<T> {
-  items: T[]
-  total: number
+export interface PaginationMeta {
   page: number
+  pages: number
   per_page: number
+  total: number
+}
+
+/**
+ * 分页响应数据（Go 后端格式）
+ */
+export interface PaginatedData<T> {
+  items: T[]
+  pagination: PaginationMeta
+}
+
+/**
+ * 分页 API 响应
+ */
+export interface PaginatedApiResponse<T = any> {
+  success: boolean
+  data: T[]
+  pagination: PaginationMeta
+  message?: string
+  error?: string
 }

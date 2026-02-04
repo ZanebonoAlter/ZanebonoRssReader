@@ -1,6 +1,7 @@
 import { apiClient } from './client'
 import type {
   ApiResponse,
+  PaginatedApiResponse,
   Article,
   ArticleFilters,
   UpdateArticleData,
@@ -14,9 +15,9 @@ export function useArticlesApi() {
   /**
    * 获取文章列表
    */
-  async function getArticles(filters: ArticleFilters = {}): Promise<ApiResponse<Article[]>> {
+  async function getArticles(filters: ArticleFilters = {}): Promise<PaginatedApiResponse<Article>> {
     const query = apiClient.buildQueryParams(filters)
-    return apiClient.get<Article[]>(`/articles${query ? `?${query}` : ''}`)
+    return apiClient.get<Article[]>(`/articles${query ? `?${query}` : ''}`) as any
   }
 
   /**

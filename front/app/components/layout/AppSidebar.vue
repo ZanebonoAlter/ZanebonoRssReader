@@ -30,6 +30,7 @@ const emit = defineEmits<{
   editCategory: [categoryId: string]
   editFeed: [feedId: string]
   deleteCategory: [categoryId: string, categoryName: string]
+  markFeedAsRead: [feedId: string]
   startResizing: [event: MouseEvent]
   stopResizing: []
 }>()
@@ -103,6 +104,17 @@ function handleAISummariesClick() {
 function handleAllArticlesClick() {
   updateSelection(null, null)
   emit('allArticlesClick')
+}
+
+// 处理标记订阅源为已读
+async function handleMarkFeedAsRead(feedId: string) {
+  const response = await apiStore.markAllAsRead(feedId)
+  if (response.success) {
+    const feed = feedsStore.feeds.find(f => f.id === feedId)
+    if (feed && feed.unreadCount) {
+      feed.unreadCount = 0
+    }
+  }
 }
 
 import './AppSidebar.css'
@@ -242,6 +254,13 @@ import './AppSidebar.css'
               <FeedRefreshStatusIcon :feed="feed" />
               <button
                 class="action-btn"
+                title="标记为全部已读"
+                @click.stop="handleMarkFeedAsRead(feed.id)"
+              >
+                <Icon icon="mdi:check-all" width="13" height="13" class="text-gray-500" />
+              </button>
+              <button
+                class="action-btn"
                 title="编辑订阅源"
                 @click.stop="$emit('editFeed', feed.id)"
               >
@@ -300,6 +319,13 @@ import './AppSidebar.css'
                 {{ feedsStore.unreadCountsByFeed[feed.id] || 0 }}
               </span>
               <FeedRefreshStatusIcon :feed="feed" />
+              <button
+                class="action-btn"
+                title="标记为全部已读"
+                @click.stop="handleMarkFeedAsRead(feed.id)"
+              >
+                <Icon icon="mdi:check-all" width="13" height="13" class="text-gray-500" />
+              </button>
               <button
                 class="action-btn"
                 title="编辑订阅源"

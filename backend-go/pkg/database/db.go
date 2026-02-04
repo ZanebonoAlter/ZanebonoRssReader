@@ -3,6 +3,7 @@ package database
 import (
 	"fmt"
 	"log"
+	"time"
 
 	"my-robot-backend/internal/config"
 	"my-robot-backend/internal/models"
@@ -22,8 +23,12 @@ func InitDB(cfg *config.Config) error {
 		logLevel = logger.Info
 	}
 
+	cstZone := time.FixedZone("CST", 8*3600)
 	DB, err = gorm.Open(sqlite.Open(cfg.Database.DSN), &gorm.Config{
 		Logger: logger.Default.LogMode(logLevel),
+		NowFunc: func() time.Time {
+			return time.Now().In(cstZone)
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("failed to connect database: %w", err)
