@@ -25,6 +25,8 @@
 ```
 backend-go/
 ├── cmd/                        # 入口命令
+│   ├── create-behavior-tables/ # 行为追踪表迁移工具
+│   │   └── main.go
 │   ├── migrate/                # 数据库迁移工具
 │   │   └── main.go
 │   └── server/                 # HTTP 服务主入口
@@ -40,6 +42,7 @@ backend-go/
 │   │   ├── category.go         # 分类接口
 │   │   ├── feed.go             # 订阅接口
 │   │   ├── opml.go             # OPML 导入导出
+│   │   ├── reading_behavior.go # 阅读行为追踪接口
 │   │   ├── scheduler.go        # 调度器管理
 │   │   └── summary.go          # AI 摘要接口
 │   ├── middleware/             # 中间件
@@ -49,13 +52,18 @@ backend-go/
 │   │   ├── article.go          # 文章模型
 │   │   ├── category.go         # 分类模型
 │   │   ├── feed.go             # 订阅模型
+│   │   ├── reading_behavior.go # 阅读行为模型
+│   │   ├── user_preference.go  # 用户偏好模型
 │   │   └── utils.go            # 工具函数
 │   ├── schedulers/             # 定时任务
 │   │   ├── auto_refresh.go     # 自动刷新订阅
-│   │   └── auto_summary.go     # 自动生成摘要
+│   │   ├── auto_summary.go     # 自动生成摘要
+│   │   └── preference_update.go # 偏好数据更新
 │   └── services/               # 业务逻辑服务
+│       ├── ai_prompt_builder.go # AI 个性化提示词
 │       ├── ai_service.go       # AI 服务 (OpenAI API)
 │       ├── feed_service.go     # 订阅业务逻辑
+│       ├── preference_service.go # 偏好分析服务
 │       └── rss_parser.go       # RSS 解析器
 ├── pkg/                        # 公共包 (可复用)
 │   └── database/
@@ -437,6 +445,21 @@ func SetupRoutes(r *gin.Engine, db *gorm.DB) {
 | GET | `/api/summaries/:id` | `GetSummary` | 获取单个摘要详情 |
 | DELETE | `/api/summaries/:id` | `DeleteSummary` | 删除摘要 |
 
+#### 阅读行为追踪 API (`/api/reading-behavior`)
+
+| 方法 | 端点 | 处理器 | 描述 |
+|------|------|--------|------|
+| POST | `/api/reading-behavior/track` | `TrackReadingBehavior` | 记录单个行为事件 |
+| POST | `/api/reading-behavior/track-batch` | `BatchTrackReadingBehavior` | 批量记录行为事件 |
+| GET | `/api/reading-behavior/stats` | `GetReadingStats` | 获取阅读统计信息 |
+
+#### 用户偏好 API (`/api/user-preferences`)
+
+| 方法 | 端点 | 处理器 | 描述 |
+|------|------|--------|------|
+| GET | `/api/user-preferences` | `GetUserPreferences` | 获取用户偏好列表 |
+| POST | `/api/user-preferences/update` | `TriggerPreferenceUpdate` | 手动触发偏好更新 |
+
 ---
 
 ## 7. 服务层 (Services)
@@ -498,6 +521,46 @@ func (s *AIService) GenerateCategorySummary(categoryID uint, timeRange int) (*AI
 }
 ```
 
+### 7.4 偏好分析服务 (`internal/services/preference_service.go`)
+
+**功能**:
+- 分析阅读行为数据计算用户偏好
+- 按订阅源和分类聚合偏好
+- 时间衰减算法（30天半衰期）
+- 支持手动和自动更新
+
+**核心函数**:
+```go
+func (s *PreferenceService) UpdateAllPreferences() error
+func (s *PreferenceService) GetUserFeedPreferences() ([]UserPreference, error)
+func (s *PreferenceService) GetUserCategoryPreferences() ([]UserPreference, error)
+func (s *PreferenceService) calculatePreferenceScore(...) float64
+```
+
+**偏好分数计算**:
+- 滚动深度权重：40%
+- 阅读时长权重：30%
+- 互动频率权重：30%
+- 时间衰减因子：exp(-距今天数/30)
+
+### 7.5 AI 提示词构建器 (`internal/services/ai_prompt_builder.go`)
+
+**功能**:
+- 构建个性化 AI 摘要提示词
+- 注入用户偏好背景（Top 订阅源、分类）
+- 根据阅读习惯调整风格（详细/简洁）
+- 优化摘要重点
+
+**核心函数**:
+```go
+func (b *AISummaryPromptBuilder) BuildPersonalizedPrompt(
+    categoryName string,
+    articlesText string,
+    articleCount int,
+    language string,
+) (string, error)
+```
+
 ---
 
 ## 8. 定时调度器 (Schedulers)
@@ -527,7 +590,18 @@ func (s *AIService) GenerateCategorySummary(categoryID uint, timeRange int) (*AI
 - `CheckInterval`: 3600 秒
 - `TimeRange`: 180 分钟 (处理最近 3 小时文章)
 
-### 8.3 调度器启动
+### 8.3 偏好更新 (`internal/schedulers/preference_update.go`)
+
+**功能**:
+- 每 1800 秒 (30分钟) 运行一次
+- 聚合阅读行为数据生成偏好
+- 调用 PreferenceService 分析计算
+- 支持手动触发更新
+
+**配置项**:
+- `CheckInterval`: 1800 秒
+
+### 8.4 调度器启动
 
 ```go
 func Start() {
@@ -538,12 +612,17 @@ func Start() {
     // 启动自动摘要调度器
     autoSummary := NewAutoSummaryScheduler(db)
     autoSummary.Start()
+    
+    // 启动偏好更新调度器
+    preferenceUpdate := NewPreferenceUpdateScheduler(1800)
+    preferenceUpdate.Start()
 }
 
 func Stop() {
     // 优雅停止所有调度器
     autoRefresh.Stop()
     autoSummary.Stop()
+    preferenceUpdate.Stop()
 }
 ```
 

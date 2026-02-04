@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Icon } from "@iconify/vue";
 import type { RssFeed } from '~/types'
+import type { ReadingStats, UserPreference } from '~/types/reading_behavior'
 
 interface Props {
   show: boolean
@@ -14,8 +15,9 @@ const emit = defineEmits<{
 
 const apiStore = useApiStore()
 const feedsStore = useFeedsStore()
+const preferencesStore = usePreferencesStore()
 
-const activeTab = ref<'feeds' | 'categories' | 'general'>('feeds')
+const activeTab = ref<'feeds' | 'categories' | 'general' | 'preferences'>('feeds')
 const loading = ref(false)
 const error = ref<string | null>(null)
 const success = ref<string | null>(null)
@@ -30,6 +32,13 @@ const autoSummaryEnabled = ref(false)
 
 // AI Podcast Settings
 const aiPodcastEnabled = ref(false)
+
+// Reading preferences
+const preferenceType = ref<'feed' | 'category'>('feed')
+const readingStats = ref<ReadingStats | null>(null)
+const userPreferences = ref<UserPreference[]>([])
+const preferencesLoading = ref(false)
+const preferencesUpdating = ref(false)
 
 // Get feeds grouped by category
 const feedsByCategory = computed(() => {
@@ -160,6 +169,48 @@ onMounted(() => {
   loadAISettings()
 })
 
+// Watch active tab changes
+watch(activeTab, async (newTab) => {
+  if (newTab === 'preferences') {
+    await loadPreferencesData()
+  }
+})
+
+// Load reading preferences data
+async function loadPreferencesData() {
+  preferencesLoading.value = true
+  try {
+    await Promise.all([
+      preferencesStore.fetchStats(),
+      preferencesStore.fetchPreferences(preferenceType.value)
+    ])
+    readingStats.value = preferencesStore.stats
+    userPreferences.value = preferencesStore.preferences
+  } catch (e) {
+    console.error('Failed to load preferences:', e)
+  } finally {
+    preferencesLoading.value = false
+  }
+}
+
+// Trigger preference update
+async function triggerPreferenceUpdate() {
+  preferencesUpdating.value = true
+  try {
+    await preferencesStore.triggerUpdate()
+    await loadPreferencesData()
+  } finally {
+    preferencesUpdating.value = false
+  }
+}
+
+// Get score color
+function getScoreColor(score: number): string {
+  if (score >= 0.7) return 'bg-green-500'
+  if (score >= 0.4) return 'bg-yellow-500'
+  return 'bg-gray-400'
+}
+
 // Save AI summary settings
 async function saveAISummarySettings() {
   const settings = {
@@ -259,6 +310,13 @@ async function testAIConnection() {
           @click="activeTab = 'general'"
         >
           通用设置
+        </button>
+        <button
+          class="px-6 py-3 text-sm font-medium transition-colors"
+          :class="activeTab === 'preferences' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:text-gray-700'"
+          @click="activeTab = 'preferences'"
+        >
+          阅读偏好
         </button>
       </div>
 
@@ -422,6 +480,171 @@ async function testAIConnection() {
         <!-- Categories Management Tab -->
         <div v-if="activeTab === 'categories'" class="space-y-4">
           <p class="text-sm text-gray-500">分类管理功能开发中...</p>
+        </div>
+
+        <!-- Reading Preferences Tab -->
+        <div v-if="activeTab === 'preferences'" class="space-y-6">
+          <!-- Loading State -->
+          <div v-if="preferencesLoading" class="flex items-center justify-center py-12">
+            <div class="text-center">
+              <Icon icon="mdi:loading" width="48" height="48" class="animate-spin text-blue-500 mx-auto mb-3" />
+              <p class="text-sm text-gray-500">加载偏好数据...</p>
+            </div>
+          </div>
+
+          <!-- Preferences Content -->
+          <div v-else class="space-y-6">
+            <!-- Quick Stats -->
+            <div class="grid grid-cols-4 gap-4">
+              <div class="bg-gradient-to-br from-blue-50 to-blue-100 rounded-xl p-4 border border-blue-200">
+                <div class="flex items-center gap-2 mb-2">
+                  <Icon icon="mdi:file-document" width="18" height="18" class="text-blue-600" />
+                  <span class="text-xs font-medium text-blue-900">总文章数</span>
+                </div>
+                <div class="text-2xl font-bold text-blue-700">
+                  {{ readingStats?.total_articles || 0 }}
+                </div>
+              </div>
+
+              <div class="bg-gradient-to-br from-green-50 to-green-100 rounded-xl p-4 border border-green-200">
+                <div class="flex items-center gap-2 mb-2">
+                  <Icon icon="mdi:clock" width="18" height="18" class="text-green-600" />
+                  <span class="text-xs font-medium text-green-900">总阅读时长</span>
+                </div>
+                <div class="text-2xl font-bold text-green-700">
+                  {{ readingStats?.total_reading_time || 0 }}s
+                </div>
+              </div>
+
+              <div class="bg-gradient-to-br from-purple-50 to-purple-100 rounded-xl p-4 border border-purple-200">
+                <div class="flex items-center gap-2 mb-2">
+                  <Icon icon="mdi:timer" width="18" height="18" class="text-purple-600" />
+                  <span class="text-xs font-medium text-purple-900">平均时长</span>
+                </div>
+                <div class="text-2xl font-bold text-purple-700">
+                  {{ Math.round(readingStats?.avg_reading_time || 0) }}s
+                </div>
+              </div>
+
+              <div class="bg-gradient-to-br from-orange-50 to-orange-100 rounded-xl p-4 border border-orange-200">
+                <div class="flex items-center gap-2 mb-2">
+                  <Icon icon="mdi:arrow-down-bold" width="18" height="18" class="text-orange-600" />
+                  <span class="text-xs font-medium text-orange-900">平均深度</span>
+                </div>
+                <div class="text-2xl font-bold text-orange-700">
+                  {{ Math.round(readingStats?.avg_scroll_depth || 0) }}%
+                </div>
+              </div>
+            </div>
+
+            <!-- Controls -->
+            <div class="flex items-center justify-between bg-gray-50 rounded-lg p-4">
+              <div class="flex items-center gap-3">
+                <div class="text-sm">
+                  <div class="font-medium text-gray-900">查看偏好</div>
+                  <div class="text-xs text-gray-500">按订阅源或分类查看</div>
+                </div>
+                <div class="flex gap-2">
+                  <button
+                    class="px-3 py-1.5 text-xs font-medium rounded-lg transition-colors"
+                    :class="preferenceType === 'feed' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 border border-gray-200'"
+                    @click="preferenceType = 'feed'; loadPreferencesData()"
+                  >
+                    订阅源
+                  </button>
+                  <button
+                    class="px-3 py-1.5 text-xs font-medium rounded-lg transition-colors"
+                    :class="preferenceType === 'category' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 border border-gray-200'"
+                    @click="preferenceType = 'category'; loadPreferencesData()"
+                  >
+                    分类
+                  </button>
+                </div>
+              </div>
+              <button
+                class="px-4 py-2 text-sm font-medium text-white bg-orange-600 rounded-lg hover:bg-orange-700 transition-colors flex items-center gap-2"
+                :disabled="preferencesUpdating"
+                @click="triggerPreferenceUpdate"
+              >
+                <Icon
+                  :icon="preferencesUpdating ? 'mdi:loading' : 'mdi:refresh'"
+                  :class="{ 'animate-spin': preferencesUpdating }"
+                  width="16"
+                  height="16"
+                />
+                更新偏好
+              </button>
+            </div>
+
+            <!-- Preferences List -->
+            <div class="bg-white rounded-xl border border-gray-200 overflow-hidden">
+              <div v-if="userPreferences.length === 0" class="text-center py-12">
+                <Icon icon="mdi:chart-line" width="48" height="48" class="text-gray-300 mx-auto mb-3" />
+                <p class="text-sm text-gray-500">暂无偏好数据</p>
+                <p class="text-xs text-gray-400 mt-1">阅读文章后将自动生成偏好分析</p>
+              </div>
+
+              <div v-else class="divide-y divide-gray-100">
+                <div
+                  v-for="pref in userPreferences"
+                  :key="pref.id"
+                  class="p-4 hover:bg-gray-50 transition-colors"
+                >
+                  <div class="flex items-center justify-between">
+                    <div class="flex-1">
+                      <div class="flex items-center gap-2 mb-1">
+                        <h4 class="text-sm font-medium text-gray-900">
+                          {{ pref.feed_title || pref.category_name }}
+                        </h4>
+                        <span class="px-2 py-0.5 text-xs font-medium rounded-full text-white"
+                              :class="getScoreColor(pref.preference_score)">
+                          {{ (pref.preference_score * 100).toFixed(0) }}%
+                        </span>
+                      </div>
+                      <div class="flex items-center gap-4 text-xs text-gray-500">
+                        <span class="flex items-center gap-1">
+                          <Icon icon="mdi:cursor-default-click" width="12" height="12" />
+                          {{ pref.interaction_count }} 次互动
+                        </span>
+                        <span class="flex items-center gap-1">
+                          <Icon icon="mdi:clock" width="12" height="12" />
+                          平均 {{ pref.avg_reading_time }} 秒
+                        </span>
+                        <span class="flex items-center gap-1">
+                          <Icon icon="mdi:arrow-down-bold" width="12" height="12" />
+                          {{ Math.round(pref.scroll_depth_avg) }}% 深度
+                        </span>
+                      </div>
+                    </div>
+
+                    <!-- Preference Score Bar -->
+                    <div class="ml-4 w-24">
+                      <div class="h-2 bg-gray-200 rounded-full overflow-hidden">
+                        <div
+                          class="h-full rounded-full transition-all"
+                          :class="getScoreColor(pref.preference_score)"
+                          :style="{ width: (pref.preference_score * 100) + '%' }"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Info Box -->
+            <div class="bg-blue-50 rounded-lg p-4 flex items-start gap-3">
+              <Icon icon="mdi:information" width="20" height="20" class="text-blue-600 flex-shrink-0 mt-0.5" />
+              <div class="text-sm text-blue-900">
+                <div class="font-medium mb-1">关于阅读偏好</div>
+                <p class="text-blue-700 text-xs">
+                  系统会根据您的阅读行为（滚动深度、阅读时长、互动频率）自动计算偏好分数。
+                  分数范围 0-100%，越高表示您对该订阅源或分类越感兴趣。
+                  偏好数据每 30 分钟自动更新，也可手动触发更新。
+                </p>
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- General Settings Tab -->

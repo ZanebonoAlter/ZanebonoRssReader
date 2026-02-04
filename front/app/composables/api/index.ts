@@ -11,3 +11,5 @@ export { useFeedsApi } from './feeds'
 export { useArticlesApi } from './articles'
 export { useSummariesApi } from './summaries'
 export { useOpmlApi } from './opml'
+export { useReadingBehaviorApi } from './reading_behavior'
+

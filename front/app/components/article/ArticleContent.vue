@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Icon } from '@iconify/vue'
 import type { RssFeed, Article } from '~/types'
+import { useReadingTracker, useScrollDepthTracker } from '~/composables/useReadingTracker'
 
 interface Props {
   article: Article | null
@@ -25,6 +26,20 @@ const showAISummary = ref(false)
 const feed = computed(() => {
   if (!props.article) return null
   return feedsStore.feeds.find((f: RssFeed) => f.id === props.article?.feedId)
+})
+
+const contentContainer = ref<HTMLElement>()
+let lastScrollDepth = 0
+
+const { readingTime, trackEvent, uploadEvents } = useReadingTracker({
+  article: computed(() => props.article),
+})
+
+useScrollDepthTracker(contentContainer, (depth) => {
+  if (depth > lastScrollDepth && Math.abs(depth - lastScrollDepth) >= 10) {
+    lastScrollDepth = depth
+    trackEvent('scroll', depth, readingTime.value)
+  }
 })
 
 // 标记为已读
@@ -53,7 +68,10 @@ function toggleAISummary() {
 
 function handleFavorite() {
   if (props.article) {
+    const isFav = !props.article.favorite
     emit('favorite', props.article.id)
+    trackEvent(isFav ? 'favorite' : 'unfavorite', lastScrollDepth, readingTime.value)
+    uploadEvents()
   }
 }
 
@@ -161,7 +179,7 @@ import './ArticleContent.css'
     </header>
 
     <!-- 预览模式 -->
-    <div v-if="viewMode === 'preview'" class="preview-mode">
+    <div ref="contentContainer" v-if="viewMode === 'preview'" class="preview-mode">
       <!-- AI 总结 -->
       <AISummary
         v-if="showAISummary && article"

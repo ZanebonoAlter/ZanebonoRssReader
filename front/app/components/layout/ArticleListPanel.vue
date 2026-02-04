@@ -160,8 +160,8 @@ function applyQuickDateFilter(days: number) {
   const start = new Date()
   start.setDate(start.getDate() - days)
 
-  endDate.value = end.toISOString().split('T')[0]
-  startDate.value = start.toISOString().split('T')[0]
+  endDate.value = end.toISOString().split('T')[0] || ''
+  startDate.value = start.toISOString().split('T')[0] || ''
 
   currentPage.value = 1
 }
@@ -231,7 +231,7 @@ import './ArticleListPanel.css'
         <select
           v-model="pageSize"
           class="page-size-select"
-          @change="changePageSize(Number($event.target.value))"
+          @change="changePageSize(Number((($event.target as HTMLSelectElement).value)))"
         >
           <option :value="10">10</option>
           <option :value="20">20</option>

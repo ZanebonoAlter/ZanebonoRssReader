@@ -8,8 +8,11 @@ export * from './api'
 // 数据模型类型
 export * from './category'
 export * from './feed'
-export * from './article'
+export * './article'
 export * from './ai'
+
+// 阅读行为类型
+export * from './reading_behavior'
 
 // 通用类型
 export * from './common'

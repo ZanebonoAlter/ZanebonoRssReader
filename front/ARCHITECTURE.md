@@ -28,7 +28,7 @@ front/
 │   │   │   └── ArticleListPanel.vue # 中间文章列表面板
 │   │   ├── article/
 │   │   │   ├── ArticleCard.vue     # 文章列表项
-│   │   │   └── ArticleContent.vue  # 文章阅读区
+│   │   │   └── ArticleContent.vue  # 文章阅读区（集成行为追踪）
 │   │   ├── category/
 │   │   │   └── CategoryCard.vue    # 分类展示
 │   │   ├── feed/
@@ -44,7 +44,7 @@ front/
 │   │       ├── AddFeedDialog.vue       # 添加订阅
 │   │       ├── EditFeedDialog.vue      # 编辑订阅
 │   │       ├── ImportOpmlDialog.vue    # OPML 导入
-│   │       └── GlobalSettingsDialog.vue # 全局设置
+│   │       └── GlobalSettingsDialog.vue # 全局设置（集成偏好面板）
 │   ├── composables/            # 组合式函数
 │   │   ├── api/                    # API 层
 │   │   │   ├── client.ts           # 基础 HTTP 客户端
@@ -53,23 +53,27 @@ front/
 │   │   │   ├── feeds.ts            # 订阅 API
 │   │   │   ├── articles.ts         # 文章 API
 │   │   │   ├── summaries.ts        # AI 摘要 API
-│   │   │   └── opml.ts             # OPML API
+│   │   │   ├── opml.ts             # OPML API
+│   │   │   └── reading_behavior.ts # 阅读行为 API
 │   │   ├── useAI.ts                # AI 摘要功能
 │   │   ├── useAutoRefresh.ts       # 定时刷新
 │   │   ├── useRefreshPolling.ts    # 状态轮询
+│   │   ├── useReadingTracker.ts    # 阅读行为追踪
 │   │   └── useRssParser.ts         # RSS 解析
 │   ├── stores/                 # Pinia 状态管理
 │   │   ├── api.ts                  # API Store（数据源）
 │   │   ├── feeds.ts                # 订阅 Store
-│   │   └── articles.ts             # 文章 Store
+│   │   ├── articles.ts             # 文章 Store
+│   │   └── preferences.ts          # 用户偏好 Store
 │   ├── types/                  # TypeScript 类型
 │   │   ├── index.ts                # 统一导出
 │   │   ├── api.ts                  # API 响应类型
-│   │   ├── category.ts             # 分类类型
-│   │   ├── feed.ts                 # 订阅类型
 │   │   ├── article.ts              # 文章类型
 │   │   ├── ai.ts                   # AI 类型
-│   │   └── common.ts               # 通用类型
+│   │   ├── category.ts             # 分类类型
+│   │   ├── common.ts               # 通用类型
+│   │   ├── feed.ts                 # 订阅类型
+│   │   └── reading_behavior.ts     # 阅读行为类型
 │   ├── utils/                  # 工具函数
 │   │   ├── index.ts                # 统一导出
 │   │   ├── constants.ts            # 常量定义
@@ -169,6 +173,7 @@ const response = await client.get<Category[]>('/categories')
 | Articles | `articles.ts` | getArticles, markAsRead, markAsFavorite, bulkMarkAsRead, getStats | /api/articles |
 | Summaries | `summaries.ts` | getSummaries, createSummary, deleteSummary, generateSummary | /api/summaries |
 | OPML | `opml.ts` | importOPML, exportOPML | POST /api/import-opml, GET /api/export-opml |
+| ReadingBehavior | `reading_behavior.ts` | trackBehavior, trackBehaviorBatch, getReadingStats, getUserPreferences | /api/reading-behavior, /api/user-preferences |
 
 **使用模式**:
 ```typescript
@@ -251,7 +256,7 @@ components/dialog/
 
 ## 6. 状态管理架构
 
-### 6.1 双 Store 模式
+### 6.1 多 Store 模式
 
 **数据流向**: 后端 → API Store → Local Stores → UI
 
@@ -260,6 +265,7 @@ components/dialog/
 | **useApiStore** | `stores/api.ts` | 与后端通信，数据源 | 后端 API |
 | **useFeedsStore** | `stores/feeds.ts` | 本地订阅/分类状态 | apiStore 同步 |
 | **useArticlesStore** | `stores/articles.ts` | 本地文章列表 + 筛选 | apiStore 同步 |
+| **usePreferencesStore** | `stores/preferences.ts` | 用户偏好与阅读统计 | 后端行为追踪 API |
 
 ### 6.2 useApiStore (数据源)
 
@@ -328,6 +334,36 @@ apiStore.createXxx() / updateXxx() / deleteXxx()
 重新 fetch → sync → UI 更新
 ```
 
+### 6.6 阅读行为追踪数据流
+
+```
+用户阅读文章 (ArticleContent.vue)
+    ↓
+useReadingTracker 自动追踪
+    ↓ (每 30 秒或关闭时)
+批量上传到 /api/reading-behavior/track-batch
+    ↓
+后端存储到 reading_behaviors 表
+    ↓ (每 30 分钟)
+定时任务聚合到 user_preferences 表
+    ↓
+usePreferencesStore 获取偏好数据
+    ↓
+GlobalSettingsDialog 可视化展示
+```
+
+**追踪内容**:
+- 文章打开/关闭事件
+- 滚动深度 (0-100%)
+- 阅读时长 (秒)
+- 收藏/取消收藏操作
+
+**偏好计算**:
+- 滚动深度权重：40%
+- 阅读时长权重：30%
+- 互动频率权重：30%
+- 时间衰减：30 天半衰期
+
 ---
 
 ## 7. 工具函数
@@ -393,11 +429,12 @@ Day.js 配置:
 app/types/
 ├── index.ts        # 统一导出
 ├── api.ts          # API 响应类型
-├── category.ts     # 分类类型
-├── feed.ts         # 订阅类型
 ├── article.ts      # 文章类型
 ├── ai.ts           # AI 类型
-└── common.ts       # 通用类型
+├── category.ts     # 分类类型
+├── common.ts       # 通用类型
+├── feed.ts         # 订阅类型
+└── reading_behavior.ts # 阅读行为类型
 ```
 
 ### 8.2 核心类型
@@ -461,6 +498,51 @@ interface AISummary {
   time_range: number     // 分钟
   created_at?: string
   updated_at?: string
+}
+```
+
+**ReadingBehaviorEvent** (`types/reading_behavior.ts`)
+```typescript
+type ReadingEventType = 'open' | 'close' | 'scroll' | 'favorite' | 'unfavorite'
+
+interface ReadingBehaviorEvent {
+  article_id: number
+  feed_id: number
+  category_id?: number
+  session_id: string
+  event_type: ReadingEventType
+  scroll_depth?: number      // 0-100
+  reading_time?: number      // 秒
+}
+```
+
+**ReadingStats** (`types/reading_behavior.ts`)
+```typescript
+interface ReadingStats {
+  total_articles: number
+  total_reading_time: number
+  avg_reading_time: number
+  avg_scroll_depth: number
+  most_active_feed_id: number
+  most_active_category: number
+}
+```
+
+**UserPreference** (`types/reading_behavior.ts`)
+```typescript
+interface UserPreference {
+  id: number
+  feed_id?: number
+  category_id?: number
+  preference_score: number  // 0-1
+  avg_reading_time: number
+  interaction_count: number
+  scroll_depth_avg: number
+  last_interaction_at?: string
+  created_at: string
+  updated_at: string
+  feed_title?: string
+  category_name?: string
 }
 ```
 

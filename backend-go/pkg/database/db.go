@@ -55,5 +55,7 @@ func Migrate() error {
 		&models.AISummary{},
 		&models.SchedulerTask{},
 		&models.AISettings{},
+		&models.ReadingBehavior{},
+		&models.UserPreference{},
 	)
 }

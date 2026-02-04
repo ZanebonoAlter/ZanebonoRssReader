@@ -16,8 +16,9 @@ import (
 )
 
 var (
-	autoRefreshScheduler *schedulers.AutoRefreshScheduler
-	autoSummaryScheduler *schedulers.AutoSummaryScheduler
+	autoRefreshScheduler      *schedulers.AutoRefreshScheduler
+	autoSummaryScheduler      *schedulers.AutoSummaryScheduler
+	preferenceUpdateScheduler *schedulers.PreferenceUpdateScheduler
 )
 
 func main() {
@@ -168,6 +169,21 @@ func SetupRoutes(r *gin.Engine) {
 		// Auto summary configuration
 		api.GET("/auto-summary/status", handlers.GetAutoSummaryStatus)
 		api.POST("/auto-summary/config", handlers.UpdateAutoSummaryConfig)
+
+		// Reading behavior tracking
+		readingBehavior := api.Group("/reading-behavior")
+		{
+			readingBehavior.POST("/track", handlers.TrackReadingBehavior)
+			readingBehavior.POST("/track-batch", handlers.BatchTrackReadingBehavior)
+			readingBehavior.GET("/stats", handlers.GetReadingStats)
+		}
+
+		// User preferences
+		preferences := api.Group("/user-preferences")
+		{
+			preferences.GET("", handlers.GetUserPreferences)
+			preferences.POST("/update", handlers.TriggerPreferenceUpdate)
+		}
 	}
 }
 
@@ -195,6 +211,15 @@ func initializeSchedulers() {
 		log.Println("Auto-summary scheduler started successfully")
 	}
 
+	// Initialize preference update scheduler (default: 1800 seconds = 30 minutes)
+	preferenceUpdateInterval := 1800
+	preferenceUpdateScheduler = schedulers.NewPreferenceUpdateScheduler(preferenceUpdateInterval)
+	if err := preferenceUpdateScheduler.Start(); err != nil {
+		log.Printf("Warning: Failed to start preference update scheduler: %v", err)
+	} else {
+		log.Println("Preference update scheduler started successfully")
+	}
+
 	// Set scheduler references in handlers for status queries
 	handlers.AutoRefreshSchedulerInterface = autoRefreshScheduler
 	handlers.AutoSummarySchedulerInterface = autoSummaryScheduler
@@ -217,6 +242,11 @@ func setupGracefulShutdown() {
 		if autoSummaryScheduler != nil {
 			log.Println("Stopping auto-summary scheduler...")
 			autoSummaryScheduler.Stop()
+		}
+
+		if preferenceUpdateScheduler != nil {
+			log.Println("Stopping preference update scheduler...")
+			preferenceUpdateScheduler.Stop()
 		}
 
 		log.Println("Graceful shutdown completed")
