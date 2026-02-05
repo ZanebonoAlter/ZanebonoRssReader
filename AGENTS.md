@@ -393,8 +393,7 @@ func CreateCategory(c *gin.Context) {
 ## Important Notes
 
 - **No authentication** - app assumes single-user personal deployment
-- **Database**: SQLite (`rss_reader.db`) shared between Python and Go backends
+- **Database**: SQLite (`rss_reader.db`)
 - **Cascading deletes**: Category → Feed → Article
-- **API compatibility**: Go backend 100% compatible with Python backend API
 - **Default refresh interval**: 60 minutes for feeds
 - **AI features**: Requires OpenAI-compatible API configuration (stored in database)

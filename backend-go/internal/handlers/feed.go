@@ -209,8 +209,27 @@ func UpdateFeed(c *gin.Context) {
 		return
 	}
 
+	// Read raw body BEFORE binding to check which fields are present
+	rawBody, err := c.GetRawData()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "Failed to read request body",
+		})
+		return
+	}
+
+	var bodyMap map[string]interface{}
+	if err := json.Unmarshal(rawBody, &bodyMap); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "Invalid JSON",
+		})
+		return
+	}
+
 	var req UpdateFeedRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := json.Unmarshal(rawBody, &req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
 			"error":   "Invalid request body",
@@ -244,14 +263,10 @@ func UpdateFeed(c *gin.Context) {
 	if req.RefreshInterval >= 0 {
 		updates["refresh_interval"] = req.RefreshInterval
 	}
-	// Only update ai_summary_enabled if explicitly provided
-	if c.Request.Method == "PUT" {
-		// For PUT requests, check if the field exists in request body
-		var body map[string]interface{}
-		json.NewDecoder(c.Request.Body).Decode(&body)
-		if _, exists := body["ai_summary_enabled"]; exists {
-			updates["ai_summary_enabled"] = req.AISummaryEnabled
-		}
+	// Check if ai_summary_enabled exists in request body
+	if val, exists := bodyMap["ai_summary_enabled"]; exists {
+		// Use the actual value from bodyMap to preserve boolean type
+		updates["ai_summary_enabled"] = val
 	}
 
 	if err := database.DB.Model(&feed).Updates(updates).Error; err != nil {

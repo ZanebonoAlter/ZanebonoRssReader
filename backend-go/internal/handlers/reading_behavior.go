@@ -35,10 +35,19 @@ func TrackReadingBehavior(c *gin.Context) {
 		return
 	}
 
+	categoryID := req.CategoryID
+
+	if categoryID == nil || *categoryID == 0 {
+		var feed models.Feed
+		if err := database.DB.Select("category_id").First(&feed, req.FeedID).Error; err == nil {
+			categoryID = feed.CategoryID
+		}
+	}
+
 	behavior := models.ReadingBehavior{
 		ArticleID:   req.ArticleID,
 		FeedID:      req.FeedID,
-		CategoryID:  req.CategoryID,
+		CategoryID:  categoryID,
 		SessionID:   req.SessionID,
 		EventType:   req.EventType,
 		ScrollDepth: req.ScrollDepth,
@@ -70,12 +79,28 @@ func BatchTrackReadingBehavior(c *gin.Context) {
 		return
 	}
 
+	feedCategoryMap := make(map[uint]*uint)
+
 	behaviors := make([]models.ReadingBehavior, len(req.Events))
 	for i, event := range req.Events {
+		categoryID := event.CategoryID
+
+		if categoryID == nil || *categoryID == 0 {
+			if cachedCategoryID, exists := feedCategoryMap[event.FeedID]; exists {
+				categoryID = cachedCategoryID
+			} else {
+				var feed models.Feed
+				if err := database.DB.Select("category_id").First(&feed, event.FeedID).Error; err == nil {
+					categoryID = feed.CategoryID
+					feedCategoryMap[event.FeedID] = categoryID
+				}
+			}
+		}
+
 		behaviors[i] = models.ReadingBehavior{
 			ArticleID:   event.ArticleID,
 			FeedID:      event.FeedID,
-			CategoryID:  event.CategoryID,
+			CategoryID:  categoryID,
 			SessionID:   event.SessionID,
 			EventType:   event.EventType,
 			ScrollDepth: event.ScrollDepth,

@@ -29,7 +29,7 @@ func (s *PreferenceService) updateFeedPreferences() error {
 		TotalEvents      int64
 		TotalReadingTime int
 		AvgScrollDepth   float64
-		LastInteraction  time.Time
+		LastInteraction  string
 	}
 
 	var feedStats []FeedStats
@@ -48,11 +48,16 @@ func (s *PreferenceService) updateFeedPreferences() error {
 	}
 
 	for _, stats := range feedStats {
+		lastInteraction, err := time.Parse(time.RFC3339, stats.LastInteraction)
+		if err != nil {
+			lastInteraction = time.Now()
+		}
+
 		preferenceScore := s.calculatePreferenceScore(
 			stats.TotalEvents,
 			stats.TotalReadingTime,
 			stats.AvgScrollDepth,
-			stats.LastInteraction,
+			lastInteraction,
 		)
 
 		avgReadingTime := 0
@@ -69,9 +74,11 @@ func (s *PreferenceService) updateFeedPreferences() error {
 					AvgReadingTime:    avgReadingTime,
 					InteractionCount:  int(stats.TotalEvents),
 					ScrollDepthAvg:    stats.AvgScrollDepth,
-					LastInteractionAt: &stats.LastInteraction,
+					LastInteractionAt: &lastInteraction,
 				}
-				s.db.Create(&pref)
+				if err := s.db.Create(&pref).Error; err != nil {
+					return err
+				}
 			} else {
 				return err
 			}
@@ -80,8 +87,10 @@ func (s *PreferenceService) updateFeedPreferences() error {
 			pref.AvgReadingTime = avgReadingTime
 			pref.InteractionCount = int(stats.TotalEvents)
 			pref.ScrollDepthAvg = stats.AvgScrollDepth
-			pref.LastInteractionAt = &stats.LastInteraction
-			s.db.Save(&pref)
+			pref.LastInteractionAt = &lastInteraction
+			if err := s.db.Save(&pref).Error; err != nil {
+				return err
+			}
 		}
 	}
 
@@ -94,7 +103,7 @@ func (s *PreferenceService) updateCategoryPreferences() error {
 		TotalEvents      int64
 		TotalReadingTime int
 		AvgScrollDepth   float64
-		LastInteraction  time.Time
+		LastInteraction  string
 	}
 
 	var categoryStats []CategoryStats
@@ -113,11 +122,20 @@ func (s *PreferenceService) updateCategoryPreferences() error {
 	}
 
 	for _, stats := range categoryStats {
+		if stats.CategoryID == nil {
+			continue
+		}
+
+		lastInteraction, err := time.Parse(time.RFC3339, stats.LastInteraction)
+		if err != nil {
+			lastInteraction = time.Now()
+		}
+
 		preferenceScore := s.calculatePreferenceScore(
 			stats.TotalEvents,
 			stats.TotalReadingTime,
 			stats.AvgScrollDepth,
-			stats.LastInteraction,
+			lastInteraction,
 		)
 
 		avgReadingTime := 0
@@ -134,9 +152,11 @@ func (s *PreferenceService) updateCategoryPreferences() error {
 					AvgReadingTime:    avgReadingTime,
 					InteractionCount:  int(stats.TotalEvents),
 					ScrollDepthAvg:    stats.AvgScrollDepth,
-					LastInteractionAt: &stats.LastInteraction,
+					LastInteractionAt: &lastInteraction,
 				}
-				s.db.Create(&pref)
+				if err := s.db.Create(&pref).Error; err != nil {
+					return err
+				}
 			} else {
 				return err
 			}
@@ -145,8 +165,10 @@ func (s *PreferenceService) updateCategoryPreferences() error {
 			pref.AvgReadingTime = avgReadingTime
 			pref.InteractionCount = int(stats.TotalEvents)
 			pref.ScrollDepthAvg = stats.AvgScrollDepth
-			pref.LastInteractionAt = &stats.LastInteraction
-			s.db.Save(&pref)
+			pref.LastInteractionAt = &lastInteraction
+			if err := s.db.Save(&pref).Error; err != nil {
+				return err
+			}
 		}
 	}
 
