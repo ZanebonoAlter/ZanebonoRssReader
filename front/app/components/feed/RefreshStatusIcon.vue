@@ -24,11 +24,11 @@ const statusIcon = computed(() => {
 const statusColor = computed(() => {
   switch (props.feed.refreshStatus) {
     case 'refreshing':
-      return 'text-primary-500'
+      return 'text-ink-500'
     case 'error':
-      return 'text-red-500'
+      return 'text-error'
     case 'success':
-      return 'text-emerald-500'
+      return 'text-success'
     default:
       return ''
   }

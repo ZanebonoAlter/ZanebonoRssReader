@@ -21,13 +21,13 @@ const loading = ref(false)
 const error = ref<string | null>(null)
 
 const colorOptions = [
-  '#3b82f6', // blue
-  '#ef4444', // red
-  '#10b981', // green
-  '#f59e0b', // yellow
-  '#8b5cf6', // purple
-  '#ec4899', // pink
-  '#6b7280', // gray
+  '#3b6b87', // ink blue
+  '#c12f2f', // print red
+  '#2d8a7a', // teal
+  '#d4883c', // amber
+  '#4a5d8a', // indigo
+  '#3d7a4a', // forest
+  '#5a5a5a', // charcoal
 ]
 
 const iconOptions = [
@@ -90,14 +90,14 @@ async function handleSubmit() {
           leave-to-class="opacity-0 scale-95 translate-y-2"
         >
           <div
-            class="glass-strong rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden"
+            class="bg-white/95 backdrop-blur-sm rounded-lg shadow-strong border border-ink-200 w-full max-w-lg overflow-hidden"
             @click.stop
           >
             <!-- Header -->
-            <div class="px-6 py-5 bg-linear-to-r from-primary-50 to-primary-100/50 border-b border-primary-100/50">
+            <div class="px-6 py-5 bg-linear-to-r from-ink-50 to-paper-cream border-b border-ink-200">
               <div class="flex items-center justify-between">
                 <div class="flex items-center gap-3">
-                  <div class="w-11 h-11 rounded-2xl bg-linear-to-br from-primary-600 to-primary-800 flex items-center justify-center shadow-lg">
+                  <div class="w-11 h-11 rounded-lg bg-linear-to-br from-primary-600 to-primary-800 flex items-center justify-center shadow-lg">
                     <Icon icon="mdi:pencil" class="text-white" width="24" height="24" />
                   </div>
                   <div>
@@ -118,7 +118,7 @@ async function handleSubmit() {
               <!-- Name -->
               <div class="space-y-2">
                 <label class="flex items-center gap-2 text-sm font-semibold text-gray-700">
-                  <Icon icon="mdi:label" width="16" height="16" class="text-primary-500" />
+                  <Icon icon="mdi:label" width="16" height="16" class="text-ink-500" />
                   分类名称
                   <span class="text-red-500">*</span>
                 </label>
@@ -135,7 +135,7 @@ async function handleSubmit() {
                 <!-- Icon -->
                 <div class="space-y-2">
                   <label class="flex items-center gap-2 text-sm font-semibold text-gray-700">
-                    <Icon icon="mdi:emoticon-happy" width="16" height="16" class="text-primary-500" />
+                    <Icon icon="mdi:emoticon-happy" width="16" height="16" class="text-ink-500" />
                     图标
                   </label>
                   <div class="grid grid-cols-5 gap-2">
@@ -143,10 +143,10 @@ async function handleSubmit() {
                       v-for="iconOption in iconOptions"
                       :key="iconOption"
                       class="p-2.5 rounded-xl border-2 transition-all hover:shadow-md"
-                      :class="icon === iconOption ? 'border-primary-500 bg-primary-50 shadow-md scale-105' : 'border-gray-200 hover:border-primary-300 hover:bg-primary-50/50'"
+                      :class="icon === iconOption ? 'border-ink-500 bg-ink-50 shadow-md scale-105' : 'border-gray-200 hover:border-ink-300 hover:bg-ink-50/50'"
                       @click="icon = iconOption"
                     >
-                      <Icon :icon="iconOption" width="20" height="20" :class="icon === iconOption ? 'text-primary-600' : 'text-gray-600'" />
+                      <Icon :icon="iconOption" width="20" height="20" :class="icon === iconOption ? 'text-ink-600' : 'text-gray-600'" />
                     </button>
                   </div>
                   <!-- Preview -->
@@ -161,7 +161,7 @@ async function handleSubmit() {
                 <!-- Color -->
                 <div class="space-y-2">
                   <label class="flex items-center gap-2 text-sm font-semibold text-gray-700">
-                    <Icon icon="mdi:palette" width="16" height="16" class="text-primary-500" />
+                    <Icon icon="mdi:palette" width="16" height="16" class="text-ink-500" />
                     颜色
                   </label>
                   <div class="grid grid-cols-4 gap-2.5">
@@ -188,7 +188,7 @@ async function handleSubmit() {
               <!-- Description -->
               <div class="space-y-2">
                 <label class="flex items-center gap-2 text-sm font-semibold text-gray-700">
-                  <Icon icon="mdi:text-box" width="16" height="16" class="text-primary-500" />
+                  <Icon icon="mdi:text-box" width="16" height="16" class="text-ink-500" />
                   描述
                   <span class="text-xs font-normal text-gray-400">(可选)</span>
                 </label>
@@ -211,7 +211,7 @@ async function handleSubmit() {
               >
                 <div
                   v-if="error"
-                  class="flex items-start gap-3 p-4 bg-red-50/80 backdrop-blur-sm border-2 border-red-200 rounded-2xl"
+                  class="flex items-start gap-3 p-4 bg-red-50/80 backdrop-blur-sm border-2 border-red-200 rounded-lg"
                 >
                   <Icon icon="mdi:alert-circle" width="20" height="20" class="text-red-500 shrink-0 mt-0.5" />
                   <p class="text-sm font-medium text-red-700">{{ error }}</p>

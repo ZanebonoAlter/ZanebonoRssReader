@@ -48,16 +48,17 @@ export const TIME_RANGE_OPTIONS = [
 ] as const
 
 /**
- * 颜色选项（用于分类、订阅源等）
+ * 颜色选项（用于分类、订阅源等）- 杂志风格配色
  */
 export const COLOR_OPTIONS = [
-  '#3b82f6', // 蓝色
-  '#ef4444', // 红色
-  '#10b981', // 绿色
-  '#f59e0b', // 黄色
-  '#8b5cf6', // 紫色
-  '#ec4899', // 粉色
-  '#6b7280', // 灰色
+  '#3b6b87', // Ink Blue - 墨水蓝
+  '#c12f2f', // Print Red - 印刷红
+  '#2d8a7a', // Teal - 青绿
+  '#d4883c', // Amber - 琥珀
+  '#4a5d8a', // Indigo - 靛蓝
+  '#3d7a4a', // Forest - 森林绿
+  '#8a5a4a', // Sepia - 褐色
+  '#5a5a5a', // Charcoal - 炭灰
 ] as const
 
 /**

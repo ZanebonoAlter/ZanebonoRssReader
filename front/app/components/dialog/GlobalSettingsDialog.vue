@@ -83,7 +83,7 @@ async function updateFeedSetting(
   error.value = null
   success.value = null
 
-  const response = await api.updateFeed(Number(feedId), {
+  const response = await apiStore.updateFeed(feedId, {
     [setting]: value,
   })
 
@@ -122,7 +122,7 @@ function getIntervalColor(minutes: number): string {
   if (minutes === 0) return 'text-gray-500'
   if (minutes <= 30) return 'text-green-600'
   if (minutes <= 120) return 'text-blue-600'
-  return 'text-purple-600'
+  return 'text-ink-600'
 }
 
 async function refreshFeed(feedId: string) {
@@ -275,6 +275,7 @@ async function testAIConnection() {
   >
     <div
       class="bg-white rounded-xl shadow-xl w-full max-w-4xl mx-4 overflow-hidden max-h-[90vh] flex flex-col"
+      style="max-height: calc(90vh - 2rem);"
       @click.stop
     >
       <!-- Header -->
@@ -335,7 +336,7 @@ async function testAIConnection() {
       </div>
 
       <!-- Content -->
-      <div class="flex-1 overflow-y-auto p-6">
+      <div class="flex-1 overflow-y-auto p-6 min-h-0">
         <!-- Feeds Configuration Tab -->
         <div v-if="activeTab === 'feeds'" class="space-y-6">
           <div v-if="Object.keys(feedsByCategory).length === 0" class="text-center text-gray-500 py-8">
@@ -440,12 +441,12 @@ async function testAIConnection() {
                     <!-- AI Summary Toggle -->
                     <div class="flex items-center justify-between mt-3 pt-3 border-t border-gray-100">
                       <div class="flex items-center gap-2">
-                        <Icon icon="mdi:brain" width="16" height="16" class="text-purple-500" />
+                        <Icon icon="mdi:brain" width="16" height="16" class="text-ink-500" />
                         <span class="text-xs font-medium text-gray-700">AI 总结</span>
                       </div>
                       <button
                         class="relative inline-flex h-5 w-9 items-center rounded-full transition-colors"
-                        :class="feed.aiSummaryEnabled !== false ? 'bg-purple-600' : 'bg-gray-300'"
+                        :class="feed.aiSummaryEnabled !== false ? 'bg-ink-600' : 'bg-gray-300'"
                         @click="updateFeedSetting(feed.id, 'ai_summary_enabled', !(feed.aiSummaryEnabled !== false))"
                       >
                         <span
@@ -516,12 +517,12 @@ async function testAIConnection() {
                 </div>
               </div>
 
-              <div class="bg-gradient-to-br from-purple-50 to-purple-100 rounded-xl p-4 border border-purple-200">
+              <div class="bg-gradient-to-br from-ink-50 to-paper-cream rounded-xl p-4 border border-ink-200">
                 <div class="flex items-center gap-2 mb-2">
-                  <Icon icon="mdi:timer" width="18" height="18" class="text-purple-600" />
-                  <span class="text-xs font-medium text-purple-900">平均时长</span>
+                  <Icon icon="mdi:timer" width="18" height="18" class="text-ink-600" />
+                  <span class="text-xs font-medium text-ink-900">平均时长</span>
                 </div>
-                <div class="text-2xl font-bold text-purple-700">
+                <div class="text-2xl font-bold text-ink-700">
                   {{ Math.round(readingStats?.avg_reading_time || 0) }}s
                 </div>
               </div>
@@ -650,10 +651,10 @@ async function testAIConnection() {
         <!-- General Settings Tab -->
         <div v-if="activeTab === 'general'" class="space-y-6">
           <!-- AI Summary Settings -->
-          <div class="bg-gradient-to-br from-purple-50 to-blue-50 rounded-xl p-6 border border-purple-100">
+          <div class="bg-gradient-to-br from-ink-50 to-paper-cream rounded-xl p-6 border border-ink-100">
             <div class="flex items-start justify-between mb-4">
               <div class="flex items-center gap-3">
-                <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-purple-500 to-blue-600 flex items-center justify-center">
+                <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-ink-500 to-ink-700 flex items-center justify-center">
                   <Icon icon="mdi:brain" width="20" height="20" class="text-white" />
                 </div>
                 <div>
@@ -743,7 +744,7 @@ async function testAIConnection() {
               </div>
 
               <!-- Auto Summary Toggle -->
-              <div class="pt-4 border-t border-purple-200/50 mt-4">
+              <div class="pt-4 border-t border-ink-200/50 mt-4">
                 <div class="flex items-center justify-between">
                   <div>
                     <h4 class="text-sm font-medium text-gray-900">自动生成总结</h4>
@@ -751,7 +752,7 @@ async function testAIConnection() {
                   </div>
                   <button
                     class="relative inline-flex h-5 w-9 items-center rounded-full transition-colors"
-                    :class="autoSummaryEnabled ? 'bg-purple-600' : 'bg-gray-300'"
+                    :class="autoSummaryEnabled ? 'bg-ink-600' : 'bg-gray-300'"
                     @click="autoSummaryEnabled = !autoSummaryEnabled"
                   >
                     <span

@@ -29,13 +29,13 @@ const category = computed(() => feedsStore.getCategoryBySlug(props.article.categ
 
 <template>
   <article
-    class="glass-card group cursor-pointer overflow-hidden mx-2 mb-2 first:mt-2"
+    class="paper-card group cursor-pointer overflow-hidden mx-2 mb-2 first:mt-2"
     :class="{ 'opacity-60': article.read, 'selected': selected }"
     @click="emit('click', article)"
   >
     <div
       v-if="article.imageUrl && !compact"
-      class="aspect-video w-full overflow-hidden bg-gray-100"
+      class="aspect-video w-full overflow-hidden bg-paper-warm"
     >
       <img
         :src="article.imageUrl"
@@ -64,21 +64,21 @@ const category = computed(() => feedsStore.getCategoryBySlug(props.article.categ
           <div class="flex items-start justify-between gap-2">
             <div class="flex-1">
               <h3
-                class="font-semibold text-gray-800 group-hover:text-primary-600 transition-colors line-clamp-2"
+                class="font-semibold text-ink-black group-hover:text-ink-500 transition-colors line-clamp-2"
                 :class="{ 'text-sm': compact, 'text-base': !compact }"
               >
                 {{ article.title }}
               </h3>
               <div
                 v-if="!compact && article.description"
-                class="text-sm text-gray-500 mt-1.5 prose prose-sm max-h-10 overflow-hidden"
+                class="text-sm text-ink-medium mt-1.5 prose prose-sm max-h-10 overflow-hidden"
               >
                 <div v-html="article.description" />
               </div>
             </div>
             <button
               class="flex-shrink-0 p-2 hover:bg-amber-50/80 rounded-xl transition-all"
-              :class="{ 'text-amber-500': article.favorite, 'text-gray-300 hover:text-amber-500': !article.favorite }"
+              :class="{ 'text-amber-500': article.favorite, 'text-ink-muted hover:text-amber-500': !article.favorite }"
               @click.stop="emit('favorite', article.id)"
             >
               <Icon
@@ -89,7 +89,7 @@ const category = computed(() => feedsStore.getCategoryBySlug(props.article.categ
             </button>
           </div>
 
-          <div class="flex flex-wrap items-center gap-2 mt-2.5 text-xs text-gray-400">
+          <div class="flex flex-wrap items-center gap-2 mt-2.5 text-xs text-ink-light">
             <span
               v-if="category"
               class="px-2.5 py-1 rounded-full"
@@ -97,12 +97,12 @@ const category = computed(() => feedsStore.getCategoryBySlug(props.article.categ
             >
               {{ category.name }}
             </span>
-            <span v-if="feed" class="text-gray-500">{{ feed.title }}</span>
+            <span v-if="feed" class="text-ink-medium">{{ feed.title }}</span>
             <span>{{ $dayjs(article.pubDate).fromNow() }}</span>
             <span v-if="article.author">{{ article.author }}</span>
             <span
               v-if="article.read"
-              class="text-gray-300"
+              class="text-ink-muted"
             >
               已读
             </span>

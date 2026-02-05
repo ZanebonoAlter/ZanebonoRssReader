@@ -5,6 +5,7 @@ build/
 dist/
 wheels/
 *.egg-info
+.claude/
 
 # Virtual environments
 .venv
@@ -17,3 +18,4 @@ backend-go/bin/server.exe
 backend-go/bin/server.exe~
 backend-go/bin/test.exe
 backend-go/cmd/server/rss_reader.db
+backend-go/rss_reader_backup.db

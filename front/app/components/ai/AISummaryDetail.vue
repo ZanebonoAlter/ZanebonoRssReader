@@ -58,47 +58,47 @@ const formatTimeRange = (minutes: number): string => {
 <template>
   <div
     v-if="summary"
-    class="h-full overflow-y-auto glass-card rounded-2xl"
+    class="h-full flex flex-col"
   >
     <!-- Header -->
-    <div class="sticky top-0 z-10 glass-strong border-b border-white/20 px-6 py-4 flex items-center justify-between">
+    <div class="flex-shrink-0 bg-white/95 backdrop-blur-sm border-b border-ink-200 px-6 py-4 flex items-center justify-between shadow-subtle">
       <div>
-        <h1 class="text-xl font-bold text-gray-800 flex items-center gap-2">
-          <div class="w-8 h-8 rounded-xl bg-linear-to-br from-purple-500 to-blue-600 flex items-center justify-center shadow-lg">
+        <h1 class="text-xl font-bold text-ink-black flex items-center gap-2">
+          <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-ink-500 to-ink-700 flex items-center justify-center shadow-md">
             <Icon icon="mdi:brain" width="18" height="18" class="text-white" />
           </div>
           {{ summary.title }}
         </h1>
         <div class="flex items-center gap-2 mt-2.5 flex-wrap">
-          <span class="px-3 py-1 rounded-full text-xs font-medium bg-purple-100/80 text-purple-700">
+          <span class="px-3 py-1 rounded-full text-xs font-medium bg-ink-100 text-ink-700">
             {{ summary.category_name }}
           </span>
-          <span class="flex items-center gap-1 text-xs text-gray-500">
+          <span class="flex items-center gap-1 text-xs text-ink-medium">
             <Icon icon="mdi:file-document-multiple" width="14" height="14" />
             {{ summary.article_count }} 篇文章
           </span>
-          <span class="flex items-center gap-1 text-xs text-gray-500">
+          <span class="flex items-center gap-1 text-xs text-ink-medium">
             <Icon icon="mdi:clock-outline" width="14" height="14" />
             {{ formatTimeRange(summary.time_range) }}
           </span>
-          <span class="flex items-center gap-1 text-xs text-gray-500">
+          <span class="flex items-center gap-1 text-xs text-ink-medium">
             <Icon icon="mdi:calendar" width="14" height="14" />
             {{ formatDate(summary.created_at) }}
           </span>
         </div>
       </div>
       <button
-        class="p-2.5 rounded-xl hover:bg-white/60 transition-all duration-200"
+        class="p-2.5 rounded-lg hover:bg-ink-50 transition-all duration-200"
         @click="emit('close')"
       >
-        <Icon icon="mdi:close" width="20" height="20" class="text-gray-500" />
+        <Icon icon="mdi:close" width="20" height="20" class="text-ink-medium" />
       </button>
     </div>
 
     <!-- Content -->
-    <div class="p-6">
+    <div class="flex-1 overflow-y-auto p-6">
       <!-- Summary -->
-      <div class="prose prose-purple max-w-none">
+      <div class="prose max-w-none">
         <div
           v-html="renderedSummary"
           class="ai-summary-content"
@@ -110,22 +110,22 @@ const formatTimeRange = (minutes: number): string => {
   <!-- Empty state -->
   <div
     v-else
-    class="h-full flex items-center justify-center glass-card rounded-2xl"
+    class="h-full flex items-center justify-center paper-card rounded-lg"
   >
     <div class="text-center p-8">
-      <div class="w-20 h-20 mx-auto mb-4 rounded-2xl bg-linear-to-br from-purple-100 to-blue-100 flex items-center justify-center">
-        <Icon icon="mdi:brain" width="40" height="40" class="text-purple-400" />
+      <div class="w-20 h-20 mx-auto mb-4 rounded-lg bg-gradient-to-br from-ink-100 to-paper-warm flex items-center justify-center">
+        <Icon icon="mdi:brain" width="40" height="40" class="text-ink-400" />
       </div>
-      <h3 class="text-lg font-semibold text-gray-700 mb-1">选择 AI 总结</h3>
-      <p class="text-sm text-gray-400">从左侧列表中选择一个总结查看详情</p>
+      <h3 class="text-lg font-semibold text-ink-dark mb-1">选择 AI 总结</h3>
+      <p class="text-sm text-ink-light">从左侧列表中选择一个总结查看详情</p>
     </div>
   </div>
 </template>
 
 <style scoped>
-/* AI Summary Content Styling */
+/* AI Summary Content Styling - Editorial Theme */
 .ai-summary-content {
-  color: #374151;
+  color: var(--color-ink-dark);
   line-height: 1.75;
 }
 
@@ -139,24 +139,25 @@ const formatTimeRange = (minutes: number): string => {
   margin-top: 1.75em;
   margin-bottom: 0.75em;
   line-height: 1.3;
-  color: #1f2937;
+  color: var(--color-ink-black);
+  letter-spacing: -0.01em;
 }
 
 .ai-summary-content :deep(h1) {
   font-size: 1.875em;
   padding-bottom: 0.5em;
-  border-bottom: 2px solid rgba(139, 92, 246, 0.2);
+  border-bottom: 2px solid var(--color-ink-300);
 }
 
 .ai-summary-content :deep(h2) {
   font-size: 1.5em;
   padding-bottom: 0.4em;
-  border-bottom: 1px solid rgba(139, 92, 246, 0.15);
+  border-bottom: 1px solid var(--color-ink-200);
 }
 
 .ai-summary-content :deep(h3) {
   font-size: 1.25em;
-  color: #4b5563;
+  color: var(--color-ink-dark);
 }
 
 .ai-summary-content :deep(p) {
@@ -177,17 +178,17 @@ const formatTimeRange = (minutes: number): string => {
 }
 
 .ai-summary-content :deep(li)::marker {
-  color: #8b5cf6;
+  color: var(--color-ink-500);
 }
 
 .ai-summary-content :deep(code) {
   padding: 0.2em 0.5em;
   margin: 0 0.1em;
   font-size: 0.875em;
-  background: linear-gradient(135deg, rgba(139, 92, 246, 0.1), rgba(59, 130, 246, 0.1));
-  border: 1px solid rgba(139, 92, 246, 0.2);
-  border-radius: 6px;
-  color: #7c3aed;
+  background: rgba(59, 107, 135, 0.08);
+  border: 1px solid rgba(59, 107, 135, 0.15);
+  border-radius: 4px;
+  color: var(--color-ink-700);
 }
 
 .ai-summary-content :deep(pre) {
@@ -195,11 +196,11 @@ const formatTimeRange = (minutes: number): string => {
   overflow-x: auto;
   font-size: 0.875em;
   line-height: 1.6;
-  background: linear-gradient(135deg, #f8fafc, #f1f5f9);
-  border: 1px solid rgba(139, 92, 246, 0.15);
-  border-radius: 12px;
+  background: var(--color-paper-warm);
+  border: 1px solid var(--color-border-medium);
+  border-radius: 0.5rem;
   margin-bottom: 1.5em;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  box-shadow: var(--shadow-subtle);
 }
 
 .ai-summary-content :deep(pre code) {
@@ -214,39 +215,39 @@ const formatTimeRange = (minutes: number): string => {
 .ai-summary-content :deep(blockquote) {
   padding: 1em 1.25em;
   margin: 0 0 1.5em 0;
-  color: #6b7280;
-  background: linear-gradient(135deg, rgba(139, 92, 246, 0.05), rgba(59, 130, 246, 0.05));
-  border-left: 4px solid #8b5cf6;
-  border-radius: 0 12px 12px 0;
+  color: var(--color-ink-medium);
+  background: rgba(59, 107, 135, 0.04);
+  border-left: 3px solid var(--color-ink-400);
+  border-radius: 0 0.5rem 0.5rem 0;
   font-style: italic;
 }
 
 .ai-summary-content :deep(a) {
-  color: #7c3aed;
+  color: var(--color-ink-500);
   text-decoration: none;
   border-bottom: 1px solid transparent;
   transition: border-color 0.2s;
 }
 
 .ai-summary-content :deep(a:hover) {
-  border-bottom-color: #7c3aed;
+  border-bottom-color: var(--color-ink-500);
 }
 
 .ai-summary-content :deep(strong) {
   font-weight: 700;
-  color: #4c1d95;
+  color: var(--color-ink-900);
 }
 
 .ai-summary-content :deep(em) {
   font-style: italic;
-  color: #6b7280;
+  color: var(--color-ink-medium);
 }
 
 .ai-summary-content :deep(hr) {
   height: 2px;
   padding: 0;
   margin: 2.5em 0;
-  background: linear-gradient(90deg, transparent, rgba(139, 92, 246, 0.3), transparent);
+  background: linear-gradient(90deg, transparent, var(--color-ink-300), transparent);
   border: 0;
 }
 
@@ -255,22 +256,22 @@ const formatTimeRange = (minutes: number): string => {
   border-collapse: collapse;
   margin-bottom: 1.5em;
   background: white;
-  border-radius: 12px;
+  border-radius: 0.5rem;
   overflow: hidden;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  box-shadow: var(--shadow-subtle);
 }
 
 .ai-summary-content :deep(th),
 .ai-summary-content :deep(td) {
   padding: 0.75em 1em;
   text-align: left;
-  border-bottom: 1px solid rgba(139, 92, 246, 0.1);
+  border-bottom: 1px solid var(--color-border-subtle);
 }
 
 .ai-summary-content :deep(th) {
-  background: linear-gradient(135deg, rgba(139, 92, 246, 0.1), rgba(59, 130, 246, 0.1));
+  background: rgba(59, 107, 135, 0.08);
   font-weight: 600;
-  color: #4c1d95;
+  color: var(--color-ink-900);
 }
 
 .ai-summary-content :deep(tr:last-child td) {
@@ -280,8 +281,8 @@ const formatTimeRange = (minutes: number): string => {
 .ai-summary-content :deep(img) {
   max-width: 100%;
   height: auto;
-  border-radius: 12px;
+  border-radius: 0.5rem;
   margin: 1.5em 0;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--shadow-medium);
 }
 </style>

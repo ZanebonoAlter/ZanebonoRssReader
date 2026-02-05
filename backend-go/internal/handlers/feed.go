@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"time"
@@ -227,7 +228,10 @@ func UpdateFeed(c *gin.Context) {
 	if req.URL != "" {
 		updates["url"] = req.URL
 	}
-	updates["category_id"] = req.CategoryID
+	// Only update category_id if explicitly provided (not zero/nil)
+	if req.CategoryID != nil {
+		updates["category_id"] = *req.CategoryID
+	}
 	if req.Icon != "" {
 		updates["icon"] = req.Icon
 	}
@@ -237,10 +241,18 @@ func UpdateFeed(c *gin.Context) {
 	if req.MaxArticles > 0 {
 		updates["max_articles"] = req.MaxArticles
 	}
-	if req.RefreshInterval > 0 {
+	if req.RefreshInterval >= 0 {
 		updates["refresh_interval"] = req.RefreshInterval
 	}
-	updates["ai_summary_enabled"] = req.AISummaryEnabled
+	// Only update ai_summary_enabled if explicitly provided
+	if c.Request.Method == "PUT" {
+		// For PUT requests, check if the field exists in request body
+		var body map[string]interface{}
+		json.NewDecoder(c.Request.Body).Decode(&body)
+		if _, exists := body["ai_summary_enabled"]; exists {
+			updates["ai_summary_enabled"] = req.AISummaryEnabled
+		}
+	}
 
 	if err := database.DB.Model(&feed).Updates(updates).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{

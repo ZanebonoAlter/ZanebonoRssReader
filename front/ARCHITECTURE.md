@@ -671,22 +671,166 @@ Category (1) ←→ (N) Feed (1) ←→ (N) Article
 
 ---
 
-## 12. 扩展开发
+## 12. 设计系统 (Design System)
 
-### 12.1 添加新的 API 模块
+### 12.1 设计理念
+
+**Editorial/Magazine（杂志/报纸）风格**
+
+RSS 阅读器本质是内容消费工具，应该让用户感觉像在阅读精心设计的杂志，而不是使用 SaaS 软件。
+
+**核心设计原则**：
+- 温暖的纸张色调代替冷冰冰的玻璃态
+- 高对比度排版，强调内容可读性
+- 印刷品经典配色（墨水蓝 + 印刷红）
+- 优雅的阴影，模拟纸质印刷品的质感
+
+### 12.2 颜色系统
+
+详见 [COLOR_SYSTEM.md](./COLOR_SYSTEM.md) 完整说明。
+
+**核心色系**：
+- **Ink Blue (墨水蓝)**: `#3b6b87` - 主色，替代普通蓝紫
+- **Print Red (印刷红)**: `#d94a4a` - 强调色，替代紫色
+- **Paper Warmth (纸张色)**: `#faf7f2` (象牙白) - 背景色系
+- **Ink Tones (墨色系)**: 文字颜色，从 `#1a1a1a` 到 `#b5b5b5`
+
+**CSS 变量使用**：
+```css
+/* 使用变量，便于统一维护 */
+color: var(--color-ink-dark);
+background: var(--color-paper-cream);
+border-color: var(--color-ink-300);
+```
+
+### 12.3 组件样式规范
+
+#### 卡片组件
+- **普通卡片**: 使用 `.paper-card` 类
+- **文章预览**: 使用 `.article-preview` 类，支持 unread/favorite 状态
+- **圆角**: 统一使用 `rounded-lg` (0.5rem)
+
+#### 按钮组件
+- **主要操作**: `.btn-primary` - 墨水蓝背景
+- **强调操作**: `.btn-accent` - 印刷红背景
+- **次要操作**: `.btn-secondary` - 带边框透明背景
+- **幽灵按钮**: `.btn-ghost` - 极简风格
+
+#### 对话框
+- **容器**: `bg-white/95 backdrop-blur-sm rounded-lg`
+- **圆角**: `rounded-lg` (0.5rem)，不再使用 `rounded-3xl`
+- **边框**: `border border-ink-200`
+- **头部渐变**: `from-ink-50 to-paper-cream`
+
+#### 输入框
+- **背景**: `bg-white/85 backdrop-blur`
+- **边框**: `border-2 border-ink-300`
+- **Focus**: `border-ink-400` + 墨水蓝阴影
+
+### 12.4 布局规范
+
+**三栏布局尺寸**：
+| 区域 | 宽度 | 响应式 |
+|------|------|--------|
+| 左侧边栏 | 256px (可调整 200-500px) | ✅ resizable |
+| 中间列表面板 | 20rem (320px) | 固定 |
+| 右侧内容区 | flex: 1 | 自动填充 |
+
+**面板容器**：
+- 类名: `.content-panel`
+- 背景: `rgba(255, 255, 255, 0.5)` + 纸质渐变
+- 圆角: `rounded-lg` (0.75rem)
+- 边距: `margin: 0.5rem 0.5rem 0.5rem 0`
+
+### 12.5 阴影系统
+
+```css
+--shadow-subtle:  0 1px 3px rgba(26, 26, 26, 0.06);   /* 轻微 */
+--shadow-medium:  0 2px 8px rgba(26, 26, 26, 0.08);   /* 中等 */
+--shadow-strong:   0 4px 16px rgba(26, 26, 26, 0.12);  /* 强烈 */
+--shadow-print:    多层阴影，模拟印刷质感
+```
+
+### 12.6 动画规范
+
+**过渡时间**：
+- 快速交互: 0.15s - 0.2s (hover, focus)
+- 常规交互: 0.25s - 0.3s (modal, panel)
+- 复杂动画: 0.4s (page load)
+
+**缓动函数**：
+- 默认: `cubic-bezier(0.4, 0, 0.2, 1)`
+- 退出: `ease-in`
+- 进入: `ease-out`
+
+### 12.7 排版规范
+
+**字体层级**：
+- Display: 大标题，使用 `.text-display`
+- Headline: 中标题，使用 `.text-headline`
+- Body: 正文，使用 `.text-body`
+- Caption: 说明文字，使用 `.text-caption`
+
+**行高**：
+- 标题: 1.1 - 1.3
+- 正文: 1.6 - 1.75
+- 说明: 1.4 - 1.5
+
+### 12.8 禁止项
+
+**颜色禁用**：
+- ❌ 紫色系 (`#8b5cf6`, `#7c3aed`, `#a78bfa`, `#6366f1`)
+- ❌ 纯平背景色 (必须有噪点纹理或渐变)
+- ❌ Tailwind 默认色板的冷色调
+
+**布局禁用**：
+- ❌ Hero + 三卡片布局
+- ❌ 完美居中对齐
+- ❌ 玻璃态过度 (减少模糊效果)
+
+**组件禁用**：
+- ❌ `rounded-3xl` (使用 `rounded-lg`)
+- ❌ `glass-card`, `glass-strong` (使用 `paper-card`)
+- ❌ Emoji 作为功能图标
+
+### 12.9 样式文件组织
+
+```
+app/assets/css/
+└── main.css          # 全局样式变量和工具类
+
+app/components/
+├── FeedLayout.css    # 主布局样式
+├── layout/
+│   ├── AppHeader.css
+│   ├── AppSidebar.css
+│   └── ArticleListPanel.css
+├── article/
+│   ├── ArticleCard.css
+│   └── ArticleContent.css
+├── dialog/
+│   └── Dialog.css    # 对话框统一样式
+└── *.vue             # scoped style (组件特定样式)
+```
+
+---
+
+## 13. 扩展开发
+
+### 13.1 添加新的 API 模块
 
 1. 创建 `app/composables/api/newFeature.ts`
 2. 导出 `useNewFeatureApi()` 函数
 3. 在 `app/composables/api/index.ts` 添加导出
 4. 在 `app/types/` 添加相关类型
 
-### 12.2 添加新页面
+### 13.2 添加新页面
 
 1. 在 `app/pages/` 创建 `.vue` 文件
 2. Nuxt 自动根据文件路径生成路由
 3. 如需参数路由: `app/pages/article/[id].vue`
 
-### 12.3 添加新 Store
+### 13.3 添加新 Store
 
 1. 创建 `app/stores/newStore.ts`
 2. 使用 `defineStore()` 定义
@@ -694,5 +838,14 @@ Category (1) ←→ (N) Feed (1) ←→ (N) Article
 
 ---
 
-**版本**: 1.0  
-**更新日期**: 2026-02-03
+## 14. 相关文档
+
+- **[COLOR_SYSTEM.md](./COLOR_SYSTEM.md)** - 完整颜色系统设计文档
+- **[README.md](./README.md)** - 项目快速开始指南
+
+---
+
+**版本**: 2.0  
+**更新日期**: 2026-02-05  
+**重大更新**: 引入 Editorial/Magazine 设计系统，全面替换原有玻璃态蓝紫风格
+

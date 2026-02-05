@@ -8,8 +8,8 @@ import (
 
 type Category struct {
 	ID          uint      `gorm:"primaryKey" json:"id"`
-	Name        string    `gorm:"uniqueIndex;size:100;not null" json:"name"`
-	Slug        string    `gorm:"uniqueIndex;size:50" json:"slug"`
+	Name        string    `gorm:"size:100;unique;not null" json:"name"`
+	Slug        string    `gorm:"size:50;unique" json:"slug"`
 	Icon        string    `gorm:"size:50;default:folder" json:"icon"`
 	Color       string    `gorm:"size:20;default:#6366f1" json:"color"`
 	Description string    `gorm:"type:text" json:"description"`

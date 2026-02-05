@@ -5,15 +5,15 @@
 
 .category-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 8px 16px rgba(26, 26, 26, 0.1);
 }
 
 .category-card .icon-container {
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 1rem;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  border-radius: 0.75rem;
+  box-shadow: 0 2px 8px rgba(26, 26, 26, 0.08);
 }
 
 .category-card .feed-count {
@@ -21,12 +21,13 @@
   font-weight: 600;
   padding: 0.25rem 0.75rem;
   border-radius: 9999px;
-  background-color: rgba(0, 0, 0, 0.05);
+  background-color: rgba(26, 26, 26, 0.05);
+  color: var(--color-ink-dark);
 }
 
 .category-card .description {
   font-size: 0.875rem;
-  color: #6b7280;
+  color: var(--color-ink-medium);
   line-height: 1.5;
   display: -webkit-box;
   -webkit-line-clamp: 2;

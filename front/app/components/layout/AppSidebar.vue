@@ -176,7 +176,7 @@ import './AppSidebar.css'
         :class="{ active: selectedCategory === 'ai-summaries' }"
         @click="handleAISummariesClick"
       >
-        <Icon icon="mdi:brain" width="20" height="20" class="text-purple-600" />
+        <Icon icon="mdi:brain" width="20" height="20" class="text-ink-600" />
         <span v-if="!sidebarCollapsed" class="flex-1 text-left font-medium">
           AI 总结
         </span>
@@ -197,7 +197,7 @@ import './AppSidebar.css'
           >
             <button
               class="category-btn"
-              :class="{ 'text-primary-700': selectedCategory === category.id }"
+              :class="{ 'text-ink-700': selectedCategory === category.id }"
               @click="handleCategoryClick(category.id)"
             >
               <Icon :icon="category.icon" width="18" height="18" />
@@ -281,7 +281,7 @@ import './AppSidebar.css'
           >
             <button
               class="category-btn"
-              :class="{ 'text-primary-700': selectedCategory === 'uncategorized' }"
+              :class="{ 'text-ink-700': selectedCategory === 'uncategorized' }"
               @click="handleCategoryClick('uncategorized')"
             >
               <Icon icon="mdi:folder-off" width="18" height="18" />

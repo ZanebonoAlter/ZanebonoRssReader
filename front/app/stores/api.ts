@@ -189,6 +189,9 @@ export const useApiStore = defineStore('api', () => {
       category_id?: number
       icon?: string
       color?: string
+      max_articles?: number
+      refresh_interval?: number
+      ai_summary_enabled?: boolean
     }
   ) {
     loading.value = true

@@ -4,18 +4,18 @@
   height: 100vh;
   overflow: hidden;
   background: linear-gradient(
-    135deg,
-    #f0f4ff 0%,
-    #e8f0fe 25%,
-    #f0f4ff 50%,
-    #e8f0fe 75%,
-    #f0f4ff 100%
+    125deg,
+    #faf7f2 0%,
+    #f5f0e6 25%,
+    #faf7f2 50%,
+    #f0e8dc 75%,
+    #faf7f2 100%
   );
   background-size: 400% 400%;
-  animation: gradient-shift 15s ease infinite;
+  animation: paper-drift 30s ease infinite;
 }
 
-@keyframes gradient-shift {
+@keyframes paper-drift {
   0%, 100% {
     background-position: 0% 50%;
   }
@@ -33,8 +33,9 @@
 .content-panel {
   flex: 1;
   overflow-y: auto;
-  background: rgba(255, 255, 255, 0.3);
-  backdrop-filter: blur(12px);
+  background: rgba(255, 255, 255, 0.5);
+  backdrop-filter: blur(8px);
   margin: 0.5rem 0.5rem 0.5rem 0;
-  border-radius: 1rem;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(26, 26, 26, 0.06);
 }

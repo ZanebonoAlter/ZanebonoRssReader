@@ -424,12 +424,13 @@ import './FeedLayout.css'
       </div>
 
       <!-- AI 摘要详情 -->
-      <AISummaryDetail
-        v-else
-        :key="selectedSummary?.id || 'empty'"
-        :summary="selectedSummary"
-        @close="selectedSummary = null"
-      />
+      <div v-else class="content-panel">
+        <AISummaryDetail
+          :key="selectedSummary?.id || 'empty'"
+          :summary="selectedSummary"
+          @close="selectedSummary = null"
+        />
+      </div>
     </div>
 
     <!-- 添加订阅源对话框 -->

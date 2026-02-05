@@ -85,14 +85,14 @@ async function handleAdd() {
           leave-to-class="opacity-0 scale-95 translate-y-2"
         >
           <div
-            class="glass-strong rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden"
+            class="bg-white/95 backdrop-blur-sm rounded-lg shadow-strong w-full max-w-lg overflow-hidden border border-ink-200"
             @click.stop
           >
             <!-- Header -->
-            <div class="px-6 py-5 bg-linear-to-r from-primary-50 to-primary-100/50 border-b border-primary-100/50">
+            <div class="px-6 py-5 bg-gradient-to-r from-ink-50 to-paper-cream border-b border-ink-200">
               <div class="flex items-center justify-between">
                 <div class="flex items-center gap-3">
-                  <div class="w-11 h-11 rounded-2xl bg-linear-to-br from-primary-500 to-primary-700 flex items-center justify-center shadow-lg">
+                  <div class="w-11 h-11 rounded-lg bg-gradient-to-br from-ink-500 to-ink-700 flex items-center justify-center shadow-md">
                     <Icon icon="mdi:rss" class="text-white" width="24" height="24" />
                   </div>
                   <div>
@@ -113,7 +113,7 @@ async function handleAdd() {
               <!-- URL Input -->
               <div class="space-y-2">
                 <label class="flex items-center gap-2 text-sm font-semibold text-gray-700">
-                  <Icon icon="mdi:link-variant" width="16" height="16" class="text-primary-500" />
+                  <Icon icon="mdi:link-variant" width="16" height="16" class="text-ink-500" />
                   RSS 订阅地址
                   <span class="text-red-500">*</span>
                 </label>
@@ -143,7 +143,7 @@ async function handleAdd() {
               <!-- Category Select -->
               <div class="space-y-2">
                 <label class="flex items-center gap-2 text-sm font-semibold text-gray-700">
-                  <Icon icon="mdi:folder" width="16" height="16" class="text-primary-500" />
+                  <Icon icon="mdi:folder" width="16" height="16" class="text-ink-500" />
                   分类
                   <span class="text-xs font-normal text-gray-400">(可选)</span>
                 </label>
@@ -173,10 +173,10 @@ async function handleAdd() {
               >
                 <div
                   v-if="preview && !previewing"
-                  class="p-4 bg-linear-to-br from-primary-50 to-primary-100/50 rounded-2xl border-2 border-primary-200"
+                  class="p-4 bg-gradient-to-br from-ink-50 to-paper-cream rounded-lg border-2 border-ink-200"
                 >
                   <div class="flex items-start gap-3">
-                    <div class="w-11 h-11 rounded-2xl bg-linear-to-br from-primary-500 to-primary-700 flex items-center justify-center shrink-0 shadow-md">
+                  <div class="w-11 h-11 rounded-lg bg-gradient-to-br from-ink-500 to-ink-700 flex items-center justify-center shrink-0 shadow-md">
                       <Icon icon="mdi:rss" class="text-white" width="22" height="22" />
                     </div>
                     <div class="flex-1 min-w-0">
@@ -187,7 +187,7 @@ async function handleAdd() {
                         {{ preview.description || '无描述' }}
                       </p>
                       <div class="flex items-center gap-2">
-                        <span class="inline-flex items-center px-3 py-1.5 rounded-xl bg-primary-100 text-primary-700 text-xs font-semibold">
+                        <span class="inline-flex items-center px-3 py-1.5 rounded-lg bg-ink-100 text-ink-700 text-xs font-semibold">
                           <Icon icon="mdi:article" width="14" height="14" class="mr-1.5" />
                           {{ preview.article_count || 0 }} 篇文章
                         </span>
@@ -208,7 +208,7 @@ async function handleAdd() {
               >
                 <div
                   v-if="error"
-                  class="flex items-start gap-3 p-4 bg-red-50/80 backdrop-blur-sm border-2 border-red-200 rounded-2xl"
+                  class="flex items-start gap-3 p-4 bg-red-50/80 backdrop-blur-sm border-2 border-red-200 rounded-lg"
                 >
                   <Icon icon="mdi:alert-circle" width="20" height="20" class="text-red-500 shrink-0 mt-0.5" />
                   <p class="text-sm font-medium text-red-700">{{ error }}</p>

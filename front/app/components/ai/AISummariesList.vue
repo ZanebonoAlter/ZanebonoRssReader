@@ -396,18 +396,18 @@ defineExpose({
 </script>
 
 <template>
-  <div class="h-full flex flex-col bg-white/30 backdrop-blur-sm">
+  <div class="ai-summaries-list-panel h-full flex flex-col w-300">
     <!-- Header -->
     <div class="px-4 py-3 border-b border-white/20 bg-white/40 flex-shrink-0 space-y-2">
       <div class="flex items-center justify-between">
-        <h2 class="font-semibold text-gray-800 flex items-center gap-2">
-          <Icon icon="mdi:brain" width="18" height="18" class="text-purple-600" />
+        <h2 class="font-semibold text-ink-black flex items-center gap-2">
+          <Icon icon="mdi:brain" width="18" height="18" class="text-ink-600" />
           AI 总结
         </h2>
         <div class="flex items-center gap-2">
           <select
             v-model="selectedTimeRange"
-            class="text-xs px-2 py-1 border border-gray-200 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+            class="text-xs px-2 py-1 border border-gray-200 rounded-lg focus:ring-2 focus:ring-ink-400 focus:border-transparent"
           >
             <option
               v-for="option in timeRangeOptions"
@@ -418,7 +418,7 @@ defineExpose({
             </option>
           </select>
           <button
-            class="px-3 py-1.5 text-xs font-medium bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+            class="px-3 py-1.5 text-xs font-medium bg-ink-600 text-white rounded-lg hover:bg-ink-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
             :disabled="generating || !aiSettings.apiKey"
             @click="generateSummary"
           >
@@ -455,7 +455,7 @@ defineExpose({
 
         <!-- Page Size Selector -->
         <div class="page-size-selector">
-          <span class="text-xs text-gray-500">每页</span>
+          <span class="text-xs text-ink-light">每页</span>
           <select
             v-model="pageSize"
             class="page-size-select"
@@ -465,7 +465,7 @@ defineExpose({
             <option :value="20">20</option>
             <option :value="50">50</option>
           </select>
-          <span class="text-xs text-gray-500">条</span>
+          <span class="text-xs text-ink-light">条</span>
         </div>
       </div>
 
@@ -563,12 +563,12 @@ defineExpose({
               'text-blue-500 animate-spin': status.status === 'generating',
               'text-orange-500': status.status === 'timeout',
               'text-red-500': status.status === 'failed',
-              'text-gray-400': status.status === 'pending'
+              'text-ink-muted': status.status === 'pending'
             }"
             width="12"
             height="12"
           />
-          <span class="flex-1 text-gray-700">{{ status.categoryName }}</span>
+          <span class="flex-1 text-ink-dark">{{ status.categoryName }}</span>
           <span
             v-if="status.error"
             class="text-red-500 text-right"
@@ -594,8 +594,8 @@ defineExpose({
       class="flex-1 flex items-center justify-center"
     >
       <div class="text-center">
-        <Icon icon="mdi:loading" width="32" height="32" class="animate-spin text-purple-600 mx-auto mb-2" />
-        <p class="text-sm text-gray-500">加载中...</p>
+        <Icon icon="mdi:loading" width="32" height="32" class="animate-spin text-ink-600 mx-auto mb-2" />
+        <p class="text-sm text-ink-light">加载中...</p>
       </div>
     </div>
 
@@ -605,9 +605,9 @@ defineExpose({
       class="flex-1 flex items-center justify-center"
     >
       <div class="text-center">
-        <Icon icon="mdi:brain" width="48" height="48" class="text-gray-300 mx-auto mb-2" />
-        <p class="text-sm text-gray-500">还没有 AI 总结</p>
-        <p class="text-xs text-gray-400 mt-1">点击"生成总结"开始使用</p>
+        <Icon icon="mdi:brain" width="48" height="48" class="text-ink-light mx-auto mb-2" />
+        <p class="text-sm text-ink-light">还没有 AI 总结</p>
+        <p class="text-xs text-ink-muted mt-1">点击"生成总结"开始使用</p>
       </div>
     </div>
 
@@ -622,17 +622,17 @@ defineExpose({
           :key="summary.id"
           class="rounded-lg p-3 hover:shadow-md transition-all cursor-pointer border"
           :class="selectedSummaryId === summary.id
-            ? 'bg-purple-50 border-purple-300 shadow-sm'
+            ? 'bg-ink-50 border-ink-300 shadow-sm'
             : 'bg-white border-gray-100'"
           @click="selectSummary(summary)"
         >
           <div class="flex items-start justify-between mb-2">
             <div class="flex-1 min-w-0">
-              <h3 class="font-medium text-gray-900 text-sm truncate">
+              <h3 class="font-medium text-ink-black text-sm truncate">
                 {{ summary.title }}
               </h3>
-              <div class="flex items-center gap-2 mt-1 text-xs text-gray-500">
-                <span class="bg-purple-50 text-purple-700 px-2 py-0.5 rounded-full">
+              <div class="flex items-center gap-2 mt-1 text-xs text-ink-light">
+                <span class="bg-ink-50 text-ink-700 px-2 py-0.5 rounded-full">
                   {{ summary.category_name }}
                 </span>
                 <span>{{ summary.article_count }} 篇文章</span>
@@ -640,13 +640,13 @@ defineExpose({
               </div>
             </div>
             <button
-              class="p-1 hover:bg-red-50 rounded-lg transition-colors text-gray-400 hover:text-red-500 flex-shrink-0 ml-2"
+              class="p-1 hover:bg-red-50/80 rounded-lg transition-colors text-ink-muted hover:text-red-500 flex-shrink-0 ml-2"
               @click.stop="deleteSummary(summary.id)"
             >
               <Icon icon="mdi:delete" width="16" height="16" />
             </button>
           </div>
-          <p class="text-xs text-gray-600 line-clamp-2">
+          <p class="text-xs text-ink-medium line-clamp-2">
             {{ truncateSummary(summary.summary) }}
           </p>
         </div>
@@ -667,7 +667,7 @@ defineExpose({
           :disabled="currentPage <= 1"
           @click="changePage(currentPage - 1)"
         >
-          <Icon icon="mdi:chevron-left" width="16" height="16" class="text-gray-600" />
+          <Icon icon="mdi:chevron-left" width="16" height="16" class="text-ink-medium" />
         </button>
 
         <div class="pagination-pages">
@@ -688,7 +688,7 @@ defineExpose({
           :disabled="currentPage >= totalPages"
           @click="changePage(currentPage + 1)"
         >
-          <Icon icon="mdi:chevron-right" width="16" height="16" class="text-gray-600" />
+          <Icon icon="mdi:chevron-right" width="16" height="16" class="text-ink-medium" />
         </button>
       </div>
     </div>
@@ -722,22 +722,22 @@ defineExpose({
   border-radius: 8px;
   font-size: 13px;
   font-weight: 500;
-  color: #4b5563;
+  color: var(--color-ink-dark);
   cursor: pointer;
   transition: all 0.2s ease;
 }
 
 .filter-toggle-btn:hover {
-  background: rgba(139, 92, 246, 0.1);
-  border-color: rgba(139, 92, 246, 0.3);
-  color: #7c3aed;
+  background: rgba(59, 107, 135, 0.1);
+  border-color: rgba(59, 107, 135, 0.3);
+  color: #25465c;
 }
 
 .filter-toggle-btn.active {
-  background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+  background: linear-gradient(135deg, #3b6b87 0%, #25465c 100%);
   color: white;
   border-color: transparent;
-  box-shadow: 0 2px 8px rgba(139, 92, 246, 0.3);
+  box-shadow: 0 2px 8px rgba(59, 107, 135, 0.3);
 }
 
 .toggle-icon {
@@ -764,7 +764,7 @@ defineExpose({
 .row-label {
   font-size: 11px;
   font-weight: 600;
-  color: #6b7280;
+  color: var(--color-ink-medium);
   text-transform: uppercase;
   letter-spacing: 0.5px;
   white-space: nowrap;
@@ -785,22 +785,22 @@ defineExpose({
   border-radius: 6px;
   font-size: 13px;
   font-weight: 500;
-  color: #4b5563;
+  color: var(--color-ink-dark);
   cursor: pointer;
   transition: all 0.2s ease;
 }
 
 .quick-option-btn:hover {
-  background: rgba(139, 92, 246, 0.1);
-  border-color: rgba(139, 92, 246, 0.3);
-  color: #7c3aed;
+  background: rgba(59, 107, 135, 0.1);
+  border-color: rgba(59, 107, 135, 0.3);
+  color: #25465c;
 }
 
 .quick-option-btn.active {
-  background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+  background: linear-gradient(135deg, #3b6b87 0%, #25465c 100%);
   color: white;
   border-color: transparent;
-  box-shadow: 0 2px 8px rgba(139, 92, 246, 0.3);
+  box-shadow: 0 2px 8px rgba(59, 107, 135, 0.3);
 }
 
 /* Custom Date Row - Vertical Layout */
@@ -822,7 +822,7 @@ defineExpose({
 
 .input-label {
   font-size: 13px;
-  color: #4b5563;
+  color: var(--color-ink-dark);
   font-weight: 500;
 }
 
@@ -839,8 +839,8 @@ defineExpose({
 
 .date-input:focus {
   outline: none;
-  border-color: #8b5cf6;
-  box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.1);
+  border-color: #3b6b87;
+  box-shadow: 0 0 0 3px rgba(59, 107, 135, 0.1);
 }
 
 /* Panel Actions */
@@ -859,7 +859,7 @@ defineExpose({
   border-radius: 6px;
   font-size: 13px;
   font-weight: 500;
-  color: #4b5563;
+  color: var(--color-ink-dark);
   cursor: pointer;
   transition: all 0.2s ease;
 }
@@ -870,7 +870,7 @@ defineExpose({
 
 .btn-primary-sm {
   padding: 8px 16px;
-  background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+  background: linear-gradient(135deg, #3b6b87 0%, #25465c 100%);
   border: none;
   border-radius: 6px;
   font-size: 13px;
@@ -878,19 +878,19 @@ defineExpose({
   color: white;
   cursor: pointer;
   transition: all 0.2s ease;
-  box-shadow: 0 2px 8px rgba(139, 92, 246, 0.3);
+  box-shadow: 0 2px 8px rgba(59, 107, 135, 0.3);
 }
 
 .btn-primary-sm:hover {
-  box-shadow: 0 4px 12px rgba(139, 92, 246, 0.4);
+  box-shadow: 0 4px 12px rgba(59, 107, 135, 0.4);
   transform: translateY(-1px);
 }
 
 /* Pagination */
 .pagination-bar {
   padding: 0.75rem 1rem;
-  background: rgba(255, 255, 255, 0.4);
-  border-top: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.5);
+  border-top: 1px solid rgba(26, 26, 26, 0.06);
   flex-shrink: 0;
   display: flex;
   align-items: center;
@@ -900,7 +900,7 @@ defineExpose({
 
 .pagination-text {
   font-size: 0.75rem;
-  color: #6b7280;
+  color: var(--color-ink-medium);
   white-space: nowrap;
 }
 
@@ -917,10 +917,12 @@ defineExpose({
   background: transparent;
   cursor: pointer;
   transition: background 0.2s;
+  color: var(--color-ink-medium);
 }
 
 .pagination-btn:hover:not(:disabled) {
-  background: rgba(0, 0, 0, 0.05);
+  background: rgba(26, 26, 26, 0.04);
+  color: var(--color-ink-dark);
 }
 
 .pagination-btn:disabled {
@@ -941,23 +943,23 @@ defineExpose({
   border: none;
   border-radius: 0.375rem;
   background: transparent;
-  color: #4b5563;
+  color: var(--color-ink-dark);
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .page-btn:hover:not(:disabled):not(.ellipsis) {
-  background: rgba(0, 0, 0, 0.05);
+  background: rgba(26, 26, 26, 0.04);
 }
 
 .page-btn.active {
-  background: #9333ea;
+  background: #3b6b87;
   color: white;
 }
 
 .page-btn.ellipsis {
   cursor: default;
-  color: #9ca3af;
+  color: var(--color-ink-light);
 }
 
 .page-btn:disabled {
@@ -972,9 +974,11 @@ defineExpose({
 }
 
 .page-size-select {
+  background: rgba(255, 255, 255, 0.6);
+  color: var(--color-ink-dark);
   font-size: 0.75rem;
   padding: 0.125rem 0.25rem;
-  border: 1px solid #d1d5db;
+  border: 1px solid rgba(26, 26, 26, 0.15);
   border-radius: 0.25rem;
 }
 
@@ -998,11 +1002,11 @@ defineExpose({
 }
 
 .overflow-y-auto::-webkit-scrollbar-thumb {
-  background: rgba(139, 92, 246, 0.2);
+  background: rgba(59, 107, 135, 0.2);
   border-radius: 3px;
 }
 
 .overflow-y-auto::-webkit-scrollbar-thumb:hover {
-  background: rgba(139, 92, 246, 0.4);
+  background: rgba(59, 107, 135, 0.4);
 }
 </style>

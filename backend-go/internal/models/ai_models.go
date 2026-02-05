@@ -42,7 +42,7 @@ func (a *AISummary) ToDict() map[string]interface{} {
 
 type SchedulerTask struct {
 	ID                    uint       `gorm:"primaryKey" json:"id"`
-	Name                  string     `gorm:"uniqueIndex;size:50;not null;index" json:"name"`
+	Name                  string     `gorm:"size:50;unique;not null;index" json:"name"`
 	Description           string     `gorm:"size:200" json:"description"`
 	CheckInterval         int        `gorm:"default:60;not null" json:"check_interval"` // seconds
 	LastExecutionTime     *time.Time `json:"last_execution_time"`
@@ -90,7 +90,7 @@ func (s *SchedulerTask) ToDict() map[string]interface{} {
 
 type AISettings struct {
 	ID          uint      `gorm:"primaryKey" json:"id"`
-	Key         string    `gorm:"uniqueIndex;size:100;not null;index" json:"key"`
+	Key         string    `gorm:"size:100;unique;not null;index" json:"key"`
 	Value       string    `gorm:"type:text" json:"value"`
 	Description string    `gorm:"size:200" json:"description"`
 	CreatedAt   time.Time `json:"created_at"`

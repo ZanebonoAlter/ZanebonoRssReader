@@ -8,7 +8,7 @@ type Feed struct {
 	ID               uint       `gorm:"primaryKey" json:"id"`
 	Title            string     `gorm:"size:200;not null" json:"title"`
 	Description      string     `gorm:"type:text" json:"description"`
-	URL              string     `gorm:"uniqueIndex;size:500;not null" json:"url"`
+	URL              string     `gorm:"size:500;unique;not null" json:"url"`
 	CategoryID       *uint      `gorm:"index" json:"category_id"`
 	Icon             string     `gorm:"size:50;default:rss" json:"icon"`
 	Color            string     `gorm:"size:20;default:#8b5cf6" json:"color"`
