@@ -2,6 +2,8 @@
 import { Icon } from '@iconify/vue'
 import { useRefreshPolling } from '~/composables/useRefreshPolling'
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from '~/utils/constants'
+import AppTooltip from '~/components/common/AppTooltip.vue'
+import FeedActionMenu from '~/components/feed/FeedActionMenu.vue'
 
 interface Props {
   sidebarCollapsed?: boolean
@@ -222,52 +224,56 @@ import './AppSidebar.css'
             </div>
           </div>
 
-          <!-- 分类下的订阅源 -->
-          <div
-            v-if="selectedCategory === category.id"
-            class="feeds-list"
-          >
-            <div
-              v-for="feed in feedsStore.getFeedsByCategory(category.id)"
-              :key="feed.id"
-              class="feed-item"
-              :class="{ active: selectedFeed === feed.id }"
-            >
-              <button
-                class="feed-btn"
-                @click="handleFeedClick(feed.id)"
-              >
-                <FeedIcon
-                  :icon="feed.icon"
-                  :feed-id="feed.id"
-                  :size="16"
-                />
-                <span class="truncate">{{ feed.title }}</span>
-              </button>
-              <span
-                v-if="(feedsStore.unreadCountsByFeed[feed.id] || 0) > 0"
-                class="badge badge-sm"
-              >
-                {{ feedsStore.unreadCountsByFeed[feed.id] || 0 }}
-              </span>
-              <!-- 刷新状态指示器 -->
-              <FeedRefreshStatusIcon :feed="feed" />
-              <button
-                class="action-btn"
-                title="标记为全部已读"
-                @click.stop="handleMarkFeedAsRead(feed.id)"
-              >
-                <Icon icon="mdi:check-all" width="13" height="13" class="text-gray-500" />
-              </button>
-              <button
-                class="action-btn"
-                title="编辑订阅源"
-                @click.stop="$emit('editFeed', feed.id)"
-              >
-                <Icon icon="mdi:pencil" width="13" height="13" class="text-gray-500" />
-              </button>
-            </div>
-          </div>
+           <!-- 分类下的订阅源 -->
+           <div
+             v-if="selectedCategory === category.id"
+             class="feeds-list"
+           >
+             <div
+               v-for="feed in feedsStore.getFeedsByCategory(category.id)"
+               :key="feed.id"
+               class="feed-item"
+               :class="{ active: selectedFeed === feed.id }"
+             >
+               <AppTooltip
+                 :content="`${feedsStore.unreadCountsByFeed[feed.id] || 0} 篇未读文章`"
+                 :disabled="!(feedsStore.unreadCountsByFeed[feed.id] || 0) > 0"
+               >
+                 <span
+                   v-if="(feedsStore.unreadCountsByFeed[feed.id] || 0) > 0"
+                   class="badge badge-sm"
+                 >
+                   {{ feedsStore.unreadCountsByFeed[feed.id] || 0 }}
+                 </span>
+               </AppTooltip>
+               <div class="feed-status-wrapper">
+                 <AppTooltip :content="feed.refreshStatus === 'error' ? (feed.refreshError || '刷新失败') : (feed.refreshStatus === 'success' ? '刷新成功' : '正在刷新')">
+                   <FeedRefreshStatusIcon :feed="feed" />
+                 </AppTooltip>
+               </div>
+               <button
+                 class="feed-btn"
+                 @click="handleFeedClick(feed.id)"
+               >
+                 <FeedIcon
+                   :icon="feed.icon"
+                   :feed-id="feed.id"
+                   :size="16"
+                 />
+                 <AppTooltip :content="feed.title">
+                   <span class="truncate">{{ feed.title }}</span>
+                 </AppTooltip>
+               </button>
+               <div class="feed-action-wrapper">
+                 <FeedActionMenu
+                   :feed-id="feed.id"
+                   :feed-title="feed.title"
+                   @mark-as-read="handleMarkFeedAsRead"
+                   @edit="$emit('editFeed', $event)"
+                 />
+               </div>
+             </div>
+           </div>
         </div>
 
         <!-- 未分类部分 -->
@@ -290,51 +296,56 @@ import './AppSidebar.css'
             </button>
           </div>
 
-          <!-- 未分类的订阅源 -->
-          <div
-            v-if="selectedCategory === 'uncategorized'"
-            class="feeds-list"
-          >
-            <div
-              v-for="feed in uncategorizedFeeds"
-              :key="feed.id"
-              class="feed-item"
-              :class="{ active: selectedFeed === feed.id }"
-            >
-              <button
-                class="feed-btn"
-                @click="handleFeedClick(feed.id)"
-              >
-                <FeedIcon
-                  :icon="feed.icon"
-                  :feed-id="feed.id"
-                  :size="16"
-                />
-                <span class="truncate">{{ feed.title }}</span>
-              </button>
-              <span
-                v-if="(feedsStore.unreadCountsByFeed[feed.id] || 0) > 0"
-                class="badge badge-sm"
-              >
-                {{ feedsStore.unreadCountsByFeed[feed.id] || 0 }}
-              </span>
-              <FeedRefreshStatusIcon :feed="feed" />
-              <button
-                class="action-btn"
-                title="标记为全部已读"
-                @click.stop="handleMarkFeedAsRead(feed.id)"
-              >
-                <Icon icon="mdi:check-all" width="13" height="13" class="text-gray-500" />
-              </button>
-              <button
-                class="action-btn"
-                title="编辑订阅源"
-                @click.stop="$emit('editFeed', feed.id)"
-              >
-                <Icon icon="mdi:pencil" width="13" height="13" class="text-gray-500" />
-              </button>
-            </div>
-          </div>
+           <!-- 未分类的订阅源 -->
+           <div
+             v-if="selectedCategory === 'uncategorized'"
+             class="feeds-list"
+           >
+             <div
+               v-for="feed in uncategorizedFeeds"
+               :key="feed.id"
+               class="feed-item"
+               :class="{ active: selectedFeed === feed.id }"
+             >
+               <AppTooltip
+                 :content="`${feedsStore.unreadCountsByFeed[feed.id] || 0} 篇未读文章`"
+                 :disabled="!(feedsStore.unreadCountsByFeed[feed.id] || 0) > 0"
+               >
+                 <span
+                   v-if="(feedsStore.unreadCountsByFeed[feed.id] || 0) > 0"
+                   class="badge badge-sm"
+                 >
+                   {{ feedsStore.unreadCountsByFeed[feed.id] || 0 }}
+                 </span>
+               </AppTooltip>
+               <div class="feed-status-wrapper">
+                 <AppTooltip :content="feed.refreshStatus === 'error' ? (feed.refreshError || '刷新失败') : (feed.refreshStatus === 'success' ? '刷新成功' : '正在刷新')">
+                   <FeedRefreshStatusIcon :feed="feed" />
+                 </AppTooltip>
+               </div>
+               <button
+                 class="feed-btn"
+                 @click="handleFeedClick(feed.id)"
+               >
+                 <FeedIcon
+                   :icon="feed.icon"
+                   :feed-id="feed.id"
+                   :size="16"
+                 />
+                 <AppTooltip :content="feed.title">
+                   <span class="truncate">{{ feed.title }}</span>
+                 </AppTooltip>
+               </button>
+               <div class="feed-action-wrapper">
+                 <FeedActionMenu
+                   :feed-id="feed.id"
+                   :feed-title="feed.title"
+                   @mark-as-read="handleMarkFeedAsRead"
+                   @edit="$emit('editFeed', $event)"
+                 />
+               </div>
+             </div>
+           </div>
         </div>
       </div>
 
