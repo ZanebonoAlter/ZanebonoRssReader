@@ -38,7 +38,7 @@ func (s *PreferenceService) updateFeedPreferences() error {
 			feed_id,
 			COUNT(*) as total_events,
 			COALESCE(SUM(reading_time), 0) as total_reading_time,
-			COALESCE(AVG(scroll_depth), 0) as avg_scroll_depth,
+			COALESCE(AVG(NULLIF(scroll_depth, 0)), 0) as avg_scroll_depth,
 			MAX(created_at) as last_interaction
 		`).
 		Where("feed_id IS NOT NULL").
@@ -83,6 +83,8 @@ func (s *PreferenceService) updateFeedPreferences() error {
 				return err
 			}
 		} else {
+			pref.FeedID = &stats.FeedID
+			pref.CategoryID = nil
 			pref.PreferenceScore = preferenceScore
 			pref.AvgReadingTime = avgReadingTime
 			pref.InteractionCount = int(stats.TotalEvents)
@@ -112,7 +114,7 @@ func (s *PreferenceService) updateCategoryPreferences() error {
 			category_id,
 			COUNT(*) as total_events,
 			COALESCE(SUM(reading_time), 0) as total_reading_time,
-			COALESCE(AVG(scroll_depth), 0) as avg_scroll_depth,
+			COALESCE(AVG(NULLIF(scroll_depth, 0)), 0) as avg_scroll_depth,
 			MAX(created_at) as last_interaction
 		`).
 		Where("category_id IS NOT NULL").
@@ -144,7 +146,7 @@ func (s *PreferenceService) updateCategoryPreferences() error {
 		}
 
 		var pref models.UserPreference
-		if err := s.db.Where("category_id = ?", stats.CategoryID).First(&pref).Error; err != nil {
+		if err := s.db.Where("category_id = ?", *stats.CategoryID).First(&pref).Error; err != nil {
 			if err == gorm.ErrRecordNotFound {
 				pref = models.UserPreference{
 					CategoryID:        stats.CategoryID,
@@ -161,6 +163,8 @@ func (s *PreferenceService) updateCategoryPreferences() error {
 				return err
 			}
 		} else {
+			pref.CategoryID = stats.CategoryID
+			pref.FeedID = nil
 			pref.PreferenceScore = preferenceScore
 			pref.AvgReadingTime = avgReadingTime
 			pref.InteractionCount = int(stats.TotalEvents)

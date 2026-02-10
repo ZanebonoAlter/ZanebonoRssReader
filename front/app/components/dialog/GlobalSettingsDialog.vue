@@ -44,7 +44,7 @@ const preferencesUpdating = ref(false)
 const feedsByCategory = computed(() => {
   const grouped: Record<string, RssFeed[]> = {}
   apiStore.feeds.forEach((feed: RssFeed) => {
-    const categoryName = feedsStore.categories.find(c => c.id === feed.category)?.name || '未分类'
+    const categoryName = apiStore.categories.find(c => c.id === feed.category)?.name || '未分类'
     if (!grouped[categoryName]) {
       grouped[categoryName] = []
     }

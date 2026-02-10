@@ -109,7 +109,7 @@ func (s *FeedService) updateFeedError(feed *models.Feed, err error) {
 
 func (s *FeedService) cleanupOldArticles(feed *models.Feed) {
 	var articles []models.Article
-	if err := database.DB.Where("feed_id = ?", feed.ID).Order("pub_date DESC").Find(&articles).Error; err != nil {
+	if err := database.DB.Where("feed_id = ? AND favorite = ?", feed.ID, false).Order("pub_date DESC").Find(&articles).Error; err != nil {
 		return
 	}
 

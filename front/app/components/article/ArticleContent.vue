@@ -100,6 +100,18 @@ watch(viewMode, () => {
   }
 })
 
+// 重置滚动位置到顶部
+watch(() => props.article, (newArticle, oldArticle) => {
+  if (newArticle && oldArticle && newArticle.id !== oldArticle.id) {
+    nextTick(() => {
+      if (contentContainer.value) {
+        contentContainer.value.scrollTop = 0
+      }
+      lastScrollDepth = 0
+    })
+  }
+})
+
 const aiEnabled = isAIEnabled
 
 import './ArticleContent.css'

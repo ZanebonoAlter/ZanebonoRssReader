@@ -253,6 +253,14 @@ export const useApiStore = defineStore('api', () => {
       const data = response.data as any
       const items = data.items || data
 
+      // 建立 feedId -> categoryId 的映射，保证文章上的 category 是真正的分类 ID
+      const feedCategoryMap: Record<number, string> = {}
+      feeds.value.forEach((feed) => {
+        if (feed.category) {
+          feedCategoryMap[Number(feed.id)] = feed.category
+        }
+      })
+
       articles.value = items.map((article: any) => ({
         id: String(article.id),
         feedId: String(article.feed_id),
@@ -262,7 +270,8 @@ export const useApiStore = defineStore('api', () => {
         link: article.link,
         pubDate: article.pub_date || article.created_at,
         author: article.author,
-        category: String(article.feed_id), // Will be mapped from feed
+        // 这里存的是 category_id（字符串），用于前端筛选 & 行为上报
+        category: feedCategoryMap[article.feed_id] ?? '',
         read: article.read || false,
         favorite: article.favorite || false,
         imageUrl: article.image_url,
@@ -405,11 +414,9 @@ export const useApiStore = defineStore('api', () => {
 
   // Initialize
   async function initialize() {
-    await Promise.all([
-      fetchCategories(),
-      fetchFeeds({ per_page: 10000 }), // Get all feeds
-      fetchArticles({ per_page: 10000 }), // Get all articles
-    ])
+    await fetchCategories()
+    await fetchFeeds({ per_page: 10000 }) // Must complete before fetchArticles
+    await fetchArticles({ per_page: 10000 })
   }
 
   // Sync data to local stores

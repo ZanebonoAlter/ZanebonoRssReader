@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 	"my-robot-backend/internal/models"
+	"my-robot-backend/internal/services"
 	"my-robot-backend/pkg/database"
 )
 
@@ -38,7 +39,7 @@ func GetSummaries(c *gin.Context) {
 
 	var summaries []models.AISummary
 	offset := (page - 1) * perPage
-	if err := query.Order("created_at DESC").Offset(offset).Limit(perPage).Find(&summaries).Error; err != nil {
+	if err := query.Preload("Category").Order("created_at DESC").Offset(offset).Limit(perPage).Find(&summaries).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
 			"error":   err.Error(),
@@ -212,45 +213,20 @@ func GenerateSummary(c *gin.Context) {
 		categoryName = category.Name
 	}
 
-	title := categoryName + " - " + time.Now().Format("2006-01-02 15:04") + " 新闻汇总"
+	// Title should only contain date/time, category name is shown separately in the tag
+	title := time.Now().Format("2006-01-02 15:04") + " 新闻汇总"
 
-	// Prepare prompt for AI
+	// Prepare prompt for AI（注入用户偏好与阅读习惯）
 	articlesText := joinStrings(articleTexts, "\n---\n")
-	summaryPrompt := `请对以下来自"` + categoryName + `"分类的 ` + strconv.Itoa(len(articles)) + ` 篇文章进行汇总总结。
 
-文章列表（按时间倒序）：
-` + articlesText + `
-
-请提供以下格式的总结：
-
-## 核心主题
-用一句话概括这批文章的核心主题和趋势。
-
-## 重要新闻
-
-### 🔥 热点事件
-列出2-3个最重要的事件，每个事件包含：
-- 事件标题（用加粗）
-- 简要说明（2-3句话）
-- 引文标注新闻来源（使用 > [来源名称](链接) 格式）
-
-### 📰 其他重要新闻
-列出其他重要新闻，每条包含：
-- 新闻标题（用加粗）
-- 简要说明（1-2句话）
-- 引文标注新闻来源（使用 > [来源名称](链接) 格式）
-
-## 核心观点
-总结3-5个核心观点或趋势，每个观点用简洁的语言表达。
-
-## 相关标签
-#标签1 #标签2 #标签3
-
-**重要提醒**：
-1. 必须为每条新闻标注来源，使用引文格式
-2. 来源格式：> [来源订阅源名称](文章链接)
-3. 确保总结简洁明了，突出重点
-4. 保持客观中立的语气`
+	prefService := services.NewPreferenceService(database.DB)
+	promptBuilder := services.NewAISummaryPromptBuilder(prefService, database.DB)
+	summaryPrompt, _ := promptBuilder.BuildPersonalizedPrompt(
+		categoryName,
+		articlesText,
+		len(articles),
+		"zh",
+	)
 
 	// Prepare AI request
 	type openAIMessage struct {
@@ -512,7 +488,8 @@ func generateSummaryWorker(req GenerateSummaryRequest) {
 		categoryName = category.Name
 	}
 
-	title := categoryName + " - " + time.Now().Format("2006-01-02 15:04") + " 新闻汇总"
+	// Title should only contain date/time, category name is shown separately in the tag
+	title := time.Now().Format("2006-01-02 15:04") + " 新闻汇总"
 	articlesText := joinStrings(articleTexts, "\n---\n")
 	summaryPrompt := `请对以下来自"` + categoryName + `"分类的 ` + strconv.Itoa(len(articles)) + ` 篇文章进行汇总总结。
 
