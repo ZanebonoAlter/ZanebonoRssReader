@@ -22,6 +22,10 @@ export interface RssFeed {
   refreshError?: string
   lastRefreshAt?: string
   aiSummaryEnabled?: boolean
+  content_completion_enabled?: boolean
+  completion_on_refresh?: boolean
+  max_completion_retries?: number
+  firecrawl_enabled?: boolean
 }
 
 /**
@@ -48,7 +52,14 @@ export interface UpdateFeedData {
   color?: string
   max_articles?: number
   refresh_interval?: number
+  refresh_status?: string
+  refresh_error?: string
+  last_refresh_at?: string
   ai_summary_enabled?: boolean
+  content_completion_enabled?: boolean
+  completion_on_refresh?: boolean
+  max_completion_retries?: number
+  firecrawl_enabled?: boolean
 }
 
 /**

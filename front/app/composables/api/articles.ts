@@ -47,8 +47,8 @@ export function useArticlesApi() {
   /**
    * 获取文章统计信息
    */
-  async function getArticlesStats(): Promise<ApiResponse<{ unread: number }>> {
-    return apiClient.get<{ unread: number }>('/articles/stats')
+  async function getArticlesStats(): Promise<ApiResponse<{ total: number; unread: number; favorite: number }>> {
+    return apiClient.get<{ total: number; unread: number; favorite: number }>('/articles/stats')
   }
 
   return {

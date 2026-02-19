@@ -15,8 +15,14 @@ export interface Article {
   pubDate: string
   author?: string
   category: string
-  read: boolean
-  favorite: boolean
+  read?: boolean
+  favorite?: boolean
+  content_status?: 'complete' | 'incomplete' | 'pending' | 'failed'
+  full_content?: string
+  content_fetched_at?: string
+  completion_attempts?: number
+  completion_error?: string
+  ai_content_summary?: string
   imageUrl?: string
 }
 

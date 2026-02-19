@@ -5,9 +5,9 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 	"my-robot-backend/internal/models"
 	"my-robot-backend/pkg/database"
-	"gorm.io/gorm"
 )
 
 type CreateCategoryRequest struct {
@@ -36,9 +36,27 @@ func GetCategories(c *gin.Context) {
 		return
 	}
 
+	type FeedCount struct {
+		CategoryID uint
+		Count      int
+	}
+	var feedCounts []FeedCount
+	database.DB.Model(&models.Feed{}).
+		Select("category_id, count(*) as count").
+		Where("category_id IS NOT NULL").
+		Group("category_id").
+		Scan(&feedCounts)
+
+	feedCountMap := make(map[uint]int)
+	for _, fc := range feedCounts {
+		feedCountMap[fc.CategoryID] = fc.Count
+	}
+
 	data := make([]map[string]interface{}, len(categories))
 	for i, cat := range categories {
-		data[i] = cat.ToDict()
+		catDict := cat.ToDict()
+		catDict["feed_count"] = feedCountMap[cat.ID]
+		data[i] = catDict
 	}
 
 	c.JSON(http.StatusOK, gin.H{

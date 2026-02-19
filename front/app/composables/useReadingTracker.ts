@@ -1,4 +1,4 @@
-import { ref, watch, onUnmounted, computed, type Ref, watchEffect } from 'vue'
+import { ref, watch, onUnmounted, computed, type Ref } from 'vue'
 import { useIntervalFn, useScroll } from '@vueuse/core'
 import type { Article } from '~/types'
 import type { ReadingBehaviorEvent, ReadingEventType } from '~/types/reading_behavior'
@@ -40,15 +40,6 @@ export function useReadingTracker({ article, onTrack }: ReadingTrackerOptions) {
       scroll_depth: scrollDepth,
       reading_time: readingTime,
     }
-
-    // Debug log
-    console.log('[TrackEvent]', {
-      articleId: article.value.id,
-      feedId: article.value.feedId,
-      articleCategory: article.value.category,
-      finalCategoryId: event.category_id,
-      eventType
-    })
 
     events.value.push(event)
     onTrack?.(event)
@@ -139,14 +130,11 @@ export function useScrollDepthTracker(
   onScrollDepthChange: (depth: number) => void
 ) {
   const scrollDepth = ref(0)
-  let stopScrollWatch: (() => void) | null = null
 
-  watchEffect(() => {
-    if (!container.value) return
-
+  if (container.value) {
     const { y, arrivedState } = useScroll(container)
 
-    const unwatch = watch(
+    watch(
       [y, arrivedState],
       () => {
         if (!container.value) return
@@ -165,15 +153,7 @@ export function useScrollDepthTracker(
       },
       { immediate: true }
     )
-
-    stopScrollWatch = unwatch
-  })
-
-  onUnmounted(() => {
-    if (stopScrollWatch) {
-      stopScrollWatch()
-    }
-  })
+  }
 
   return {
     scrollDepth,

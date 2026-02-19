@@ -8,7 +8,7 @@ export * from './api'
 // 数据模型类型
 export * from './category'
 export * from './feed'
-export * './article'
+export * from './article'
 export * from './ai'
 
 // 阅读行为类型

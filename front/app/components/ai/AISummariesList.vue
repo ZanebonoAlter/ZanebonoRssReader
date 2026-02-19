@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { Icon } from "@iconify/vue"
+import type { SummaryBatch, SummaryJob } from '~/types'
 
 interface AISummary {
   id: number
@@ -32,6 +33,15 @@ const summaries = ref<AISummary[]>([])
 const error = ref<string | null>(null)
 const generating = ref(false)
 const selectedSummaryId = ref<number | null>(null)
+
+// 队列相关状态
+const showCategoryDialog = ref(false)
+const currentBatch = ref<SummaryBatch | null>(null)
+const queueStatusPolling = ref<number | null>(null)
+const expandedErrors = ref<Set<string>>(new Set())
+
+// WebSocket
+const ws = useSummaryWebSocket()
 
 // Pagination
 const currentPage = ref(1)
@@ -95,7 +105,7 @@ const quickDateOptions: QuickDateOption[] = [
 
 const selectedQuickDate = ref<number | null>(null)
 
-// Generation status tracking
+// Generation status tracking (旧版兼容)
 interface GenerationStatus {
   categoryId: string
   categoryName: string
@@ -106,6 +116,18 @@ interface GenerationStatus {
 const generationStatus = ref<GenerationStatus[]>([])
 const totalToGenerate = ref(0)
 const generatedCount = ref(0)
+
+// 错误代码映射为友好提示
+const errorCodeMap: Record<string, string> = {
+  'NO_ARTICLES': '该分类下没有找到文章',
+  'REQUEST_FAILED': '创建请求失败',
+  'API_ERROR': 'AI API调用失败',
+  'PARSE_ERROR': '解析响应失败',
+  'AI_ERROR': 'AI服务返回错误',
+  'NO_RESPONSE': 'AI未返回响应',
+  'DB_ERROR': '保存数据失败',
+  'UNKNOWN': '未知错误'
+}
 
 // Load settings from localStorage
 const aiSettings = ref({
@@ -129,6 +151,38 @@ onMounted(() => {
   loadAISettings()
   fetchSummaries()
 })
+
+onUnmounted(() => {
+  stopQueuePolling()
+  ws.disconnect()
+})
+
+// 监听WebSocket消息
+watch(() => ws.lastMessage.value, (message) => {
+  if (message && generating.value) {
+    const batch = ws.toBatchData(message)
+    currentBatch.value = batch
+
+    // 如果已完成，更新状态
+    if (batch.status === 'completed') {
+      generating.value = false
+      ws.disconnect()
+      fetchSummaries()
+
+      // 显示结果
+      const completed = batch.completed_jobs || 0
+      const failed = batch.failed_jobs || 0
+      const total = batch.total_jobs || 0
+
+      if (completed > 0) {
+        error.value = `完成！成功 ${completed}/${total} 个${failed > 0 ? `，失败 ${failed} 个` : ''}`
+      } else {
+        error.value = '所有任务都失败了'
+      }
+      setTimeout(() => error.value = null, 5000)
+    }
+  }
+}, { deep: true })
 
 // Watch for category changes
 watch(() => props.categoryId, () => {
@@ -264,6 +318,94 @@ async function generateSummaryWithTimeout(
   ])
 }
 
+// 打开分类选择对话框
+function openCategorySelect() {
+  if (!aiSettings.value.apiKey) {
+    error.value = '请先在设置中配置 AI'
+    setTimeout(() => error.value = null, 3000)
+    return
+  }
+  showCategoryDialog.value = true
+}
+
+// 提交队列任务（多分类）
+async function submitQueueSummary(selectedCategoryIds: string[]) {
+  if (selectedCategoryIds.length === 0) return
+
+  generating.value = true
+  error.value = null
+  showCategoryDialog.value = false
+
+  try {
+    const categoryIds = selectedCategoryIds.map(id => parseInt(id))
+
+    // 先连接WebSocket
+    ws.connect()
+
+    const response = await apiStore.submitQueueSummary({
+      category_ids: categoryIds,
+      time_range: selectedTimeRange.value,
+      base_url: aiSettings.value.baseURL,
+      api_key: aiSettings.value.apiKey,
+      model: aiSettings.value.model
+    })
+
+    if (response.success && response.data) {
+      currentBatch.value = response.data
+      // WebSocket会自动接收进度更新
+    } else {
+      error.value = response.error || '提交任务失败'
+      generating.value = false
+      ws.disconnect()
+      setTimeout(() => error.value = null, 3000)
+    }
+  } catch (err) {
+    error.value = '提交失败：' + (err as Error).message
+    generating.value = false
+    ws.disconnect()
+    setTimeout(() => error.value = null, 3000)
+  }
+}
+
+// 开始轮询队列状态（已弃用，使用WebSocket）
+function startQueuePolling() {
+  // 现在使用WebSocket实时推送，不需要轮询
+  console.log('[AISummariesList] Using WebSocket instead of polling')
+}
+
+// 轮询队列状态（已弃用，使用WebSocket）
+async function pollQueueStatus() {
+  // 现在使用WebSocket实时推送，不需要轮询
+}
+
+// 停止轮询和WebSocket
+function stopQueuePolling() {
+  if (queueStatusPolling.value) {
+    clearInterval(queueStatusPolling.value)
+    queueStatusPolling.value = null
+  }
+  ws.disconnect()
+}
+
+// 切换错误详情展开
+function toggleError(jobId: string) {
+  if (expandedErrors.value.has(jobId)) {
+    expandedErrors.value.delete(jobId)
+  } else {
+    expandedErrors.value.add(jobId)
+  }
+}
+
+// 获取友好错误提示
+function getErrorMessage(job: SummaryJob): string {
+  const code = job.error_code
+  if (code && errorCodeMap[code]) {
+    return errorCodeMap[code]
+  }
+  return job.error_message || '未知错误'
+}
+
+// 旧版生成函数（保留兼容）
 async function generateSummary() {
   if (!aiSettings.value.apiKey) {
     error.value = '请先在设置中配置 AI'
@@ -271,83 +413,8 @@ async function generateSummary() {
     return
   }
 
-  generating.value = true
-  error.value = null
-
-  try {
-    // Get all categories
-    const categories = feedsStore.categories || []
-
-    if (categories.length === 0) {
-      error.value = '没有找到分类'
-      setTimeout(() => error.value = null, 3000)
-      generating.value = false
-      return
-    }
-
-    // Initialize generation status
-    totalToGenerate.value = categories.length
-    generatedCount.value = 0
-    generationStatus.value = categories.map(cat => ({
-      categoryId: cat.id,
-      categoryName: cat.name,
-      status: 'pending' as const
-    }))
-
-    // Generate summaries for all categories sequentially (one at a time)
-    for (let index = 0; index < categories.length; index++) {
-      const category = categories[index]
-      // Update status to generating
-      const statusItem = generationStatus.value[index]
-      if (!statusItem || !category) continue
-
-      statusItem.status = 'generating'
-
-      try {
-        const result = await generateSummaryWithTimeout(
-          parseInt(category.id),
-          category.name,
-          120000 // 2 minute timeout per category
-        )
-
-        if (result.success) {
-          statusItem.status = 'success'
-          generatedCount.value++
-        } else if (result.error === 'timeout') {
-          statusItem.status = 'timeout'
-          statusItem.error = '请求超时'
-        } else {
-          statusItem.status = 'failed'
-          statusItem.error = result.error || '生成失败'
-        }
-      } catch (err) {
-        statusItem.status = 'failed'
-        statusItem.error = (err as Error).message
-      }
-    }
-
-    generating.value = false
-
-    // Refresh the list to show newly generated summaries
-    await fetchSummaries()
-
-    // Count results
-    const successCount = generationStatus.value.filter(s => s.status === 'success').length
-    const failedCount = generationStatus.value.filter(s => s.status === 'failed' || s.status === 'timeout').length
-
-    // Show result message
-    if (successCount > 0) {
-      error.value = `成功生成 ${successCount}/${totalToGenerate.value} 个分类总结${failedCount > 0 ? `，${failedCount} 个失败` : ''}`
-      setTimeout(() => error.value = null, 5000)
-    } else {
-      error.value = '生成失败'
-      setTimeout(() => error.value = null, 5000)
-    }
-  } catch (err) {
-    generating.value = false
-    error.value = '生成失败：' + (err as Error).message
-    setTimeout(() => error.value = null, 5000)
-  }
+  // 默认打开分类选择对话框
+  openCategorySelect()
 }
 
 async function deleteSummary(summaryId: number) {
@@ -539,43 +606,75 @@ defineExpose({
       {{ error }}
     </div>
 
-    <!-- Generation progress -->
+    <!-- 队列状态展示 -->
     <div
-      v-if="generating && generationStatus.length > 0"
+      v-if="currentBatch"
       class="mx-4 mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg flex-shrink-0"
     >
       <div class="flex items-center justify-between mb-2">
         <span class="text-xs font-medium text-blue-700">
-          正在生成总结... ({{ generatedCount }}/{{ totalToGenerate }})
+          {{ currentBatch.status === 'completed' ? '处理完成' : '正在处理队列' }} 
+          ({{ currentBatch.completed_jobs }}/{{ currentBatch.total_jobs }})
         </span>
-        <Icon icon="mdi:loading" width="14" height="14" class="animate-spin text-blue-600" />
-      </div>
-      <div class="space-y-1">
-        <div
-          v-for="(status, index) in generationStatus"
-          :key="index"
-          class="flex items-center gap-2 text-xs"
-        >
-          <Icon
-            :icon="status.status === 'success' ? 'mdi:check-circle' : status.status === 'generating' ? 'mdi:loading' : status.status === 'timeout' ? 'mdi:clock-alert' : status.status === 'failed' ? 'mdi:alert-circle' : 'mdi:circle-outline'"
-            :class="{
-              'text-green-500': status.status === 'success',
-              'text-blue-500 animate-spin': status.status === 'generating',
-              'text-orange-500': status.status === 'timeout',
-              'text-red-500': status.status === 'failed',
-              'text-ink-muted': status.status === 'pending'
-            }"
-            width="12"
-            height="12"
+        <div class="flex items-center gap-2">
+          <Icon 
+            :icon="currentBatch.status === 'completed' ? 'mdi:check-circle' : 'mdi:loading'" 
+            width="14" 
+            height="14" 
+            :class="currentBatch.status === 'completed' ? 'text-green-600' : 'animate-spin text-blue-600'" 
           />
-          <span class="flex-1 text-ink-dark">{{ status.categoryName }}</span>
-          <span
-            v-if="status.error"
-            class="text-red-500 text-right"
-            :title="status.error"
+          <button
+            v-if="currentBatch.status === 'completed'"
+            class="p-1 hover:bg-blue-100 rounded transition-colors"
+            @click="currentBatch = null"
+            title="关闭"
           >
-            {{ status.status === 'timeout' ? '超时' : '失败' }}
-          </span>
+            <Icon icon="mdi:close" width="14" height="14" class="text-blue-600" />
+          </button>
+        </div>
+      </div>
+      <div class="space-y-1 max-h-40 overflow-y-auto">
+        <div
+          v-for="job in currentBatch.jobs"
+          :key="job.id"
+          class="flex flex-col gap-1"
+        >
+          <div class="flex items-center gap-2 text-xs">
+            <Icon
+              :icon="job.status === 'completed' ? 'mdi:check-circle' : job.status === 'processing' ? 'mdi:loading' : job.status === 'failed' ? 'mdi:alert-circle' : 'mdi:circle-outline'"
+              :class="{
+                'text-green-500': job.status === 'completed',
+                'text-blue-500 animate-spin': job.status === 'processing',
+                'text-red-500': job.status === 'failed',
+                'text-ink-muted': job.status === 'pending'
+              }"
+              width="12"
+              height="12"
+            />
+            <span class="flex-1 text-ink-dark">{{ job.category_name }}</span>
+            <span
+              v-if="job.status === 'failed'"
+              class="text-red-500 text-right flex items-center gap-1 cursor-pointer hover:underline"
+              @click="toggleError(job.id)"
+            >
+              <span>失败</span>
+              <Icon 
+                :icon="expandedErrors.has(job.id) ? 'mdi:chevron-up' : 'mdi:chevron-down'" 
+                width="12" 
+                height="12" 
+              />
+            </span>
+          </div>
+          <!-- 错误详情 -->
+          <div
+            v-if="job.status === 'failed' && expandedErrors.has(job.id)"
+            class="ml-5 p-2 bg-red-50 rounded text-xs text-red-600 border border-red-100"
+          >
+            <div class="font-medium mb-0.5">{{ getErrorMessage(job) }}</div>
+            <div v-if="job.error_message" class="text-red-400 text-[10px] truncate" :title="job.error_message">
+              {{ job.error_message }}
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -692,6 +791,14 @@ defineExpose({
         </button>
       </div>
     </div>
+
+    <!-- 分类选择对话框 -->
+    <DialogCategorySelectDialog
+      v-model:visible="showCategoryDialog"
+      :categories="feedsStore.categories || []"
+      :loading="generating"
+      @confirm="submitQueueSummary"
+    />
   </div>
 </template>
 

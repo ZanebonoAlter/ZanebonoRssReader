@@ -14,27 +14,33 @@ import (
 )
 
 type CreateFeedRequest struct {
-	Title            string `json:"title"`
-	Description      string `json:"description"`
-	URL              string `json:"url" binding:"required"`
-	CategoryID       *uint  `json:"category_id"`
-	Icon             string `json:"icon"`
-	Color            string `json:"color"`
-	MaxArticles      int    `json:"max_articles"`
-	RefreshInterval  int    `json:"refresh_interval"`
-	AISummaryEnabled bool   `json:"ai_summary_enabled"`
+	Title                    string `json:"title"`
+	Description              string `json:"description"`
+	URL                      string `json:"url" binding:"required"`
+	CategoryID               *uint  `json:"category_id"`
+	Icon                     string `json:"icon"`
+	Color                    string `json:"color"`
+	MaxArticles              int    `json:"max_articles"`
+	RefreshInterval          int    `json:"refresh_interval"`
+	AISummaryEnabled         bool   `json:"ai_summary_enabled"`
+	ContentCompletionEnabled bool   `json:"content_completion_enabled"`
+	CompletionOnRefresh      bool   `json:"completion_on_refresh"`
+	MaxCompletionRetries     int    `json:"max_completion_retries"`
 }
 
 type UpdateFeedRequest struct {
-	Title            string `json:"title"`
-	Description      string `json:"description"`
-	URL              string `json:"url"`
-	CategoryID       *uint  `json:"category_id"`
-	Icon             string `json:"icon"`
-	Color            string `json:"color"`
-	MaxArticles      int    `json:"max_articles"`
-	RefreshInterval  int    `json:"refresh_interval"`
-	AISummaryEnabled bool   `json:"ai_summary_enabled"`
+	Title                    string `json:"title"`
+	Description              string `json:"description"`
+	URL                      string `json:"url"`
+	CategoryID               *uint  `json:"category_id"`
+	Icon                     string `json:"icon"`
+	Color                    string `json:"color"`
+	MaxArticles              int    `json:"max_articles"`
+	RefreshInterval          int    `json:"refresh_interval"`
+	AISummaryEnabled         bool   `json:"ai_summary_enabled"`
+	ContentCompletionEnabled *bool  `json:"content_completion_enabled"`
+	CompletionOnRefresh      *bool  `json:"completion_on_refresh"`
+	MaxCompletionRetries     *int   `json:"max_completion_retries"`
 }
 
 func GetFeeds(c *gin.Context) {
@@ -138,16 +144,19 @@ func CreateFeed(c *gin.Context) {
 
 	now := time.Now()
 	feed := models.Feed{
-		Title:            req.Title,
-		Description:      req.Description,
-		URL:              req.URL,
-		CategoryID:       req.CategoryID,
-		Icon:             req.Icon,
-		Color:            req.Color,
-		MaxArticles:      req.MaxArticles,
-		RefreshInterval:  req.RefreshInterval,
-		AISummaryEnabled: req.AISummaryEnabled,
-		LastUpdated:      &now,
+		Title:                    req.Title,
+		Description:              req.Description,
+		URL:                      req.URL,
+		CategoryID:               req.CategoryID,
+		Icon:                     req.Icon,
+		Color:                    req.Color,
+		MaxArticles:              req.MaxArticles,
+		RefreshInterval:          req.RefreshInterval,
+		AISummaryEnabled:         req.AISummaryEnabled,
+		ContentCompletionEnabled: req.ContentCompletionEnabled,
+		CompletionOnRefresh:      req.CompletionOnRefresh,
+		MaxCompletionRetries:     req.MaxCompletionRetries,
+		LastUpdated:              &now,
 	}
 
 	if feed.Title == "" {
@@ -209,27 +218,13 @@ func UpdateFeed(c *gin.Context) {
 		return
 	}
 
-	// Read raw body BEFORE binding to check which fields are present
-	rawBody, err := c.GetRawData()
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   "Failed to read request body",
-		})
-		return
-	}
-
+	// Read raw body to check which fields are present
+	rawBody, _ := c.GetRawData()
 	var bodyMap map[string]interface{}
-	if err := json.Unmarshal(rawBody, &bodyMap); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   "Invalid JSON",
-		})
-		return
-	}
+	json.Unmarshal(rawBody, &bodyMap)
 
 	var req UpdateFeedRequest
-	if err := json.Unmarshal(rawBody, &req); err != nil {
+	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
 			"error":   "Invalid request body",
@@ -263,10 +258,18 @@ func UpdateFeed(c *gin.Context) {
 	if req.RefreshInterval >= 0 {
 		updates["refresh_interval"] = req.RefreshInterval
 	}
-	// Check if ai_summary_enabled exists in request body
-	if val, exists := bodyMap["ai_summary_enabled"]; exists {
-		// Use the actual value from bodyMap to preserve boolean type
-		updates["ai_summary_enabled"] = val
+	// Only update ai_summary_enabled if explicitly provided in request
+	if _, exists := bodyMap["ai_summary_enabled"]; exists {
+		updates["ai_summary_enabled"] = req.AISummaryEnabled
+	}
+	if _, exists := bodyMap["content_completion_enabled"]; exists && req.ContentCompletionEnabled != nil {
+		updates["content_completion_enabled"] = *req.ContentCompletionEnabled
+	}
+	if _, exists := bodyMap["completion_on_refresh"]; exists && req.CompletionOnRefresh != nil {
+		updates["completion_on_refresh"] = *req.CompletionOnRefresh
+	}
+	if _, exists := bodyMap["max_completion_retries"]; exists && req.MaxCompletionRetries != nil {
+		updates["max_completion_retries"] = *req.MaxCompletionRetries
 	}
 
 	if err := database.DB.Model(&feed).Updates(updates).Error; err != nil {

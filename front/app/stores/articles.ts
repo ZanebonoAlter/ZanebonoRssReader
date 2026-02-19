@@ -12,6 +12,7 @@ export const useArticlesStore = defineStore('articles', () => {
   })
   const loading = ref(false)
   const currentArticle = ref<Article | null>(null)
+  const globalFavoriteCount = ref(0)
 
   // Computed
   const filteredArticles = computed(() => {
@@ -54,9 +55,7 @@ export const useArticlesStore = defineStore('articles', () => {
     articles.value.filter(a => !a.read).length
   )
 
-  const favoriteCount = computed(() =>
-    articles.value.filter(a => a.favorite).length
-  )
+  const favoriteCount = computed(() => globalFavoriteCount.value)
 
   const articlesByFeed = computed(() => {
     const grouped: Record<string, Article[]> = {}
@@ -143,6 +142,10 @@ export const useArticlesStore = defineStore('articles', () => {
     }
   }
 
+  function setGlobalFavoriteCount(count: number) {
+    globalFavoriteCount.value = count
+  }
+
   // Initialize with sample articles
   function initSampleArticles() {
     const sampleArticles: Article[] = [
@@ -212,6 +215,7 @@ export const useArticlesStore = defineStore('articles', () => {
     filters,
     loading,
     currentArticle,
+    globalFavoriteCount,
     filteredArticles,
     unreadCount,
     favoriteCount,
@@ -227,6 +231,7 @@ export const useArticlesStore = defineStore('articles', () => {
     getArticleById,
     getArticlesByFeed,
     setCurrentArticle,
+    setGlobalFavoriteCount,
     initSampleArticles
   }
 })

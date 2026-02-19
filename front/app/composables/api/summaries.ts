@@ -4,6 +4,9 @@ import type {
   PaginatedApiResponse,
   AISummary,
   GenerateSummaryData,
+  QueueSummaryRequest,
+  SummaryBatch,
+  SummaryJob,
 } from '~/types'
 
 /**
@@ -72,6 +75,29 @@ export function useSummariesApi() {
     return apiClient.post('/auto-summary/config', data)
   }
 
+  /**
+   * 提交队列总结任务（多分类）
+   */
+  async function submitQueueSummary(
+    data: QueueSummaryRequest
+  ): Promise<ApiResponse<SummaryBatch>> {
+    return apiClient.post<SummaryBatch>('/summaries/queue', data)
+  }
+
+  /**
+   * 获取队列状态
+   */
+  async function getQueueStatus(): Promise<ApiResponse<SummaryBatch | null>> {
+    return apiClient.get<SummaryBatch | null>('/summaries/queue/status')
+  }
+
+  /**
+   * 获取单个任务详情
+   */
+  async function getQueueJob(jobId: string): Promise<ApiResponse<SummaryJob>> {
+    return apiClient.get<SummaryJob>(`/summaries/queue/jobs/${jobId}`)
+  }
+
   return {
     getSummaries,
     getSummary,
@@ -80,5 +106,8 @@ export function useSummariesApi() {
     deleteSummary,
     getAutoSummaryStatus,
     updateAutoSummaryConfig,
+    submitQueueSummary,
+    getQueueStatus,
+    getQueueJob,
   }
 }

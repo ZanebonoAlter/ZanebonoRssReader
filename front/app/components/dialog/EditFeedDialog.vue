@@ -25,6 +25,11 @@ const deleting = ref(false)
 const error = ref<string | null>(null)
 const showDeleteConfirm = ref(false)
 
+const contentCompletionEnabled = ref(props.feed.content_completion_enabled ?? false)
+const completionOnRefresh = ref(props.feed.completion_on_refresh ?? true)
+const maxCompletionRetries = ref(props.feed.max_completion_retries ?? 3)
+const firecrawlEnabled = ref(props.feed.firecrawl_enabled ?? false)
+
 async function handleSubmit() {
   if (!url.value) return
 
@@ -34,6 +39,10 @@ async function handleSubmit() {
   const response = await apiStore.updateFeed(props.feed.id, {
     url: url.value,
     category_id: categoryId.value,
+    content_completion_enabled: contentCompletionEnabled.value,
+    completion_on_refresh: completionOnRefresh.value,
+    max_completion_retries: maxCompletionRetries.value,
+    firecrawl_enabled: firecrawlEnabled.value,
   })
 
   loading.value = false
@@ -164,6 +173,78 @@ async function handleDelete() {
                     {{ category.name }}
                   </option>
                 </select>
+              </div>
+
+              <!-- Content Completion Settings -->
+              <div class="space-y-4 p-4 bg-blue-50/50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-700">
+                <h4 class="text-sm font-semibold text-blue-900 dark:text-blue-300 flex items-center gap-2">
+                  <Icon icon="mdi:auto-fix" width="16" height="16" />
+                  内容补全设置
+                </h4>
+                
+                <div class="space-y-3">
+                  <label class="flex items-center justify-between cursor-pointer">
+                    <span class="text-sm text-gray-700 dark:text-gray-300">启用内容补全</span>
+                    <div class="relative">
+                      <input
+                        v-model="contentCompletionEnabled"
+                        type="checkbox"
+                        class="sr-only peer"
+                      >
+                      <div class="w-11 h-6 bg-gray-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                    </div>
+                  </label>
+
+                  <div v-if="contentCompletionEnabled" class="space-y-3 pl-4 border-l-2 border-blue-300 dark:border-blue-600">
+                    <label class="flex items-center justify-between cursor-pointer">
+                      <span class="text-sm text-gray-700 dark:text-gray-300">刷新时自动补全</span>
+                      <div class="relative">
+                        <input
+                          v-model="completionOnRefresh"
+                          type="checkbox"
+                          class="sr-only peer"
+                        >
+                        <div class="w-11 h-6 bg-gray-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                      </div>
+                    </label>
+
+                    <div class="space-y-2">
+                      <label class="text-sm text-gray-700 dark:text-gray-300">最大重试次数</label>
+                      <input
+                        v-model.number="maxCompletionRetries"
+                        type="number"
+                        min="1"
+                        max="10"
+                        class="input w-full"
+                      >
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Firecrawl Settings -->
+              <div class="space-y-4 p-4 bg-purple-50/50 dark:bg-purple-900/20 rounded-lg border border-purple-200 dark:border-purple-700">
+                <h4 class="text-sm font-semibold text-purple-900 dark:text-purple-300 flex items-center gap-2">
+                  <Icon icon="mdi:spider-web" width="16" height="16" />
+                  Firecrawl 全文抓取
+                </h4>
+                
+                <div class="space-y-3">
+                  <label class="flex items-center justify-between cursor-pointer">
+                    <div>
+                      <span class="text-sm text-gray-700 dark:text-gray-300">启用全文抓取</span>
+                      <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">使用 Firecrawl 抓取文章完整内容</p>
+                    </div>
+                    <div class="relative">
+                      <input
+                        v-model="firecrawlEnabled"
+                        type="checkbox"
+                        class="sr-only peer"
+                      >
+                      <div class="w-11 h-6 bg-gray-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
+                    </div>
+                  </label>
+                </div>
               </div>
 
               <!-- Error -->

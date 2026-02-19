@@ -65,6 +65,15 @@ go run cmd/server/main.go
 go run cmd/migrate/main.go check
 ```
 
+其他命令：
+```bash
+# 运行迁移（谨慎使用）
+go run cmd/migrate/main.go migrate
+
+# 全新开始（删除所有数据）
+go run cmd/migrate/main.go fresh
+```
+
 详细说明：[DATABASE_COMPATIBILITY.md](DATABASE_COMPATIBILITY.md)
 
 ## 🔧 配置

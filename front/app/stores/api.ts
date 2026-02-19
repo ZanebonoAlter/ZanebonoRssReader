@@ -253,14 +253,6 @@ export const useApiStore = defineStore('api', () => {
       const data = response.data as any
       const items = data.items || data
 
-      // 建立 feedId -> categoryId 的映射，保证文章上的 category 是真正的分类 ID
-      const feedCategoryMap: Record<number, string> = {}
-      feeds.value.forEach((feed) => {
-        if (feed.category) {
-          feedCategoryMap[Number(feed.id)] = feed.category
-        }
-      })
-
       articles.value = items.map((article: any) => ({
         id: String(article.id),
         feedId: String(article.feed_id),
@@ -270,8 +262,7 @@ export const useApiStore = defineStore('api', () => {
         link: article.link,
         pubDate: article.pub_date || article.created_at,
         author: article.author,
-        // 这里存的是 category_id（字符串），用于前端筛选 & 行为上报
-        category: feedCategoryMap[article.feed_id] ?? '',
+        category: String(article.feed_id), // Will be mapped from feed
         read: article.read || false,
         favorite: article.favorite || false,
         imageUrl: article.image_url,
@@ -291,12 +282,14 @@ export const useApiStore = defineStore('api', () => {
     data: { read?: boolean; favorite?: boolean }
   ) {
     const articlesApi = useArticlesApi()
+    const articlesStore = useArticlesStore()
+    const article = articlesStore.articles.find((a) => a.id === id)
+    const wasFavorite = article?.favorite
+
     const response = await articlesApi.updateArticle(Number(id), data)
 
     if (response.success) {
       // Update local article store
-      const articlesStore = useArticlesStore()
-      const article = articlesStore.articles.find((a) => a.id === id)
       if (article) {
         Object.assign(article, data)
       }
@@ -307,6 +300,15 @@ export const useApiStore = defineStore('api', () => {
         const feed = feedsStore.feeds.find((f) => f.id === article.feedId)
         if (feed && feed.unreadCount && feed.unreadCount > 0) {
           feed.unreadCount--
+        }
+      }
+
+      // Update global favorite count when favorite changes
+      if (data.favorite !== undefined && wasFavorite !== undefined) {
+        if (data.favorite && !wasFavorite) {
+          articlesStore.setGlobalFavoriteCount(articlesStore.globalFavoriteCount + 1)
+        } else if (!data.favorite && wasFavorite) {
+          articlesStore.setGlobalFavoriteCount(Math.max(0, articlesStore.globalFavoriteCount - 1))
         }
       }
     }
@@ -412,11 +414,51 @@ export const useApiStore = defineStore('api', () => {
     return response
   }
 
+  // Queue Summary - 队列总结
+  async function submitQueueSummary(data: {
+    category_ids: number[]
+    time_range?: number
+    base_url: string
+    api_key: string
+    model: string
+  }) {
+    loading.value = true
+    error.value = null
+    const summariesApi = useSummariesApi()
+    const response = await summariesApi.submitQueueSummary(data)
+    loading.value = false
+    return response
+  }
+
+  async function getQueueStatus() {
+    const summariesApi = useSummariesApi()
+    const response = await summariesApi.getQueueStatus()
+    return response
+  }
+
+  async function getQueueJob(jobId: string) {
+    const summariesApi = useSummariesApi()
+    const response = await summariesApi.getQueueJob(jobId)
+    return response
+  }
+
   // Initialize
   async function initialize() {
-    await fetchCategories()
-    await fetchFeeds({ per_page: 10000 }) // Must complete before fetchArticles
-    await fetchArticles({ per_page: 10000 })
+    await Promise.all([
+      fetchCategories(),
+      fetchFeeds({ per_page: 10000 }),
+      fetchArticles({ per_page: 10000 }),
+      fetchAndSyncStats(),
+    ])
+  }
+
+  async function fetchAndSyncStats() {
+    const response = await fetchArticlesStats()
+    if (response.success && response.data) {
+      const articlesStore = useArticlesStore()
+      articlesStore.setGlobalFavoriteCount(response.data.favorite || 0)
+    }
+    return response
   }
 
   // Sync data to local stores
@@ -467,9 +509,13 @@ export const useApiStore = defineStore('api', () => {
     importOpml,
     exportOpml,
     fetchArticlesStats,
+    fetchAndSyncStats,
     getSummaries,
     generateSummary,
     deleteSummary,
+    submitQueueSummary,
+    getQueueStatus,
+    getQueueJob,
     initialize,
     syncToLocalStores,
   }

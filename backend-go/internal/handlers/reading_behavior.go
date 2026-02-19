@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"database/sql"
-	"log"
 	"net/http"
 	"time"
 
@@ -42,14 +41,8 @@ func TrackReadingBehavior(c *gin.Context) {
 		var feed models.Feed
 		if err := database.DB.Select("category_id").First(&feed, req.FeedID).Error; err == nil {
 			categoryID = feed.CategoryID
-		} else {
-			categoryID = nil // Explicitly set to nil if feed not found
 		}
 	}
-
-	// Debug log
-	log.Printf("[TrackBehavior] FeedID: %d, Request.CategoryID: %v, Final.CategoryID: %v",
-		req.FeedID, req.CategoryID, categoryID)
 
 	behavior := models.ReadingBehavior{
 		ArticleID:   req.ArticleID,

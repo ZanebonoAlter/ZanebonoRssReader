@@ -12,13 +12,16 @@ import (
 	"my-robot-backend/internal/handlers"
 	"my-robot-backend/internal/middleware"
 	"my-robot-backend/internal/schedulers"
+	"my-robot-backend/internal/ws"
 	"my-robot-backend/pkg/database"
 )
 
 var (
-	autoRefreshScheduler      *schedulers.AutoRefreshScheduler
-	autoSummaryScheduler      *schedulers.AutoSummaryScheduler
-	preferenceUpdateScheduler *schedulers.PreferenceUpdateScheduler
+	autoRefreshScheduler       *schedulers.AutoRefreshScheduler
+	autoSummaryScheduler       *schedulers.AutoSummaryScheduler
+	preferenceUpdateScheduler  *schedulers.PreferenceUpdateScheduler
+	contentCompletionScheduler *schedulers.ContentCompletionScheduler
+	firecrawlScheduler         *schedulers.FirecrawlScheduler
 )
 
 func main() {
@@ -104,6 +107,9 @@ func SetupRoutes(r *gin.Engine) {
 		})
 	})
 
+	// WebSocket endpoint
+	r.GET("/ws", ws.HandleWebSocket)
+
 	api := r.Group("/api")
 	{
 		categories := api.Group("/categories")
@@ -164,6 +170,10 @@ func SetupRoutes(r *gin.Engine) {
 			summaries.POST("/auto-generate", handlers.AutoGenerateSummary)
 			summaries.GET("/:summary_id", handlers.GetSummary)
 			summaries.DELETE("/:summary_id", handlers.DeleteSummary)
+			// 队列相关API
+			summaries.POST("/queue", handlers.SubmitQueueSummary)
+			summaries.GET("/queue/status", handlers.GetQueueStatus)
+			summaries.GET("/queue/jobs/:job_id", handlers.GetQueueJob)
 		}
 
 		// Auto summary configuration
@@ -183,6 +193,22 @@ func SetupRoutes(r *gin.Engine) {
 		{
 			preferences.GET("", handlers.GetUserPreferences)
 			preferences.POST("/update", handlers.TriggerPreferenceUpdate)
+		}
+
+		// Content completion
+		contentCompletion := api.Group("/content-completion")
+		{
+			contentCompletion.POST("/articles/:article_id/complete", handlers.CompleteArticleContent)
+			contentCompletion.POST("/feeds/:feed_id/complete-all", handlers.CompleteFeedArticles)
+			contentCompletion.GET("/articles/:article_id/status", handlers.GetCompletionStatus)
+		}
+
+		// Firecrawl
+		firecrawl := api.Group("/firecrawl")
+		{
+			firecrawl.POST("/article/:id", handlers.CrawlArticle)
+			firecrawl.POST("/feed/:id/enable", handlers.EnableFeedFirecrawl)
+			firecrawl.GET("/status", handlers.GetFirecrawlStatus)
 		}
 	}
 }
@@ -223,6 +249,28 @@ func initializeSchedulers() {
 	// Set scheduler references in handlers for status queries
 	handlers.AutoRefreshSchedulerInterface = autoRefreshScheduler
 	handlers.AutoSummarySchedulerInterface = autoSummaryScheduler
+
+	// Initialize content completion service and scheduler
+	crawlServiceURL := os.Getenv("CRAWL_SERVICE_URL")
+	if crawlServiceURL == "" {
+		crawlServiceURL = "http://localhost:11235"
+	}
+	handlers.InitContentCompletionHandler(crawlServiceURL)
+
+	contentCompletionScheduler = schedulers.NewContentCompletionScheduler(
+		handlers.GetContentCompletionService(),
+		60, // 60 minutes
+	)
+	contentCompletionScheduler.Start()
+	log.Println("Content completion scheduler started successfully")
+
+	// Initialize firecrawl scheduler
+	firecrawlScheduler = schedulers.NewFirecrawlScheduler()
+	if err := firecrawlScheduler.Start(); err != nil {
+		log.Printf("Warning: Failed to start firecrawl scheduler: %v", err)
+	} else {
+		log.Println("Firecrawl scheduler started successfully")
+	}
 }
 
 func setupGracefulShutdown() {
@@ -247,6 +295,16 @@ func setupGracefulShutdown() {
 		if preferenceUpdateScheduler != nil {
 			log.Println("Stopping preference update scheduler...")
 			preferenceUpdateScheduler.Stop()
+		}
+
+		if contentCompletionScheduler != nil {
+			log.Println("Stopping content completion scheduler...")
+			contentCompletionScheduler.Stop()
+		}
+
+		if firecrawlScheduler != nil {
+			log.Println("Stopping firecrawl scheduler...")
+			firecrawlScheduler.Stop()
 		}
 
 		log.Println("Graceful shutdown completed")

@@ -17,7 +17,7 @@ const apiStore = useApiStore()
 const feedsStore = useFeedsStore()
 const preferencesStore = usePreferencesStore()
 
-const activeTab = ref<'feeds' | 'categories' | 'general' | 'preferences'>('feeds')
+const activeTab = ref<'feeds' | 'categories' | 'general' | 'preferences' | 'firecrawl'>('feeds')
 const loading = ref(false)
 const error = ref<string | null>(null)
 const success = ref<string | null>(null)
@@ -33,6 +33,16 @@ const autoSummaryEnabled = ref(false)
 // AI Podcast Settings
 const aiPodcastEnabled = ref(false)
 
+// Firecrawl Settings
+const firecrawlEnabled = ref(false)
+const firecrawlApiUrl = ref('')
+const firecrawlApiKey = ref('')
+const firecrawlMode = ref('scrape')
+const firecrawlTimeout = ref(60)
+const firecrawlMaxContentLength = ref(50000)
+const firecrawlApiKeyVisible = ref(false)
+const firecrawlLoading = ref(false)
+
 // Reading preferences
 const preferenceType = ref<'feed' | 'category'>('feed')
 const readingStats = ref<ReadingStats | null>(null)
@@ -44,7 +54,7 @@ const preferencesUpdating = ref(false)
 const feedsByCategory = computed(() => {
   const grouped: Record<string, RssFeed[]> = {}
   apiStore.feeds.forEach((feed: RssFeed) => {
-    const categoryName = apiStore.categories.find(c => c.id === feed.category)?.name || '未分类'
+    const categoryName = feedsStore.categories.find(c => c.id === feed.category)?.name || '未分类'
     if (!grouped[categoryName]) {
       grouped[categoryName] = []
     }
@@ -164,6 +174,55 @@ function loadAISettings() {
   }
 }
 
+// Load firecrawl settings
+async function loadFirecrawlSettings() {
+  firecrawlLoading.value = true
+  try {
+    const { getStatus } = useFirecrawlApi()
+    const response = await getStatus()
+    if (response.success && response.data) {
+      firecrawlEnabled.value = response.data.enabled
+      firecrawlApiUrl.value = response.data.api_url
+      firecrawlMode.value = response.data.mode || 'scrape'
+      firecrawlTimeout.value = response.data.timeout || 60
+      firecrawlMaxContentLength.value = response.data.max_content_length || 50000
+    }
+  } catch (e) {
+    console.error('Failed to load firecrawl settings:', e)
+  } finally {
+    firecrawlLoading.value = false
+  }
+}
+
+// Save firecrawl settings
+async function saveFirecrawlSettings() {
+  firecrawlLoading.value = true
+  error.value = null
+  try {
+    // Save to aiSettings with firecrawl config
+    const aiSettings = localStorage.getItem('aiSettings')
+    const settings = aiSettings ? JSON.parse(aiSettings) : {}
+    settings.firecrawl = {
+      enabled: firecrawlEnabled.value,
+      api_url: firecrawlApiUrl.value,
+      api_key: firecrawlApiKey.value,
+      mode: firecrawlMode.value,
+      timeout: firecrawlTimeout.value,
+      max_content_length: firecrawlMaxContentLength.value,
+    }
+    localStorage.setItem('aiSettings', JSON.stringify(settings))
+    
+    success.value = 'Firecrawl 设置已保存'
+    setTimeout(() => {
+      success.value = null
+    }, 2000)
+  } catch (e) {
+    error.value = '保存失败'
+  } finally {
+    firecrawlLoading.value = false
+  }
+}
+
 // Load settings from localStorage
 onMounted(() => {
   loadAISettings()
@@ -173,6 +232,8 @@ onMounted(() => {
 watch(activeTab, async (newTab) => {
   if (newTab === 'preferences') {
     await loadPreferencesData()
+  } else if (newTab === 'firecrawl') {
+    await loadFirecrawlSettings()
   }
 })
 
@@ -318,6 +379,13 @@ async function testAIConnection() {
           @click="activeTab = 'preferences'"
         >
           阅读偏好
+        </button>
+        <button
+          class="px-6 py-3 text-sm font-medium transition-colors"
+          :class="activeTab === 'firecrawl' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:text-gray-700'"
+          @click="activeTab = 'firecrawl'"
+        >
+          Firecrawl
         </button>
       </div>
 
@@ -792,6 +860,143 @@ async function testAIConnection() {
             <div class="flex items-center gap-2 text-sm text-gray-500 bg-white/50 rounded-lg p-3">
               <Icon icon="mdi:information" width="16" height="16" class="text-green-600" />
               <span>AI 播客功能正在开发中，敬请期待...</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Firecrawl Settings Tab -->
+        <div v-if="activeTab === 'firecrawl'" class="space-y-6">
+          <!-- Loading State -->
+          <div v-if="firecrawlLoading" class="flex items-center justify-center py-12">
+            <Icon icon="mdi:loading" width="48" height="48" class="animate-spin text-blue-500" />
+          </div>
+
+          <!-- Firecrawl Configuration -->
+          <div v-else class="bg-gradient-to-br from-purple-50 to-indigo-50 rounded-xl p-6 border border-purple-100">
+            <div class="flex items-start justify-between mb-4">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center">
+                  <Icon icon="mdi:spider-web" width="20" height="20" class="text-white" />
+                </div>
+                <div>
+                  <h3 class="font-semibold text-gray-900">Firecrawl 全文抓取</h3>
+                  <p class="text-xs text-gray-500">抓取文章完整内容，支持复杂网页</p>
+                </div>
+              </div>
+              <button
+                class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors"
+                :class="firecrawlEnabled ? 'bg-purple-600' : 'bg-gray-300'"
+                @click="firecrawlEnabled = !firecrawlEnabled"
+              >
+                <span
+                  class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform"
+                  :class="firecrawlEnabled ? 'translate-x-6' : 'translate-x-1'"
+                />
+              </button>
+            </div>
+
+            <div v-if="firecrawlEnabled" class="space-y-4 mt-4">
+              <!-- API URL -->
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1.5">
+                  API URL
+                </label>
+                <input
+                  v-model="firecrawlApiUrl"
+                  type="text"
+                  placeholder="https://api.firecrawl.dev/v1"
+                  class="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                />
+              </div>
+
+              <!-- API Key -->
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1.5">
+                  API Key
+                </label>
+                <div class="relative">
+                  <input
+                    v-model="firecrawlApiKey"
+                    :type="firecrawlApiKeyVisible ? 'text' : 'password'"
+                    placeholder="fc-..."
+                    class="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent pr-20"
+                  />
+                  <div class="absolute right-2 top-1/2 -translate-y-1/2">
+                    <button
+                      class="p-1 hover:bg-gray-100 rounded text-gray-400 hover:text-gray-600"
+                      @click="firecrawlApiKeyVisible = !firecrawlApiKeyVisible"
+                    >
+                      <Icon :icon="firecrawlApiKeyVisible ? 'mdi:eye-off' : 'mdi:eye'" width="16" height="16" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Mode -->
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1.5">
+                  抓取模式
+                </label>
+                <select
+                  v-model="firecrawlMode"
+                  class="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                >
+                  <option value="scrape">Scrape（单页抓取）</option>
+                  <option value="crawl">Crawl（整站爬取）</option>
+                </select>
+              </div>
+
+              <!-- Timeout & Max Content -->
+              <div class="grid grid-cols-2 gap-4">
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1.5">
+                    超时时间（秒）
+                  </label>
+                  <input
+                    v-model.number="firecrawlTimeout"
+                    type="number"
+                    min="10"
+                    max="300"
+                    class="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                  />
+                </div>
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1.5">
+                    最大内容长度
+                  </label>
+                  <input
+                    v-model.number="firecrawlMaxContentLength"
+                    type="number"
+                    min="1000"
+                    max="100000"
+                    class="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                  />
+                </div>
+              </div>
+
+              <!-- Save Button -->
+              <div class="flex gap-2 pt-2">
+                <button
+                  class="px-4 py-2 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 transition-colors"
+                  :disabled="firecrawlLoading"
+                  @click="saveFirecrawlSettings"
+                >
+                  <Icon v-if="firecrawlLoading" icon="mdi:loading" width="14" height="14" class="animate-spin inline-block mr-1" />
+                  保存配置
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Info Box -->
+          <div class="bg-purple-50 rounded-lg p-4 flex items-start gap-3">
+            <Icon icon="mdi:information" width="20" height="20" class="text-purple-600 flex-shrink-0 mt-0.5" />
+            <div class="text-sm text-purple-900">
+              <div class="font-medium mb-1">关于 Firecrawl</div>
+              <p class="text-purple-700 text-xs">
+                Firecrawl 是一个强大的网页抓取服务，可以提取网页的完整 Markdown 内容。
+                在订阅源设置中启用后，系统会自动抓取文章全文。
+              </p>
             </div>
           </div>
         </div>

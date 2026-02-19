@@ -39,7 +39,7 @@ func GetSummaries(c *gin.Context) {
 
 	var summaries []models.AISummary
 	offset := (page - 1) * perPage
-	if err := query.Preload("Category").Order("created_at DESC").Offset(offset).Limit(perPage).Find(&summaries).Error; err != nil {
+	if err := query.Order("created_at DESC").Offset(offset).Limit(perPage).Find(&summaries).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
 			"error":   err.Error(),
@@ -213,20 +213,45 @@ func GenerateSummary(c *gin.Context) {
 		categoryName = category.Name
 	}
 
-	// Title should only contain date/time, category name is shown separately in the tag
-	title := time.Now().Format("2006-01-02 15:04") + " 新闻汇总"
+	title := categoryName + " - " + time.Now().Format("2006-01-02 15:04") + " 新闻汇总"
 
-	// Prepare prompt for AI（注入用户偏好与阅读习惯）
+	// Prepare prompt for AI
 	articlesText := joinStrings(articleTexts, "\n---\n")
+	summaryPrompt := `请对以下来自"` + categoryName + `"分类的 ` + strconv.Itoa(len(articles)) + ` 篇文章进行汇总总结。
 
-	prefService := services.NewPreferenceService(database.DB)
-	promptBuilder := services.NewAISummaryPromptBuilder(prefService, database.DB)
-	summaryPrompt, _ := promptBuilder.BuildPersonalizedPrompt(
-		categoryName,
-		articlesText,
-		len(articles),
-		"zh",
-	)
+文章列表（按时间倒序）：
+` + articlesText + `
+
+请提供以下格式的总结：
+
+## 核心主题
+用一句话概括这批文章的核心主题和趋势。
+
+## 重要新闻
+
+### 🔥 热点事件
+列出2-3个最重要的事件，每个事件包含：
+- 事件标题（用加粗）
+- 简要说明（2-3句话）
+- 引文标注新闻来源（使用 > [来源名称](链接) 格式）
+
+### 📰 其他重要新闻
+列出其他重要新闻，每条包含：
+- 新闻标题（用加粗）
+- 简要说明（1-2句话）
+- 引文标注新闻来源（使用 > [来源名称](链接) 格式）
+
+## 核心观点
+总结3-5个核心观点或趋势，每个观点用简洁的语言表达。
+
+## 相关标签
+#标签1 #标签2 #标签3
+
+**重要提醒**：
+1. 必须为每条新闻标注来源，使用引文格式
+2. 来源格式：> [来源订阅源名称](文章链接)
+3. 确保总结简洁明了，突出重点
+4. 保持客观中立的语气`
 
 	// Prepare AI request
 	type openAIMessage struct {
@@ -488,8 +513,7 @@ func generateSummaryWorker(req GenerateSummaryRequest) {
 		categoryName = category.Name
 	}
 
-	// Title should only contain date/time, category name is shown separately in the tag
-	title := time.Now().Format("2006-01-02 15:04") + " 新闻汇总"
+	title := categoryName + " - " + time.Now().Format("2006-01-02 15:04") + " 新闻汇总"
 	articlesText := joinStrings(articleTexts, "\n---\n")
 	summaryPrompt := `请对以下来自"` + categoryName + `"分类的 ` + strconv.Itoa(len(articles)) + ` 篇文章进行汇总总结。
 
@@ -683,5 +707,91 @@ func UpdateAutoSummaryConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "Auto summary configuration updated successfully",
+	})
+}
+
+// ========== 队列相关 API ==========
+
+// QueueSummaryRequest 队列总结请求
+type QueueSummaryRequest struct {
+	CategoryIDs []uint `json:"category_ids" binding:"required,min=1"`
+	TimeRange   int    `json:"time_range"`
+	BaseURL     string `json:"base_url"`
+	APIKey      string `json:"api_key" binding:"required"`
+	Model       string `json:"model"`
+}
+
+// SubmitQueueSummary 提交队列总结任务
+func SubmitQueueSummary(c *gin.Context) {
+	var req QueueSummaryRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "请求参数错误: " + err.Error(),
+		})
+		return
+	}
+
+	queue := services.GetSummaryQueue()
+	config := services.AIConfig{
+		BaseURL:   req.BaseURL,
+		APIKey:    req.APIKey,
+		Model:     req.Model,
+		TimeRange: req.TimeRange,
+	}
+
+	batch := queue.SubmitBatch(req.CategoryIDs, config)
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"success": true,
+		"message": "总结任务已加入队列",
+		"data":    batch,
+	})
+}
+
+// GetQueueStatus 获取队列状态
+func GetQueueStatus(c *gin.Context) {
+	queue := services.GetSummaryQueue()
+	batch := queue.GetCurrentBatch()
+
+	if batch == nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"data":    nil,
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    batch,
+	})
+}
+
+// GetQueueJob 获取单个任务详情
+func GetQueueJob(c *gin.Context) {
+	jobID := c.Param("job_id")
+	if jobID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "任务ID不能为空",
+		})
+		return
+	}
+
+	queue := services.GetSummaryQueue()
+	job := queue.GetJob(jobID)
+
+	if job == nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"success": false,
+			"error":   "任务不存在",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    job,
 	})
 }
