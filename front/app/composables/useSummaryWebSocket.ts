@@ -1,8 +1,11 @@
 import type { SummaryBatch, SummaryJob } from '~/types'
 
-// WebSocket消息类型
 interface WSJob {
   id: string
+  feed_id: number | null
+  feed_name: string
+  feed_icon: string
+  feed_color: string
   category_id: number | null
   category_name: string
   status: 'pending' | 'processing' | 'completed' | 'failed'
@@ -22,7 +25,6 @@ interface WSMessage {
   jobs?: WSJob[]
 }
 
-// WebSocket连接状态
 type WSStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
 
 export function useSummaryWebSocket() {
@@ -32,16 +34,14 @@ export function useSummaryWebSocket() {
   const lastMessage = ref<WSMessage | null>(null)
   const reconnectAttempts = ref(0)
   const maxReconnectAttempts = 5
-  const reconnectDelay = 3000 // 3秒
+  const reconnectDelay = 3000
 
-  // 获取WebSocket URL
   const getWsUrl = () => {
     const apiBase = (config.public.apiBase as string) || 'http://localhost:5000'
     const wsBase = apiBase.replace(/^http/, 'ws')
     return `${wsBase}/ws`
   }
 
-  // 连接WebSocket
   const connect = () => {
     if (ws.value?.readyState === WebSocket.OPEN) {
       return
@@ -76,7 +76,6 @@ export function useSummaryWebSocket() {
         status.value = 'disconnected'
         ws.value = null
 
-        // 非手动关闭，尝试重连
         if (!event.wasClean && reconnectAttempts.value < maxReconnectAttempts) {
           reconnectAttempts.value++
           console.log(`[WebSocket] Reconnecting in ${reconnectDelay}ms (attempt ${reconnectAttempts.value})`)
@@ -94,7 +93,6 @@ export function useSummaryWebSocket() {
     }
   }
 
-  // 断开连接
   const disconnect = () => {
     if (ws.value) {
       ws.value.close(1000, 'Manual disconnect')
@@ -103,17 +101,18 @@ export function useSummaryWebSocket() {
     }
   }
 
-  // 将WS消息转换为批次数据
   const toBatchData = (message: WSMessage): SummaryBatch => {
-    // 优先使用完整的jobs列表，如果没有则使用current_job
     const jobs: SummaryJob[] = []
     
     if (message.jobs && message.jobs.length > 0) {
-      // 使用完整的任务列表
       for (const job of message.jobs) {
         jobs.push({
           id: job.id,
           batch_id: message.batch_id,
+          feed_id: job.feed_id,
+          feed_name: job.feed_name,
+          feed_icon: job.feed_icon,
+          feed_color: job.feed_color,
           category_id: job.category_id,
           category_name: job.category_name,
           status: job.status,
@@ -125,10 +124,13 @@ export function useSummaryWebSocket() {
         })
       }
     } else if (message.current_job) {
-      // 兼容旧格式：只使用当前任务
       jobs.push({
         id: message.current_job.id,
         batch_id: message.batch_id,
+        feed_id: message.current_job.feed_id,
+        feed_name: message.current_job.feed_name,
+        feed_icon: message.current_job.feed_icon,
+        feed_color: message.current_job.feed_color,
         category_id: message.current_job.category_id,
         category_name: message.current_job.category_name,
         status: message.current_job.status,
@@ -151,7 +153,6 @@ export function useSummaryWebSocket() {
     }
   }
 
-  // 在组件卸载时断开连接
   onUnmounted(() => {
     disconnect()
   })

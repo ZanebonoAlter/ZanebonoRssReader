@@ -57,6 +57,7 @@ func Migrate() error {
 		&models.Feed{},
 		&models.Article{},
 		&models.AISummary{},
+		&models.AISummaryFeed{},
 		&models.SchedulerTask{},
 		&models.AISettings{},
 		&models.ReadingBehavior{},
@@ -113,6 +114,7 @@ func EnsureTables() error {
 		"ai_summaries": `
 			CREATE TABLE IF NOT EXISTS ai_summaries (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				feed_id INTEGER,
 				category_id INTEGER,
 				title VARCHAR(200) NOT NULL,
 				summary TEXT NOT NULL,
@@ -122,6 +124,7 @@ func EnsureTables() error {
 				time_range INTEGER DEFAULT 180,
 				created_at DATETIME,
 				updated_at DATETIME,
+				FOREIGN KEY(feed_id) REFERENCES feeds(id) ON DELETE CASCADE,
 				FOREIGN KEY(category_id) REFERENCES categories(id)
 			)`,
 		"scheduler_tasks": `
@@ -182,6 +185,19 @@ func EnsureTables() error {
 				FOREIGN KEY(feed_id) REFERENCES feeds(id) ON DELETE CASCADE,
 				FOREIGN KEY(category_id) REFERENCES categories(id) ON DELETE CASCADE
 			)`,
+		"ai_summary_feeds": `
+			CREATE TABLE IF NOT EXISTS ai_summary_feeds (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				summary_id INTEGER NOT NULL,
+				feed_id INTEGER NOT NULL,
+				feed_title VARCHAR(200),
+				feed_icon VARCHAR(50),
+				feed_color VARCHAR(20),
+				article_count INTEGER DEFAULT 0,
+				created_at DATETIME,
+				FOREIGN KEY(summary_id) REFERENCES ai_summaries(id) ON DELETE CASCADE,
+				FOREIGN KEY(feed_id) REFERENCES feeds(id) ON DELETE CASCADE
+			)`,
 	}
 
 	indexes := map[string][]string{
@@ -192,6 +208,7 @@ func EnsureTables() error {
 			"CREATE INDEX IF NOT EXISTS idx_articles_feed_id ON articles(feed_id)",
 		},
 		"ai_summaries": {
+			"CREATE INDEX IF NOT EXISTS idx_ai_summaries_feed_id ON ai_summaries(feed_id)",
 			"CREATE INDEX IF NOT EXISTS idx_ai_summaries_category_id ON ai_summaries(category_id)",
 		},
 		"scheduler_tasks": {
@@ -214,6 +231,10 @@ func EnsureTables() error {
 			"CREATE INDEX IF NOT EXISTS idx_user_preferences_category_id ON user_preferences(category_id)",
 			"CREATE INDEX IF NOT EXISTS idx_user_preferences_last_interaction_at ON user_preferences(last_interaction_at)",
 		},
+		"ai_summary_feeds": {
+			"CREATE INDEX IF NOT EXISTS idx_ai_summary_feeds_summary_id ON ai_summary_feeds(summary_id)",
+			"CREATE INDEX IF NOT EXISTS idx_ai_summary_feeds_feed_id ON ai_summary_feeds(feed_id)",
+		},
 	}
 
 	for tableName, createSQL := range tables {
@@ -234,7 +255,30 @@ func EnsureTables() error {
 		}
 	}
 
+	if err := runMigrations(); err != nil {
+		log.Printf("Warning: Failed to run migrations: %v", err)
+	}
+
 	return nil
+}
+
+func runMigrations() error {
+	if !columnExists("ai_summaries", "feed_id") {
+		log.Println("Adding feed_id column to ai_summaries table...")
+		if err := DB.Exec("ALTER TABLE ai_summaries ADD COLUMN feed_id INTEGER REFERENCES feeds(id) ON DELETE CASCADE").Error; err != nil {
+			log.Printf("Warning: Failed to add feed_id column: %v", err)
+		} else {
+			log.Println("✓ feed_id column added to ai_summaries")
+		}
+	}
+
+	return nil
+}
+
+func columnExists(tableName, columnName string) bool {
+	var count int64
+	DB.Raw("SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?", tableName, columnName).Scan(&count)
+	return count > 0
 }
 
 func tableExists(tableName string) bool {

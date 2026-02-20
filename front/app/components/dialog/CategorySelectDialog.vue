@@ -1,11 +1,20 @@
 <script setup lang="ts">
 import { Icon } from '@iconify/vue'
 
+interface Feed {
+  id: string
+  name: string
+  icon?: string
+  color?: string
+  categoryId?: string
+}
+
 interface Category {
   id: string
   name: string
   icon?: string
   color?: string
+  feeds?: Feed[]
 }
 
 const props = defineProps<{
@@ -16,49 +25,53 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:visible': [value: boolean]
-  confirm: [selectedIds: string[]]
+  confirm: [selectedCategoryIds: string[]]
 }>()
 
-const selectedIds = ref<string[]>([])
+const selectedCategoryIds = ref<string[]>([])
 const selectAll = ref(false)
 
-// 当对话框打开时，默认全选
 watch(() => props.visible, (newVal) => {
   if (newVal) {
-    selectedIds.value = props.categories.map(c => c.id)
+    selectedCategoryIds.value = props.categories.map(c => c.id)
     selectAll.value = true
   }
 })
 
 function toggleSelectAll() {
   if (selectAll.value) {
-    selectedIds.value = props.categories.map(c => c.id)
+    selectedCategoryIds.value = props.categories.map(c => c.id)
   } else {
-    selectedIds.value = []
+    selectedCategoryIds.value = []
   }
 }
 
 function toggleCategory(categoryId: string) {
-  const index = selectedIds.value.indexOf(categoryId)
+  const index = selectedCategoryIds.value.indexOf(categoryId)
   if (index === -1) {
-    selectedIds.value.push(categoryId)
+    selectedCategoryIds.value.push(categoryId)
   } else {
-    selectedIds.value.splice(index, 1)
+    selectedCategoryIds.value.splice(index, 1)
   }
-  selectAll.value = selectedIds.value.length === props.categories.length
+  selectAll.value = selectedCategoryIds.value.length === props.categories.length
 }
 
 function isSelected(categoryId: string): boolean {
-  return selectedIds.value.includes(categoryId)
+  return selectedCategoryIds.value.includes(categoryId)
 }
 
 function handleConfirm() {
-  emit('confirm', selectedIds.value)
+  emit('confirm', selectedCategoryIds.value)
   emit('update:visible', false)
 }
 
 function handleCancel() {
   emit('update:visible', false)
+}
+
+function getFeedCount(categoryId: string): number {
+  const category = props.categories.find(c => c.id === categoryId)
+  return category?.feeds?.length || 0
 }
 </script>
 
@@ -78,12 +91,11 @@ function handleCancel() {
         @click.self="handleCancel"
       >
         <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
-          <!-- Header -->
           <div class="px-6 py-4 border-b border-gray-100 bg-gradient-to-r from-ink-50 to-white">
             <div class="flex items-center justify-between">
               <h3 class="text-lg font-semibold text-ink-black flex items-center gap-2">
-                <Icon icon="mdi:folder-multiple" width="20" height="20" class="text-ink-600" />
-                选择分类
+                <Icon icon="mdi:rss-box" width="20" height="20" class="text-ink-600" />
+                选择订阅源
               </h3>
               <button
                 class="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
@@ -93,13 +105,11 @@ function handleCancel() {
               </button>
             </div>
             <p class="text-xs text-ink-medium mt-1">
-              选择要生成AI总结的分类（单任务逐个处理）
+              选择分类，将为该分类下所有启用的订阅源生成AI总结
             </p>
           </div>
 
-          <!-- Content -->
           <div class="p-4 max-h-80 overflow-y-auto">
-            <!-- Select All -->
             <div
               class="flex items-center gap-3 p-3 rounded-xl mb-3 cursor-pointer transition-all"
               :class="selectAll ? 'bg-ink-50 border border-ink-200' : 'bg-gray-50 border border-transparent hover:bg-gray-100'"
@@ -125,7 +135,6 @@ function handleCancel() {
               </span>
             </div>
 
-            <!-- Categories List -->
             <div class="space-y-2">
               <div
                 v-for="category in categories"
@@ -153,19 +162,21 @@ function handleCancel() {
                   :style="{ color: category.color || '#3b6b87' }"
                 />
                 <span
-                  class="font-medium text-sm"
+                  class="font-medium text-sm flex-1"
                   :class="isSelected(category.id) ? 'text-ink-700' : 'text-ink-dark'"
                 >
                   {{ category.name }}
+                </span>
+                <span class="text-xs text-ink-light">
+                  {{ getFeedCount(category.id) }} 源
                 </span>
               </div>
             </div>
           </div>
 
-          <!-- Footer -->
           <div class="px-6 py-4 border-t border-gray-100 bg-gray-50 flex items-center justify-between">
             <span class="text-xs text-ink-medium">
-              已选择 {{ selectedIds.length }} 个分类
+              已选择 {{ selectedCategoryIds.length }} 个分类
             </span>
             <div class="flex items-center gap-2">
               <button
@@ -176,7 +187,7 @@ function handleCancel() {
               </button>
               <button
                 class="px-4 py-2 text-sm font-medium text-white bg-ink-600 rounded-lg hover:bg-ink-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
-                :disabled="selectedIds.length === 0 || loading"
+                :disabled="selectedCategoryIds.length === 0 || loading"
                 @click="handleConfirm"
               >
                 <Icon

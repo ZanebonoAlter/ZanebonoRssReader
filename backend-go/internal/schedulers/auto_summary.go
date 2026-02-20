@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -28,15 +29,7 @@ type AIConfig struct {
 	BaseURL   string `json:"base_url"`
 	APIKey    string `json:"api_key"`
 	Model     string `json:"model"`
-	TimeRange int    `json:"time_range"` // Time range in minutes for fetching articles
-}
-
-type GenerateSummaryRequest struct {
-	CategoryID *uint  `json:"category_id"`
-	TimeRange  int    `json:"time_range"`
-	BaseURL    string `json:"base_url"`
-	APIKey     string `json:"api_key"`
-	Model      string `json:"model"`
+	TimeRange int    `json:"time_range"`
 }
 
 func NewAutoSummaryScheduler(checkInterval int) *AutoSummaryScheduler {
@@ -52,7 +45,6 @@ func (s *AutoSummaryScheduler) Start() error {
 		return fmt.Errorf("auto-summary scheduler already running")
 	}
 
-	// Load AI config from database on startup
 	if err := s.loadAIConfig(); err != nil {
 		log.Printf("Warning: Failed to load AI config: %v", err)
 	}
@@ -80,7 +72,6 @@ func (s *AutoSummaryScheduler) Stop() {
 }
 
 func (s *AutoSummaryScheduler) SetAIConfig(baseURL, apiKey, model string, timeRange int) error {
-	// Default to 180 minutes if not specified
 	if timeRange <= 0 {
 		timeRange = 180
 	}
@@ -94,7 +85,6 @@ func (s *AutoSummaryScheduler) SetAIConfig(baseURL, apiKey, model string, timeRa
 
 	s.aiConfig = config
 
-	// Persist to database
 	configJSON, err := json.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal AI config: %w", err)
@@ -137,14 +127,12 @@ func (s *AutoSummaryScheduler) loadAIConfig() error {
 }
 
 func (s *AutoSummaryScheduler) checkAndGenerateSummaries() {
-	// Load latest config from database
 	if err := s.loadAIConfig(); err != nil {
 		log.Printf("AI config not available, skipping summary generation: %v", err)
 		s.updateSchedulerStatus("idle", "AI config not set", nil)
 		return
 	}
 
-	// Check if already executing
 	if !s.executionMutex.TryLock() {
 		log.Println("Summary generation already in progress, skipping this cycle")
 		return
@@ -154,7 +142,6 @@ func (s *AutoSummaryScheduler) checkAndGenerateSummaries() {
 	s.isExecuting = true
 	defer func() {
 		s.isExecuting = false
-		// Global panic recovery
 		if r := recover(); r != nil {
 			log.Printf("❌ PANIC in checkAndGenerateSummaries: %v", r)
 			s.updateSchedulerStatus("idle", fmt.Sprintf("Panic: %v", r), nil)
@@ -165,70 +152,62 @@ func (s *AutoSummaryScheduler) checkAndGenerateSummaries() {
 
 	startTime := time.Now()
 
-	// Update scheduler status to running
 	s.updateSchedulerStatus("running", "", nil)
 
-	// Get all categories
-	var categories []models.Category
-	if err := database.DB.Find(&categories).Error; err != nil {
-		log.Printf("Error fetching categories: %v", err)
+	var feeds []models.Feed
+	if err := database.DB.Where("ai_summary_enabled = ?", true).Preload("Category").Find(&feeds).Error; err != nil {
+		log.Printf("Error fetching feeds: %v", err)
 		s.updateSchedulerStatus("idle", err.Error(), &startTime)
 		return
 	}
 
-	if len(categories) == 0 {
-		log.Println("No categories found, skipping summary generation")
-		s.updateSchedulerStatus("idle", "No categories", &startTime)
+	if len(feeds) == 0 {
+		log.Println("No feeds with AI summary enabled found, skipping")
+		s.updateSchedulerStatus("idle", "No feeds enabled", &startTime)
 		return
 	}
 
-	log.Printf("Found %d categories to process", len(categories))
+	log.Printf("Found %d feeds to process", len(feeds))
 
 	successCount := 0
 	failedCount := 0
 
-	// Generate summary for each category
-	for i, category := range categories {
-		log.Printf("Processing category %d/%d: %s (ID: %d)", i+1, len(categories), category.Name, category.ID)
+	for i, feed := range feeds {
+		log.Printf("Processing feed %d/%d: %s (ID: %d)", i+1, len(feeds), feed.Title, feed.ID)
 
 		func() {
-			// Add panic recovery for each category to prevent one failure from stopping all
 			defer func() {
 				if r := recover(); r != nil {
-					log.Printf("❌ PANIC recovered while processing category %d (%s): %v", category.ID, category.Name, r)
+					log.Printf("❌ PANIC recovered while processing feed %d (%s): %v", feed.ID, feed.Title, r)
 					failedCount++
 				}
 			}()
 
-			result, err := s.generateSummaryForCategory(category.ID)
+			result, err := s.generateSummaryForFeed(&feed)
 			if err != nil {
-				log.Printf("❌ Error generating summary for category %d (%s): %v", category.ID, category.Name, err)
+				log.Printf("❌ Error generating summary for feed %d (%s): %v", feed.ID, feed.Title, err)
 				failedCount++
 			} else if result {
-				log.Printf("✓ Successfully generated summary for category %d (%s)", category.ID, category.Name)
+				log.Printf("✓ Successfully generated summary for feed %d (%s)", feed.ID, feed.Title)
 				successCount++
 			} else {
-				log.Printf("⊘ Skipped category %d (%s) - no content to summarize", category.ID, category.Name)
+				log.Printf("⊘ Skipped feed %d (%s) - no content to summarize", feed.ID, feed.Title)
 			}
 		}()
 	}
 
 	duration := time.Since(startTime)
-	resultMsg := fmt.Sprintf("Completed: %d generated, %d skipped, %d failed in %v", successCount, len(categories)-successCount-failedCount, failedCount, duration)
+	resultMsg := fmt.Sprintf("Completed: %d generated, %d skipped, %d failed in %v", successCount, len(feeds)-successCount-failedCount, failedCount, duration)
 
 	log.Printf("Auto-summary cycle completed: %s", resultMsg)
 	s.updateSchedulerStatus("idle", "", &startTime)
 }
 
-func (s *AutoSummaryScheduler) generateSummaryForCategory(categoryID uint) (bool, error) {
+func (s *AutoSummaryScheduler) generateSummaryForFeed(feed *models.Feed) (bool, error) {
 	if s.aiConfig == nil {
 		return false, fmt.Errorf("AI config not set")
 	}
 
-	categoryName := fmt.Sprintf("分类 ID %d", categoryID)
-	log.Printf("Starting summary generation for %s", categoryName)
-
-	// Use time range from config (default 180 minutes if not set)
 	timeRange := s.aiConfig.TimeRange
 	if timeRange <= 0 {
 		timeRange = 180
@@ -236,38 +215,20 @@ func (s *AutoSummaryScheduler) generateSummaryForCategory(categoryID uint) (bool
 	timeThreshold := time.Now().Add(-time.Duration(timeRange) * time.Minute)
 	log.Printf("Using time range: %d minutes (threshold: %s)", timeRange, timeThreshold.Format("2006-01-02 15:04:05"))
 
-	// Get feeds in this category with AI summary enabled
-	var feeds []models.Feed
-	if err := database.DB.Where("category_id = ? AND ai_summary_enabled = ?", categoryID, true).Find(&feeds).Error; err != nil {
-		return false, fmt.Errorf("failed to fetch feeds: %w", err)
-	}
-
-	if len(feeds) == 0 {
-		log.Printf("No feeds with AI summary enabled found for category %d", categoryID)
-		return false, nil // Not an error, just nothing to do
-	}
-
-	feedIDs := make([]uint, len(feeds))
-	for i, feed := range feeds {
-		feedIDs[i] = feed.ID
-	}
-
-	// Get articles from these feeds
 	var articles []models.Article
-	if err := database.DB.Where("feed_id IN ? AND pub_date >= ?", feedIDs, timeThreshold).
+	if err := database.DB.Where("feed_id = ? AND pub_date >= ?", feed.ID, timeThreshold).
 		Order("pub_date DESC").
 		Find(&articles).Error; err != nil {
 		return false, fmt.Errorf("failed to fetch articles: %w", err)
 	}
 
 	if len(articles) == 0 {
-		log.Printf("No recent articles found for category %d in the last %d minutes", categoryID, timeRange)
+		log.Printf("No recent articles found for feed %d in the last %d minutes", feed.ID, timeRange)
 		return false, nil
 	}
 
-	log.Printf("Found %d articles for category %d", len(articles), categoryID)
+	log.Printf("Found %d articles for feed %d", len(articles), feed.ID)
 
-	// Prepare article content
 	articleTexts := make([]string, 0, len(articles))
 	for i, article := range articles {
 		if i >= 50 {
@@ -293,18 +254,66 @@ func (s *AutoSummaryScheduler) generateSummaryForCategory(categoryID uint) (bool
 		articleTexts = append(articleTexts, text)
 	}
 
-	// Get category name
-	var category models.Category
-	database.DB.First(&category, categoryID)
-	categoryName = category.Name
+	feedName := feed.Title
+	if feedName == "" {
+		feedName = "未知订阅源"
+	}
 
-	title := categoryName + " - " + time.Now().Format("2006-01-02 15:04") + " 新闻汇总"
+	categoryName := ""
+	if feed.Category != nil {
+		categoryName = feed.Category.Name
+	}
+
+	title := feedName + " - " + time.Now().Format("2006-01-02 15:04") + " 新闻汇总"
 	articlesText := joinStrings(articleTexts, "\n---\n")
 
-	summaryPrompt := fmt.Sprintf(`请对以下来自"%s"分类的 %d 篇文章进行汇总总结。
+	summaryPrompt := buildFeedSummaryPrompt(feedName, categoryName, len(articles), articlesText)
+
+	summaryText, err := s.callAI(summaryPrompt)
+	if err != nil {
+		return false, fmt.Errorf("AI API call failed: %w", err)
+	}
+
+	articleIDs := make([]uint, len(articles))
+	for i, article := range articles {
+		articleIDs[i] = article.ID
+	}
+	articleIDsJSON, _ := json.Marshal(articleIDs)
+
+	var categoryID *uint
+	if feed.CategoryID != nil {
+		catIDVal := *feed.CategoryID
+		categoryID = &catIDVal
+	}
+
+	aiSummary := models.AISummary{
+		FeedID:       &feed.ID,
+		CategoryID:   categoryID,
+		Title:        title,
+		Summary:      summaryText,
+		Articles:     string(articleIDsJSON),
+		ArticleCount: len(articles),
+		TimeRange:    timeRange,
+	}
+
+	if err := database.DB.Create(&aiSummary).Error; err != nil {
+		return false, fmt.Errorf("failed to save summary: %w", err)
+	}
+
+	log.Printf("Successfully generated and saved summary for feed %d (ID: %d)", feed.ID, aiSummary.ID)
+	return true, nil
+}
+
+func buildFeedSummaryPrompt(feedName string, categoryName string, articleCount int, articlesText string) string {
+	catInfo := ""
+	if categoryName != "" {
+		catInfo = "（属于分类：" + categoryName + "）"
+	}
+
+	return `请对以下来自"` + feedName + `"订阅源` + catInfo + `的 ` + strconv.Itoa(articleCount) + ` 篇文章进行汇总总结。
 
 文章列表（按时间倒序）：
-%s
+` + articlesText + `
 
 请提供以下格式的总结：
 
@@ -317,55 +326,26 @@ func (s *AutoSummaryScheduler) generateSummaryForCategory(categoryID uint) (bool
 列出2-3个最重要的事件，每个事件包含：
 - 事件标题（用加粗）
 - 简要说明（2-3句话）
-- 引文标注新闻来源（使用 > [来源名称](链接) 格式）
+- 引文标注新闻来源（使用 > [文章标题](链接) 格式）
 
 ### 📰 其他重要新闻
 列出其他重要新闻，每条包含：
 - 新闻标题（用加粗）
 - 简要说明（1-2句话）
-- 引文标注新闻来源（使用 > [来源名称](链接) 格式）
+- 引文标注新闻来源（使用 > [文章标题](链接) 格式）
 
 ## 核心观点
 总结3-5个核心观点或趋势，每个观点用简洁的语言表达。
 
 ## 相关标签
-#标签1 #标签2 #标签3
+#` + feedName + ` #标签1 #标签2 #标签3
 
 **重要提醒**：
 1. 必须为每条新闻标注来源，使用引文格式
-2. 来源格式：> [来源订阅源名称](文章链接)
+2. 来源格式：> [文章标题](文章链接)
 3. 确保总结简洁明了，突出重点
-4. 保持客观中立的语气`,
-		categoryName, len(articles), articlesText)
-
-	// Call AI API
-	summaryText, err := s.callAI(summaryPrompt)
-	if err != nil {
-		return false, fmt.Errorf("AI API call failed: %w", err)
-	}
-
-	// Save to database
-	articleIDs := make([]uint, len(articles))
-	for i, article := range articles {
-		articleIDs[i] = article.ID
-	}
-	articleIDsJSON, _ := json.Marshal(articleIDs)
-
-	aiSummary := models.AISummary{
-		CategoryID:   &categoryID,
-		Title:        title,
-		Summary:      summaryText,
-		Articles:     string(articleIDsJSON),
-		ArticleCount: len(articles),
-		TimeRange:    timeRange,
-	}
-
-	if err := database.DB.Create(&aiSummary).Error; err != nil {
-		return false, fmt.Errorf("failed to save summary: %w", err)
-	}
-
-	log.Printf("Successfully generated and saved summary for category %d (ID: %d)", categoryID, aiSummary.ID)
-	return true, nil
+4. 保持客观中立的语气
+5. 标签中必须包含订阅源名称：#` + feedName
 }
 
 func (s *AutoSummaryScheduler) callAI(prompt string) (string, error) {
@@ -476,14 +456,12 @@ func (s *AutoSummaryScheduler) updateSchedulerStatus(status, lastError string, s
 			}
 			task.TotalExecutions++
 
-			// Calculate next execution time
 			nextExecution := now.Add(s.checkInterval)
 			task.NextExecutionTime = &nextExecution
 		}
 
 		database.DB.Save(&task)
 	} else {
-		// Create new scheduler task record
 		nextExecution := now.Add(s.checkInterval)
 		var durationFloat *float64
 		if startTime != nil {
@@ -494,7 +472,7 @@ func (s *AutoSummaryScheduler) updateSchedulerStatus(status, lastError string, s
 
 		task = models.SchedulerTask{
 			Name:                  "auto_summary",
-			Description:           "Auto-generate AI summaries for categories",
+			Description:           "Auto-generate AI summaries for feeds",
 			CheckInterval:         int(s.checkInterval.Seconds()),
 			Status:                status,
 			LastError:             lastError,
@@ -518,7 +496,6 @@ func (s *AutoSummaryScheduler) GetStatus() map[string]interface{} {
 		nextRun = entries[0].Next
 	}
 
-	// Get database state
 	var task models.SchedulerTask
 	err := database.DB.Where("name = ?", "auto_summary").First(&task).Error
 

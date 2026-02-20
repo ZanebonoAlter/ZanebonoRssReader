@@ -7,16 +7,29 @@ import (
 
 type AISummary struct {
 	ID           uint      `gorm:"primaryKey" json:"id"`
+	FeedID       *uint     `gorm:"index" json:"feed_id"`
 	CategoryID   *uint     `gorm:"index" json:"category_id"`
 	Title        string    `gorm:"size:200;not null" json:"title"`
 	Summary      string    `gorm:"type:text;not null" json:"summary"`
-	KeyPoints    string    `gorm:"type:text" json:"key_points"` // JSON array
-	Articles     string    `gorm:"type:text" json:"articles"`   // JSON array of article IDs
+	KeyPoints    string    `gorm:"type:text" json:"key_points"`
+	Articles     string    `gorm:"type:text" json:"articles"`
 	ArticleCount int       `gorm:"default:0" json:"article_count"`
-	TimeRange    int       `gorm:"default:180" json:"time_range"` // minutes
+	TimeRange    int       `gorm:"default:180" json:"time_range"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
+	Feed         *Feed     `gorm:"foreignKey:FeedID" json:"feed,omitempty"`
 	Category     *Category `gorm:"foreignKey:CategoryID" json:"category,omitempty"`
+}
+
+type AISummaryFeed struct {
+	ID           uint      `gorm:"primaryKey" json:"id"`
+	SummaryID    uint      `gorm:"not null;index" json:"summary_id"`
+	FeedID       uint      `gorm:"not null;index" json:"feed_id"`
+	FeedTitle    string    `gorm:"size:200" json:"feed_title"`
+	FeedIcon     string    `gorm:"size:50" json:"feed_icon"`
+	FeedColor    string    `gorm:"size:20" json:"feed_color"`
+	ArticleCount int       `gorm:"default:0" json:"article_count"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 func (a *AISummary) ToDict() map[string]interface{} {
@@ -25,8 +38,18 @@ func (a *AISummary) ToDict() map[string]interface{} {
 		categoryName = a.Category.Name
 	}
 
+	feedName := ""
+	feedIcon := ""
+	feedColor := ""
+	if a.Feed != nil {
+		feedName = a.Feed.Title
+		feedIcon = a.Feed.Icon
+		feedColor = a.Feed.Color
+	}
+
 	return map[string]interface{}{
 		"id":            a.ID,
+		"feed_id":       a.FeedID,
 		"category_id":   a.CategoryID,
 		"title":         a.Title,
 		"summary":       a.Summary,
@@ -37,6 +60,9 @@ func (a *AISummary) ToDict() map[string]interface{} {
 		"created_at":    FormatDatetimeCST(a.CreatedAt),
 		"updated_at":    FormatDatetimeCST(a.UpdatedAt),
 		"category_name": categoryName,
+		"feed_name":     feedName,
+		"feed_icon":     feedIcon,
+		"feed_color":    feedColor,
 	}
 }
 
@@ -111,4 +137,19 @@ func (a *AISettings) ToDict() map[string]interface{} {
 		"created_at":  FormatDatetimeCST(a.CreatedAt),
 		"updated_at":  FormatDatetimeCST(a.UpdatedAt),
 	}
+}
+
+func (a *AISettings) ParseValue(v interface{}) error {
+	if a.Value == "" {
+		return nil
+	}
+	return json.Unmarshal([]byte(a.Value), v)
+}
+
+func ToJSONValue(v interface{}) (string, error) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
 }

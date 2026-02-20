@@ -166,11 +166,8 @@ func SetupRoutes(r *gin.Engine) {
 		summaries := api.Group("/summaries")
 		{
 			summaries.GET("", handlers.GetSummaries)
-			summaries.POST("/generate", handlers.GenerateSummary)
-			summaries.POST("/auto-generate", handlers.AutoGenerateSummary)
 			summaries.GET("/:summary_id", handlers.GetSummary)
 			summaries.DELETE("/:summary_id", handlers.DeleteSummary)
-			// 队列相关API
 			summaries.POST("/queue", handlers.SubmitQueueSummary)
 			summaries.GET("/queue/status", handlers.GetQueueStatus)
 			summaries.GET("/queue/jobs/:job_id", handlers.GetQueueJob)

@@ -4,6 +4,7 @@ import type { SummaryBatch, SummaryJob } from '~/types'
 
 interface AISummary {
   id: number
+  feed_id: number | null
   category_id: number | null
   title: string
   summary: string
@@ -14,13 +15,15 @@ interface AISummary {
   created_at: string
   updated_at: string
   category_name: string
+  feed_name: string
+  feed_icon: string
+  feed_color: string
 }
 
 const props = defineProps<{
   categoryId?: string | null
 }>()
 
-// Get feeds store to access categories
 const feedsStore = useFeedsStore()
 
 const emit = defineEmits<{
@@ -651,7 +654,7 @@ defineExpose({
               width="12"
               height="12"
             />
-            <span class="flex-1 text-ink-dark">{{ job.category_name }}</span>
+            <span class="flex-1 text-ink-dark">{{ job.feed_name || job.category_name }}</span>
             <span
               v-if="job.status === 'failed'"
               class="text-red-500 text-right flex items-center gap-1 cursor-pointer hover:underline"
@@ -727,11 +730,21 @@ defineExpose({
         >
           <div class="flex items-start justify-between mb-2">
             <div class="flex-1 min-w-0">
-              <h3 class="font-medium text-ink-black text-sm truncate">
-                {{ summary.title }}
+              <h3 class="font-medium text-ink-black text-sm truncate flex items-center gap-1.5">
+                <Icon
+                  v-if="summary.feed_icon"
+                  :icon="summary.feed_icon"
+                  width="14"
+                  height="14"
+                  :style="{ color: summary.feed_color || '#3b6b87' }"
+                />
+                {{ summary.feed_name || summary.title }}
               </h3>
-              <div class="flex items-center gap-2 mt-1 text-xs text-ink-light">
-                <span class="bg-ink-50 text-ink-700 px-2 py-0.5 rounded-full">
+              <div class="flex items-center gap-2 mt-1 text-xs text-ink-light flex-wrap">
+                <span
+                  v-if="summary.category_name"
+                  class="bg-ink-50 text-ink-700 px-2 py-0.5 rounded-full"
+                >
                   {{ summary.category_name }}
                 </span>
                 <span>{{ summary.article_count }} 篇文章</span>

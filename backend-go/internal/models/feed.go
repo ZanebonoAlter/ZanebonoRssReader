@@ -15,7 +15,7 @@ type Feed struct {
 	LastUpdated              *time.Time `json:"last_updated"`
 	CreatedAt                time.Time  `json:"created_at"`
 	MaxArticles              int        `gorm:"default:100" json:"max_articles"`
-	RefreshInterval          int        `gorm:"default:60" json:"refresh_interval"` // minutes
+	RefreshInterval          int        `gorm:"default:60" json:"refresh_interval"`
 	RefreshStatus            string     `gorm:"size:20;default:idle" json:"refresh_status"`
 	RefreshError             string     `gorm:"type:text" json:"refresh_error"`
 	LastRefreshAt            *time.Time `json:"last_refresh_at"`
@@ -25,6 +25,7 @@ type Feed struct {
 	MaxCompletionRetries     int        `gorm:"default:3" json:"max_completion_retries"`
 	FirecrawlEnabled         bool       `gorm:"default:false" json:"firecrawl_enabled"`
 	Articles                 []Article  `gorm:"foreignKey:FeedID;constraint:OnDelete:CASCADE" json:"articles,omitempty"`
+	Category                 *Category  `gorm:"foreignKey:CategoryID" json:"category,omitempty"`
 }
 
 func (f *Feed) ToDict(includeStats bool) map[string]interface{} {

@@ -4,6 +4,7 @@ import { marked } from 'marked'
 
 interface AISummary {
   id: number
+  feed_id: number | null
   category_id: number | null
   title: string
   summary: string
@@ -14,6 +15,9 @@ interface AISummary {
   created_at: string
   updated_at: string
   category_name: string
+  feed_name: string
+  feed_icon: string
+  feed_color: string
 }
 
 const props = defineProps<{
@@ -24,9 +28,8 @@ const emit = defineEmits<{
   'close': []
 }>()
 
-// Watch for summary changes to log for debugging
 watch(() => props.summary, (newSummary) => {
-  console.log('Summary changed:', newSummary?.id, newSummary?.title)
+  console.log('Summary changed:', newSummary?.id, newSummary?.feed_name)
 }, { immediate: true })
 
 const renderedSummary = computed(() => {
@@ -60,17 +63,27 @@ const formatTimeRange = (minutes: number): string => {
     v-if="summary"
     class="h-full flex flex-col"
   >
-    <!-- Header -->
     <div class="flex-shrink-0 bg-white/95 backdrop-blur-sm border-b border-ink-200 px-6 py-4 flex items-center justify-between shadow-subtle">
       <div>
         <h1 class="text-xl font-bold text-ink-black flex items-center gap-2">
-          <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-ink-500 to-ink-700 flex items-center justify-center shadow-md">
-            <Icon icon="mdi:brain" width="18" height="18" class="text-white" />
+          <div
+            class="w-8 h-8 rounded-lg flex items-center justify-center shadow-md"
+            :style="{ backgroundColor: summary.feed_color || '#3b6b87' }"
+          >
+            <Icon
+              :icon="summary.feed_icon || 'mdi:rss'"
+              width="18"
+              height="18"
+              class="text-white"
+            />
           </div>
-          {{ summary.title }}
+          {{ summary.feed_name || summary.title }}
         </h1>
         <div class="flex items-center gap-2 mt-2.5 flex-wrap">
-          <span class="px-3 py-1 rounded-full text-xs font-medium bg-ink-100 text-ink-700">
+          <span
+            v-if="summary.category_name"
+            class="px-3 py-1 rounded-full text-xs font-medium bg-ink-100 text-ink-700"
+          >
             {{ summary.category_name }}
           </span>
           <span class="flex items-center gap-1 text-xs text-ink-medium">
@@ -95,9 +108,7 @@ const formatTimeRange = (minutes: number): string => {
       </button>
     </div>
 
-    <!-- Content -->
     <div class="flex-1 overflow-y-auto p-6">
-      <!-- Summary -->
       <div class="prose max-w-none">
         <div
           v-html="renderedSummary"
@@ -107,7 +118,6 @@ const formatTimeRange = (minutes: number): string => {
     </div>
   </div>
 
-  <!-- Empty state -->
   <div
     v-else
     class="h-full flex items-center justify-center paper-card rounded-lg"
@@ -123,7 +133,6 @@ const formatTimeRange = (minutes: number): string => {
 </template>
 
 <style scoped>
-/* AI Summary Content Styling - Editorial Theme */
 .ai-summary-content {
   color: var(--color-ink-dark);
   line-height: 1.75;

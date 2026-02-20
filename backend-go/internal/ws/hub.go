@@ -50,9 +50,11 @@ type SummaryProgressMessage struct {
 // JobUpdate 单个任务更新
 type JobUpdate struct {
 	ID           string `json:"id"`
+	FeedID       *uint  `json:"feed_id"`
+	FeedName     string `json:"feed_name"`
 	CategoryID   *uint  `json:"category_id"`
 	CategoryName string `json:"category_name"`
-	Status       string `json:"status"` // pending/processing/completed/failed
+	Status       string `json:"status"`
 	ErrorMessage string `json:"error_message,omitempty"`
 	ErrorCode    string `json:"error_code,omitempty"`
 	ResultID     *uint  `json:"result_id,omitempty"`

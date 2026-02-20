@@ -7,6 +7,7 @@
  */
 export interface AISummary {
   id: number
+  feed_id: number | null
   category_id: number | null
   title: string
   summary: string
@@ -17,6 +18,9 @@ export interface AISummary {
   created_at: string
   updated_at: string
   category_name: string
+  feed_name: string
+  feed_icon: string
+  feed_color: string
 }
 
 /**
@@ -45,8 +49,9 @@ export interface AISummaryData {
  * AI 生成总结请求数据
  */
 export interface GenerateSummaryData {
+  feed_id?: number | null
   category_id?: number | null
-  category_ids?: number[]  // 多分类选择
+  category_ids?: number[]
   time_range?: number
   base_url: string
   api_key: string
@@ -64,6 +69,10 @@ export type SummaryJobStatus = 'pending' | 'processing' | 'completed' | 'failed'
 export interface SummaryJob {
   id: string
   batch_id: string
+  feed_id: number | null
+  feed_name: string
+  feed_icon: string
+  feed_color: string
   category_id: number | null
   category_name: string
   status: SummaryJobStatus
@@ -93,7 +102,8 @@ export interface SummaryBatch {
  * 队列总结请求数据
  */
 export interface QueueSummaryRequest {
-  category_ids: number[]
+  category_ids?: number[]
+  feed_ids?: number[]
   time_range?: number
   base_url: string
   api_key: string

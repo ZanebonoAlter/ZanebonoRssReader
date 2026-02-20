@@ -14,7 +14,6 @@ import (
 	"my-robot-backend/pkg/database"
 )
 
-// SummaryJobStatus 任务状态
 type SummaryJobStatus string
 
 const (
@@ -24,10 +23,13 @@ const (
 	JobFailed     SummaryJobStatus = "failed"
 )
 
-// SummaryJob 单个总结任务
 type SummaryJob struct {
 	ID           string           `json:"id"`
 	BatchID      string           `json:"batch_id"`
+	FeedID       *uint            `json:"feed_id"`
+	FeedName     string           `json:"feed_name"`
+	FeedIcon     string           `json:"feed_icon"`
+	FeedColor    string           `json:"feed_color"`
 	CategoryID   *uint            `json:"category_id"`
 	CategoryName string           `json:"category_name"`
 	Status       SummaryJobStatus `json:"status"`
@@ -39,10 +41,9 @@ type SummaryJob struct {
 	CompletedAt  *time.Time       `json:"completed_at,omitempty"`
 }
 
-// SummaryBatch 批次信息
 type SummaryBatch struct {
 	ID            string        `json:"id"`
-	Status        string        `json:"status"` // pending/processing/completed
+	Status        string        `json:"status"`
 	TotalJobs     int           `json:"total_jobs"`
 	CompletedJobs int           `json:"completed_jobs"`
 	FailedJobs    int           `json:"failed_jobs"`
@@ -51,7 +52,6 @@ type SummaryBatch struct {
 	Jobs          []*SummaryJob `json:"jobs"`
 }
 
-// SummaryQueue 总结队列管理器
 type SummaryQueue struct {
 	mu           sync.RWMutex
 	currentBatch *SummaryBatch
@@ -64,7 +64,6 @@ var (
 	queueOnce     sync.Once
 )
 
-// GetSummaryQueue 获取队列单例
 func GetSummaryQueue() *SummaryQueue {
 	queueOnce.Do(func() {
 		queueInstance = &SummaryQueue{
@@ -74,7 +73,6 @@ func GetSummaryQueue() *SummaryQueue {
 	return queueInstance
 }
 
-// AIConfig AI配置
 type AIConfig struct {
 	BaseURL   string
 	APIKey    string
@@ -82,38 +80,48 @@ type AIConfig struct {
 	TimeRange int
 }
 
-// SubmitBatch 提交新批次（覆盖旧批次）
 func (q *SummaryQueue) SubmitBatch(categoryIDs []uint, config AIConfig) *SummaryBatch {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	// 停止旧批次（如果有）
 	if q.running {
 		close(q.stopChan)
 		q.stopChan = make(chan struct{})
 	}
 
-	// 获取分类名称
-	categoryNames := make(map[uint]string)
-	var categories []models.Category
-	database.DB.Find(&categories)
-	for _, cat := range categories {
-		categoryNames[cat.ID] = cat.Name
+	var feeds []models.Feed
+	if len(categoryIDs) > 0 {
+		database.DB.Where("category_id IN ? AND ai_summary_enabled = ?", categoryIDs, true).
+			Preload("Category").
+			Find(&feeds)
+	} else {
+		database.DB.Where("ai_summary_enabled = ?", true).
+			Preload("Category").
+			Find(&feeds)
 	}
 
 	batchID := generateBatchID()
-	jobs := make([]*SummaryJob, 0, len(categoryIDs))
+	jobs := make([]*SummaryJob, 0, len(feeds))
 	now := time.Now()
 
-	for _, catID := range categoryIDs {
-		catName := categoryNames[catID]
-		if catName == "" {
-			catName = "未知分类"
+	for _, feed := range feeds {
+		feedIDCopy := feed.ID
+		var catID *uint
+		var catName string
+		if feed.Category != nil && feed.CategoryID != nil {
+			catIDVal := *feed.CategoryID
+			catID = &catIDVal
+			catName = feed.Category.Name
 		}
+
 		job := &SummaryJob{
 			ID:           generateJobID(),
 			BatchID:      batchID,
-			CategoryID:   &catID,
+			FeedID:       &feedIDCopy,
+			FeedName:     feed.Title,
+			FeedIcon:     feed.Icon,
+			FeedColor:    feed.Color,
+			CategoryID:   catID,
 			CategoryName: catName,
 			Status:       JobPending,
 			CreatedAt:    now,
@@ -132,21 +140,18 @@ func (q *SummaryQueue) SubmitBatch(categoryIDs []uint, config AIConfig) *Summary
 		Jobs:          jobs,
 	}
 
-	// 启动处理
 	q.running = true
 	go q.processBatch(config)
 
 	return q.currentBatch
 }
 
-// GetCurrentBatch 获取当前批次
 func (q *SummaryQueue) GetCurrentBatch() *SummaryBatch {
 	q.mu.RLock()
 	defer q.mu.RUnlock()
 	return q.currentBatch
 }
 
-// GetJob 获取单个任务
 func (q *SummaryQueue) GetJob(jobID string) *SummaryJob {
 	q.mu.RLock()
 	defer q.mu.RUnlock()
@@ -163,7 +168,6 @@ func (q *SummaryQueue) GetJob(jobID string) *SummaryJob {
 	return nil
 }
 
-// broadcastProgress 广播进度更新
 func (q *SummaryQueue) broadcastProgress(currentJob *SummaryJob) {
 	if q.currentBatch == nil {
 		return
@@ -171,11 +175,12 @@ func (q *SummaryQueue) broadcastProgress(currentJob *SummaryJob) {
 
 	hub := ws.GetHub()
 
-	// 构建所有任务的更新列表
 	jobs := make([]ws.JobUpdate, len(q.currentBatch.Jobs))
 	for i, job := range q.currentBatch.Jobs {
 		jobs[i] = ws.JobUpdate{
 			ID:           job.ID,
+			FeedID:       job.FeedID,
+			FeedName:     job.FeedName,
 			CategoryID:   job.CategoryID,
 			CategoryName: job.CategoryName,
 			Status:       string(job.Status),
@@ -198,6 +203,8 @@ func (q *SummaryQueue) broadcastProgress(currentJob *SummaryJob) {
 	if currentJob != nil {
 		msg.CurrentJob = &ws.JobUpdate{
 			ID:           currentJob.ID,
+			FeedID:       currentJob.FeedID,
+			FeedName:     currentJob.FeedName,
 			CategoryID:   currentJob.CategoryID,
 			CategoryName: currentJob.CategoryName,
 			Status:       string(currentJob.Status),
@@ -210,13 +217,11 @@ func (q *SummaryQueue) broadcastProgress(currentJob *SummaryJob) {
 	hub.BroadcastProgress(msg)
 }
 
-// processBatch 处理批次（单并发）
 func (q *SummaryQueue) processBatch(config AIConfig) {
 	q.mu.Lock()
 	q.currentBatch.Status = "processing"
 	q.mu.Unlock()
 
-	// 广播开始处理
 	q.broadcastProgress(nil)
 
 	for _, job := range q.currentBatch.Jobs {
@@ -236,23 +241,18 @@ func (q *SummaryQueue) processBatch(config AIConfig) {
 	q.running = false
 	q.mu.Unlock()
 
-	// 广播完成
 	q.broadcastProgress(nil)
 }
 
-// processJob 处理单个任务
 func (q *SummaryQueue) processJob(job *SummaryJob, config AIConfig) {
-	// 更新状态为处理中
 	q.mu.Lock()
 	job.Status = JobProcessing
 	job.UpdatedAt = time.Now()
 	q.mu.Unlock()
 
-	// 广播开始处理
 	q.broadcastProgress(job)
 
-	// 执行总结
-	result, err := q.generateSummaryForCategory(job.CategoryID, config)
+	result, err := q.generateSummaryForFeed(job.FeedID, job.CategoryID, job.FeedName, job.CategoryName, config)
 
 	q.mu.Lock()
 
@@ -273,12 +273,10 @@ func (q *SummaryQueue) processJob(job *SummaryJob, config AIConfig) {
 
 	q.mu.Unlock()
 
-	// 广播完成
 	q.broadcastProgress(job)
 }
 
-// generateSummaryForCategory 为单个分类生成总结
-func (q *SummaryQueue) generateSummaryForCategory(categoryID *uint, config AIConfig) (*models.AISummary, error) {
+func (q *SummaryQueue) generateSummaryForFeed(feedID *uint, categoryID *uint, feedName string, categoryName string, config AIConfig) (*models.AISummary, error) {
 	timeRange := config.TimeRange
 	if timeRange == 0 {
 		timeRange = 180
@@ -286,39 +284,19 @@ func (q *SummaryQueue) generateSummaryForCategory(categoryID *uint, config AICon
 
 	timeThreshold := time.Now().Add(-time.Duration(timeRange) * time.Minute)
 
-	// 获取文章
 	var articles []models.Article
-	if categoryID != nil {
-		var feeds []models.Feed
-		database.DB.Where("category_id = ? AND ai_summary_enabled = ?", *categoryID, true).Find(&feeds)
-
-		feedIDs := make([]uint, len(feeds))
-		for i, feed := range feeds {
-			feedIDs[i] = feed.ID
-		}
-
-		database.DB.Where("feed_id IN ? AND pub_date >= ?", feedIDs, timeThreshold).
+	if feedID != nil {
+		database.DB.Where("feed_id = ? AND pub_date >= ?", *feedID, timeThreshold).
 			Order("pub_date DESC").
 			Find(&articles)
 	} else {
-		var feeds []models.Feed
-		database.DB.Where("ai_summary_enabled = ?", true).Find(&feeds)
-
-		feedIDs := make([]uint, len(feeds))
-		for i, feed := range feeds {
-			feedIDs[i] = feed.ID
-		}
-
-		database.DB.Where("feed_id IN ? AND pub_date >= ?", feedIDs, timeThreshold).
-			Order("pub_date DESC").
-			Find(&articles)
+		return nil, &SummaryError{Code: "NO_FEED", Message: "未指定订阅源"}
 	}
 
 	if len(articles) == 0 {
-		return nil, &SummaryError{Code: "NO_ARTICLES", Message: "该分类下没有找到文章"}
+		return nil, &SummaryError{Code: "NO_ARTICLES", Message: "该订阅源下没有找到文章"}
 	}
 
-	// 准备文章内容
 	articleTexts := make([]string, 0, len(articles))
 	for i, article := range articles {
 		if i >= 50 {
@@ -344,55 +322,16 @@ func (q *SummaryQueue) generateSummaryForCategory(categoryID *uint, config AICon
 		articleTexts = append(articleTexts, text)
 	}
 
-	// 生成标题
-	categoryName := "全部分类"
-	if categoryID != nil {
-		var category models.Category
-		database.DB.First(&category, *categoryID)
-		categoryName = category.Name
+	displayName := feedName
+	if displayName == "" {
+		displayName = "未知订阅源"
 	}
 
-	title := categoryName + " - " + time.Now().Format("2006-01-02 15:04") + " 新闻汇总"
+	title := displayName + " - " + time.Now().Format("2006-01-02 15:04") + " 新闻汇总"
 
-	// 准备提示词
 	articlesText := joinStrings(articleTexts, "\n---\n")
-	summaryPrompt := `请对以下来自"` + categoryName + `"分类的 ` + strconv.Itoa(len(articles)) + ` 篇文章进行汇总总结。
+	summaryPrompt := buildFeedSummaryPrompt(displayName, categoryName, len(articles), articlesText)
 
-文章列表（按时间倒序）：
-` + articlesText + `
-
-请提供以下格式的总结：
-
-## 核心主题
-用一句话概括这批文章的核心主题和趋势。
-
-## 重要新闻
-
-### 🔥 热点事件
-列出2-3个最重要的事件，每个事件包含：
-- 事件标题（用加粗）
-- 简要说明（2-3句话）
-- 引文标注新闻来源（使用 > [来源名称](链接) 格式）
-
-### 📰 其他重要新闻
-列出其他重要新闻，每条包含：
-- 新闻标题（用加粗）
-- 简要说明（1-2句话）
-- 引文标注新闻来源（使用 > [来源名称](链接) 格式）
-
-## 核心观点
-总结3-5个核心观点或趋势，每个观点用简洁的语言表达。
-
-## 相关标签
-#标签1 #标签2 #标签3
-
-**重要提醒**：
-1. 必须为每条新闻标注来源，使用引文格式
-2. 来源格式：> [来源订阅源名称](文章链接)
-3. 确保总结简洁明了，突出重点
-4. 保持客观中立的语气`
-
-	// 调用AI API
 	type openAIMessage struct {
 		Role    string `json:"role"`
 		Content string `json:"content"`
@@ -460,7 +399,6 @@ func (q *SummaryQueue) generateSummaryForCategory(categoryID *uint, config AICon
 
 	summaryText := openAIResp.Choices[0].Message.Content
 
-	// 保存到数据库
 	articleIDs := make([]uint, len(articles))
 	for i, article := range articles {
 		articleIDs[i] = article.ID
@@ -468,6 +406,7 @@ func (q *SummaryQueue) generateSummaryForCategory(categoryID *uint, config AICon
 	articleIDsJSON, _ := json.Marshal(articleIDs)
 
 	aiSummary := models.AISummary{
+		FeedID:       feedID,
 		CategoryID:   categoryID,
 		Title:        title,
 		Summary:      summaryText,
@@ -483,7 +422,50 @@ func (q *SummaryQueue) generateSummaryForCategory(categoryID *uint, config AICon
 	return &aiSummary, nil
 }
 
-// SummaryError 自定义错误类型
+func buildFeedSummaryPrompt(feedName string, categoryName string, articleCount int, articlesText string) string {
+	catInfo := ""
+	if categoryName != "" {
+		catInfo = "（属于分类：" + categoryName + "）"
+	}
+
+	return `请对以下来自"` + feedName + `"订阅源` + catInfo + `的 ` + strconv.Itoa(articleCount) + ` 篇文章进行汇总总结。
+
+文章列表（按时间倒序）：
+` + articlesText + `
+
+请提供以下格式的总结：
+
+## 核心主题
+用一句话概括这批文章的核心主题和趋势。
+
+## 重要新闻
+
+### 🔥 热点事件
+列出2-3个最重要的事件，每个事件包含：
+- 事件标题（用加粗）
+- 简要说明（2-3句话）
+- 引文标注新闻来源（使用 > [文章标题](链接) 格式）
+
+### 📰 其他重要新闻
+列出其他重要新闻，每条包含：
+- 新闻标题（用加粗）
+- 简要说明（1-2句话）
+- 引文标注新闻来源（使用 > [文章标题](链接) 格式）
+
+## 核心观点
+总结3-5个核心观点或趋势，每个观点用简洁的语言表达。
+
+## 相关标签
+#` + feedName + ` #标签1 #标签2 #标签3
+
+**重要提醒**：
+1. 必须为每条新闻标注来源，使用引文格式
+2. 来源格式：> [文章标题](文章链接)
+3. 确保总结简洁明了，突出重点
+4. 保持客观中立的语气
+5. 标签中必须包含订阅源名称：#` + feedName
+}
+
 type SummaryError struct {
 	Code    string
 	Message string
@@ -493,7 +475,6 @@ func (e *SummaryError) Error() string {
 	return e.Message
 }
 
-// classifyError 分类错误
 func classifyError(err error) string {
 	if summaryErr, ok := err.(*SummaryError); ok {
 		return summaryErr.Code
@@ -501,7 +482,6 @@ func classifyError(err error) string {
 	return "UNKNOWN"
 }
 
-// joinStrings 连接字符串
 func joinStrings(strs []string, sep string) string {
 	if len(strs) == 0 {
 		return ""
@@ -513,12 +493,10 @@ func joinStrings(strs []string, sep string) string {
 	return result
 }
 
-// generateBatchID 生成批次ID
 func generateBatchID() string {
 	return strconv.FormatInt(time.Now().UnixNano(), 36)
 }
 
-// generateJobID 生成任务ID
 func generateJobID() string {
 	return strconv.FormatInt(time.Now().UnixNano(), 36) + strconv.Itoa(int(time.Now().UnixNano()%1000))
 }
