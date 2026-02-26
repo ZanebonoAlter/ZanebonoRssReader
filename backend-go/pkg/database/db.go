@@ -94,6 +94,10 @@ func EnsureTables() error {
 				refresh_error TEXT,
 				last_refresh_at DATETIME,
 				ai_summary_enabled BOOLEAN DEFAULT 1,
+				content_completion_enabled BOOLEAN DEFAULT 0,
+				completion_on_refresh BOOLEAN DEFAULT 1,
+				max_completion_retries INTEGER DEFAULT 3,
+				firecrawl_enabled BOOLEAN DEFAULT 0,
 				FOREIGN KEY(category_id) REFERENCES categories(id) ON DELETE CASCADE
 			)`,
 		"articles": `
@@ -104,10 +108,22 @@ func EnsureTables() error {
 				description TEXT,
 				content TEXT,
 				link VARCHAR(1000),
+				image_url VARCHAR(1000),
 				pub_date DATETIME,
 				author VARCHAR(200),
 				read BOOLEAN DEFAULT 0,
 				favorite BOOLEAN DEFAULT 0,
+				content_status VARCHAR(20) DEFAULT 'complete',
+				full_content TEXT,
+				content_fetched_at DATETIME,
+				completion_attempts INTEGER DEFAULT 0,
+				completion_error TEXT,
+				ai_content_summary TEXT,
+				firecrawl_enabled BOOLEAN DEFAULT 0,
+				firecrawl_status VARCHAR(20) DEFAULT 'pending',
+				firecrawl_error TEXT,
+				firecrawl_content TEXT,
+				firecrawl_crawled_at DATETIME,
 				created_at DATETIME,
 				FOREIGN KEY(feed_id) REFERENCES feeds(id) ON DELETE CASCADE
 			)`,
@@ -269,6 +285,58 @@ func runMigrations() error {
 			log.Printf("Warning: Failed to add feed_id column: %v", err)
 		} else {
 			log.Println("✓ feed_id column added to ai_summaries")
+		}
+	}
+
+	articleMigrations := []struct {
+		colName string
+		colType string
+	}{
+		{"image_url", "VARCHAR(1000)"},
+		{"content_status", "VARCHAR(20) DEFAULT 'complete'"},
+		{"full_content", "TEXT"},
+		{"content_fetched_at", "DATETIME"},
+		{"completion_attempts", "INTEGER DEFAULT 0"},
+		{"completion_error", "TEXT"},
+		{"ai_content_summary", "TEXT"},
+		{"firecrawl_enabled", "BOOLEAN DEFAULT 0"},
+		{"firecrawl_status", "VARCHAR(20) DEFAULT 'pending'"},
+		{"firecrawl_error", "TEXT"},
+		{"firecrawl_content", "TEXT"},
+		{"firecrawl_crawled_at", "DATETIME"},
+	}
+
+	for _, m := range articleMigrations {
+		if !columnExists("articles", m.colName) {
+			log.Printf("Adding %s column to articles table...", m.colName)
+			sql := fmt.Sprintf("ALTER TABLE articles ADD COLUMN %s %s", m.colName, m.colType)
+			if err := DB.Exec(sql).Error; err != nil {
+				log.Printf("Warning: Failed to add %s column: %v", m.colName, err)
+			} else {
+				log.Printf("✓ %s column added to articles", m.colName)
+			}
+		}
+	}
+
+	feedMigrations := []struct {
+		colName string
+		colType string
+	}{
+		{"content_completion_enabled", "BOOLEAN DEFAULT 0"},
+		{"completion_on_refresh", "BOOLEAN DEFAULT 1"},
+		{"max_completion_retries", "INTEGER DEFAULT 3"},
+		{"firecrawl_enabled", "BOOLEAN DEFAULT 0"},
+	}
+
+	for _, m := range feedMigrations {
+		if !columnExists("feeds", m.colName) {
+			log.Printf("Adding %s column to feeds table...", m.colName)
+			sql := fmt.Sprintf("ALTER TABLE feeds ADD COLUMN %s %s", m.colName, m.colType)
+			if err := DB.Exec(sql).Error; err != nil {
+				log.Printf("Warning: Failed to add %s column: %v", m.colName, err)
+			} else {
+				log.Printf("✓ %s column added to feeds", m.colName)
+			}
 		}
 	}
 

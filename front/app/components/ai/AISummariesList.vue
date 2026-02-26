@@ -25,17 +25,23 @@ const props = defineProps<{
 }>()
 
 const feedsStore = useFeedsStore()
+const apiStore = useApiStore()
 
 const emit = defineEmits<{
   'select': [summary: AISummary]
 }>()
 
-const apiStore = useApiStore()
 const loading = ref(false)
 const summaries = ref<AISummary[]>([])
 const error = ref<string | null>(null)
 const generating = ref(false)
 const selectedSummaryId = ref<number | null>(null)
+
+// Category/Feed filter
+const showCategoryFilter = ref(false)
+const selectedCategoryId = ref<string | null>(null)
+const selectedFeedId = ref<string | null>(null)
+const expandedCategories = ref<Set<string>>(new Set())
 
 // 队列相关状态
 const showCategoryDialog = ref(false)
@@ -107,6 +113,52 @@ const quickDateOptions: QuickDateOption[] = [
 ]
 
 const selectedQuickDate = ref<number | null>(null)
+
+// Get categories with feeds
+const categoriesWithFeeds = computed(() => {
+  const categoryMap = new Map<string, { id: string; name: string; feeds: { id: string; title: string; icon: string; color: string }[] }>()
+  
+  const allCategory = { id: 'all', name: '全部分类', feeds: [] }
+  categoryMap.set('all', allCategory)
+  
+  feedsStore.categories.forEach(cat => {
+    categoryMap.set(cat.id, {
+      id: cat.id,
+      name: cat.name,
+      feeds: []
+    })
+  })
+  
+  apiStore.allFeeds.forEach(feed => {
+    const catId = feed.category || 'all'
+    const cat = categoryMap.get(catId)
+    if (cat) {
+      cat.feeds.push({
+        id: feed.id,
+        title: feed.title,
+        icon: feed.icon || 'mdi:rss',
+        color: feed.color || '#6b7280'
+      })
+    }
+  })
+  
+  return Array.from(categoryMap.values())
+})
+
+const selectedCategoryName = computed(() => {
+  if (!selectedCategoryId.value) return null
+  const cat = categoriesWithFeeds.value.find(c => c.id === selectedCategoryId.value)
+  return cat?.name || null
+})
+
+const selectedFeedName = computed(() => {
+  if (!selectedFeedId.value) return null
+  for (const cat of categoriesWithFeeds.value) {
+    const feed = cat.feeds.find(f => f.id === selectedFeedId.value)
+    if (feed) return feed.title
+  }
+  return null
+})
 
 // Generation status tracking (旧版兼容)
 interface GenerationStatus {
@@ -223,7 +275,12 @@ async function fetchSummaries(resetPage = false) {
     per_page: pageSize.value
   }
 
-  if (props.categoryId && props.categoryId !== 'all') {
+  // Category/Feed filter (takes precedence over prop)
+  if (selectedFeedId.value) {
+    params.feed_id = parseInt(selectedFeedId.value)
+  } else if (selectedCategoryId.value && selectedCategoryId.value !== 'all') {
+    params.category_id = parseInt(selectedCategoryId.value)
+  } else if (props.categoryId && props.categoryId !== 'all') {
     params.category_id = parseInt(props.categoryId)
   }
 
@@ -458,10 +515,49 @@ function selectSummary(summary: AISummary) {
   emit('select', summary)
 }
 
+// Category filter functions
+function toggleCategoryExpand(categoryId: string) {
+  if (expandedCategories.value.has(categoryId)) {
+    expandedCategories.value.delete(categoryId)
+  } else {
+    expandedCategories.value.add(categoryId)
+  }
+}
+
+function selectCategory(categoryId: string) {
+  if (selectedCategoryId.value === categoryId && !selectedFeedId.value) {
+    clearCategoryFilter()
+  } else {
+    selectedCategoryId.value = categoryId === 'all' ? null : categoryId
+    selectedFeedId.value = null
+    showCategoryFilter.value = false
+    fetchSummaries(true)
+  }
+}
+
+function selectFeed(feedId: string, categoryId: string) {
+  if (selectedFeedId.value === feedId) {
+    clearCategoryFilter()
+  } else {
+    selectedFeedId.value = feedId
+    selectedCategoryId.value = categoryId === 'all' ? null : categoryId
+    showCategoryFilter.value = false
+    fetchSummaries(true)
+  }
+}
+
+function clearCategoryFilter() {
+  selectedCategoryId.value = null
+  selectedFeedId.value = null
+  expandedCategories.value.clear()
+  fetchSummaries(true)
+}
+
 // Expose methods for parent component
 defineExpose({
   fetchSummaries,
-  clearDateFilter
+  clearDateFilter,
+  clearCategoryFilter
 })
 </script>
 
@@ -503,9 +599,32 @@ defineExpose({
         </div>
       </div>
 
-      <!-- Filter Bar - First Row -->
+<!-- Filter Bar - First Row -->
       <div class="filter-bar">
         <div class="filter-left">
+          <!-- Category Filter Toggle Button -->
+          <button
+            class="filter-toggle-btn"
+            :class="{ active: showCategoryFilter || selectedCategoryId || selectedFeedId }"
+            @click="showCategoryFilter = !showCategoryFilter"
+          >
+            <Icon
+              :icon="showCategoryFilter ? 'mdi:chevron-up' : 'mdi:chevron-down'"
+              width="14"
+              height="14"
+              class="toggle-icon"
+            />
+            <Icon icon="mdi:filter-variant" width="14" height="14" />
+            <span>{{ selectedFeedName || selectedCategoryName || '分类筛选' }}</span>
+            <Icon
+              v-if="selectedCategoryId || selectedFeedId"
+              icon="mdi:close-circle"
+              width="14"
+              height="14"
+              class="ml-1 opacity-60"
+              @click.stop="clearCategoryFilter"
+            />
+          </button>
           <!-- Date Filter Toggle Button -->
           <button
             class="filter-toggle-btn"
@@ -536,6 +655,87 @@ defineExpose({
             <option :value="50">50</option>
           </select>
           <span class="text-xs text-ink-light">条</span>
+        </div>
+      </div>
+
+      <!-- Category Filter Expand Panel -->
+      <div
+        v-if="showCategoryFilter"
+        class="category-filter-panel"
+      >
+        <div class="category-list">
+          <div
+            v-for="category in categoriesWithFeeds"
+            :key="category.id"
+            class="category-item"
+            :class="{ 
+              active: selectedCategoryId === category.id || (category.id === 'all' && !selectedCategoryId),
+              expanded: expandedCategories.has(category.id)
+            }"
+          >
+            <div
+              class="category-header"
+              @click="selectCategory(category.id)"
+            >
+              <div class="category-info">
+                <Icon
+                  :icon="category.id === 'all' ? 'mdi:apps' : 'mdi:folder'"
+                  width="16"
+                  height="16"
+                  class="category-icon"
+                />
+                <span class="category-name">{{ category.name }}</span>
+                <span class="feed-count">{{ category.feeds.length }}</span>
+              </div>
+              <div class="category-actions">
+                <Icon
+                  v-if="category.feeds.length > 0 && category.id !== 'all'"
+                  :icon="expandedCategories.has(category.id) ? 'mdi:chevron-up' : 'mdi:chevron-down'"
+                  width="18"
+                  height="18"
+                  class="expand-icon"
+                  @click.stop="toggleCategoryExpand(category.id)"
+                />
+                <Icon
+                  v-if="selectedCategoryId === category.id || (category.id === 'all' && !selectedCategoryId)"
+                  icon="mdi:check"
+                  width="18"
+                  height="18"
+                  class="check-icon"
+                />
+              </div>
+            </div>
+            <!-- Feeds under this category -->
+            <div
+              v-if="expandedCategories.has(category.id) && category.feeds.length > 0"
+              class="feeds-list"
+            >
+              <div
+                v-for="feed in category.feeds"
+                :key="feed.id"
+                class="feed-item"
+                :class="{ active: selectedFeedId === feed.id }"
+                @click="selectFeed(feed.id, category.id)"
+              >
+                <div class="feed-info">
+                  <Icon
+                    :icon="feed.icon || 'mdi:rss'"
+                    width="14"
+                    height="14"
+                    :style="{ color: feed.color || '#6b7280' }"
+                  />
+                  <span class="feed-name">{{ feed.title }}</span>
+                </div>
+                <Icon
+                  v-if="selectedFeedId === feed.id"
+                  icon="mdi:check"
+                  width="16"
+                  height="16"
+                  class="check-icon"
+                />
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -862,6 +1062,140 @@ defineExpose({
 
 .toggle-icon {
   transition: transform 0.2s ease;
+}
+
+/* Category Filter Expand Panel */
+.category-filter-panel {
+  padding: 12px;
+  background: rgba(249, 250, 251, 0.9);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.category-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.category-item {
+  border-radius: 8px;
+  transition: all 0.2s ease;
+}
+
+.category-item.active {
+  background: rgba(59, 107, 135, 0.08);
+}
+
+.category-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  cursor: pointer;
+  border-radius: 8px;
+  transition: all 0.2s ease;
+}
+
+.category-header:hover {
+  background: rgba(59, 107, 135, 0.06);
+}
+
+.category-item.active .category-header {
+  background: rgba(59, 107, 135, 0.12);
+}
+
+.category-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.category-icon {
+  color: var(--color-ink-medium);
+}
+
+.category-item.active .category-icon {
+  color: #3b6b87;
+}
+
+.category-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-ink-dark);
+}
+
+.feed-count {
+  font-size: 11px;
+  color: var(--color-ink-light);
+  background: rgba(0, 0, 0, 0.06);
+  padding: 2px 6px;
+  border-radius: 10px;
+}
+
+.category-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.expand-icon {
+  color: var(--color-ink-light);
+  transition: transform 0.2s ease;
+}
+
+.expand-icon:hover {
+  color: var(--color-ink-medium);
+}
+
+.check-icon {
+  color: #3b6b87;
+}
+
+.feeds-list {
+  padding: 4px 12px 8px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.feed-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+}
+
+.feed-item:hover {
+  background: rgba(59, 107, 135, 0.06);
+}
+
+.feed-item.active {
+  background: rgba(59, 107, 135, 0.12);
+}
+
+.feed-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.feed-name {
+  font-size: 12px;
+  color: var(--color-ink-dark);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.feed-item.active .feed-name {
+  color: #3b6b87;
+  font-weight: 500;
 }
 
 /* Date Filter Expand Panel */

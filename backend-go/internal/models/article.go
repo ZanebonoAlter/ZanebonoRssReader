@@ -11,6 +11,7 @@ type Article struct {
 	Description        string     `gorm:"type:text" json:"description"`
 	Content            string     `gorm:"type:text" json:"content"`
 	Link               string     `gorm:"size:1000" json:"link"`
+	ImageURL           string     `gorm:"size:1000" json:"image_url"`
 	PubDate            *time.Time `json:"pub_date"`
 	Author             string     `gorm:"size:200" json:"author"`
 	Read               bool       `gorm:"default:false" json:"read"`
@@ -32,27 +33,28 @@ type Article struct {
 
 func (a *Article) ToDict() map[string]interface{} {
 	return map[string]interface{}{
-		"id":                  a.ID,
-		"feed_id":             a.FeedID,
-		"title":               a.Title,
-		"description":         a.Description,
-		"content":             a.Content,
-		"link":                a.Link,
-		"pub_date":            FormatDatetimeCSTPtr(a.PubDate),
-		"author":              a.Author,
-		"read":                a.Read,
-		"favorite":            a.Favorite,
-		"content_status":      a.ContentStatus,
-		"full_content":        a.FullContent,
-		"content_fetched_at":  FormatDatetimeCSTPtr(a.ContentFetchedAt),
-		"completion_attempts": a.CompletionAttempts,
-		"completion_error":    a.CompletionError,
-		"ai_content_summary":  a.AIContentSummary,
-		"firecrawl_enabled":   a.FirecrawlEnabled,
-		"firecrawl_status":    a.FirecrawlStatus,
-		"firecrawl_error":     a.FirecrawlError,
-		"firecrawl_content":   a.FirecrawlContent,
+		"id":                   a.ID,
+		"feed_id":              a.FeedID,
+		"title":                a.Title,
+		"description":          a.Description,
+		"content":              a.Content,
+		"link":                 a.Link,
+		"image_url":            a.ImageURL,
+		"pub_date":             FormatDatetimeCSTPtr(a.PubDate),
+		"author":               a.Author,
+		"read":                 a.Read,
+		"favorite":             a.Favorite,
+		"content_status":       a.ContentStatus,
+		"full_content":         a.FullContent,
+		"content_fetched_at":   FormatDatetimeCSTPtr(a.ContentFetchedAt),
+		"completion_attempts":  a.CompletionAttempts,
+		"completion_error":     a.CompletionError,
+		"ai_content_summary":   a.AIContentSummary,
+		"firecrawl_enabled":    a.FirecrawlEnabled,
+		"firecrawl_status":     a.FirecrawlStatus,
+		"firecrawl_error":      a.FirecrawlError,
+		"firecrawl_content":    a.FirecrawlContent,
 		"firecrawl_crawled_at": FormatDatetimeCSTPtr(a.FirecrawlCrawledAt),
-		"created_at":          FormatDatetimeCST(a.CreatedAt),
+		"created_at":           FormatDatetimeCST(a.CreatedAt),
 	}
 }

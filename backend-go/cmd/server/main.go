@@ -243,9 +243,13 @@ func initializeSchedulers() {
 		log.Println("Preference update scheduler started successfully")
 	}
 
-	// Set scheduler references in handlers for status queries
-	handlers.AutoRefreshSchedulerInterface = autoRefreshScheduler
-	handlers.AutoSummarySchedulerInterface = autoSummaryScheduler
+	// Initialize firecrawl scheduler
+	firecrawlScheduler = schedulers.NewFirecrawlScheduler()
+	if err := firecrawlScheduler.Start(); err != nil {
+		log.Printf("Warning: Failed to start firecrawl scheduler: %v", err)
+	} else {
+		log.Println("Firecrawl scheduler started successfully")
+	}
 
 	// Initialize content completion service and scheduler
 	crawlServiceURL := os.Getenv("CRAWL_SERVICE_URL")
@@ -261,13 +265,10 @@ func initializeSchedulers() {
 	contentCompletionScheduler.Start()
 	log.Println("Content completion scheduler started successfully")
 
-	// Initialize firecrawl scheduler
-	firecrawlScheduler = schedulers.NewFirecrawlScheduler()
-	if err := firecrawlScheduler.Start(); err != nil {
-		log.Printf("Warning: Failed to start firecrawl scheduler: %v", err)
-	} else {
-		log.Println("Firecrawl scheduler started successfully")
-	}
+	// Set scheduler references in handlers for status queries
+	handlers.AutoRefreshSchedulerInterface = autoRefreshScheduler
+	handlers.AutoSummarySchedulerInterface = autoSummaryScheduler
+	handlers.FirecrawlSchedulerInterface = firecrawlScheduler
 }
 
 func setupGracefulShutdown() {

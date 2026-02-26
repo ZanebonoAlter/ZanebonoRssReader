@@ -419,7 +419,9 @@ import './FeedLayout.css'
       <div v-if="!showAISummaries && !selectedSummary" class="content-panel">
         <ArticleContent
           :article="selectedArticle"
+          :articles="filteredArticles"
           @favorite="handleArticleFavorite"
+          @navigate="handleArticleClick"
         />
       </div>
 

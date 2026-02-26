@@ -484,11 +484,12 @@ export const useApiStore = defineStore('api', () => {
     articlesStore.articles = articles.value
   }
 
-  return {
+return {
     loading,
     error,
     categories,
     feeds,
+    allFeeds,
     articles,
     totalArticles,
     fetchCategories,

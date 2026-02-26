@@ -11,31 +11,46 @@ type UpdateSchedulerIntervalRequest struct {
 	Interval int `json:"interval" binding:"required"`
 }
 
-// Global scheduler references (will be set by main.go)
 var AutoRefreshSchedulerInterface interface{}
 var AutoSummarySchedulerInterface interface{}
+var FirecrawlSchedulerInterface interface{}
+
+func safeGetStatus(scheduler interface{}, name, description string) map[string]interface{} {
+	if scheduler == nil {
+		return nil
+	}
+
+	// Use recover to handle nil pointer dereference
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("Panic in %s scheduler GetStatus: %v", name, r)
+		}
+	}()
+
+	if status, ok := scheduler.(interface{ GetStatus() map[string]interface{} }); ok {
+		result := status.GetStatus()
+		if result != nil {
+			result["name"] = name
+			result["description"] = description
+			return result
+		}
+	}
+	return nil
+}
 
 func GetSchedulersStatus(c *gin.Context) {
 	schedulers := []map[string]interface{}{}
 
-	// Add auto-refresh scheduler status
-	if AutoRefreshSchedulerInterface != nil {
-		if status, ok := AutoRefreshSchedulerInterface.(interface{ GetStatus() map[string]interface{} }); ok {
-			refreshStatus := status.GetStatus()
-			refreshStatus["name"] = "auto_refresh"
-			refreshStatus["description"] = "Auto-refresh RSS feeds"
-			schedulers = append(schedulers, refreshStatus)
-		}
+	if status := safeGetStatus(AutoRefreshSchedulerInterface, "auto_refresh", "Auto-refresh RSS feeds"); status != nil {
+		schedulers = append(schedulers, status)
 	}
 
-	// Add auto-summary scheduler status
-	if AutoSummarySchedulerInterface != nil {
-		if status, ok := AutoSummarySchedulerInterface.(interface{ GetStatus() map[string]interface{} }); ok {
-			summaryStatus := status.GetStatus()
-			summaryStatus["name"] = "auto_summary"
-			summaryStatus["description"] = "Auto-generate AI summaries for categories"
-			schedulers = append(schedulers, summaryStatus)
-		}
+	if status := safeGetStatus(AutoSummarySchedulerInterface, "auto_summary", "Auto-generate AI summaries for feeds"); status != nil {
+		schedulers = append(schedulers, status)
+	}
+
+	if status := safeGetStatus(FirecrawlSchedulerInterface, "firecrawl", "Auto-crawl full content for articles"); status != nil {
+		schedulers = append(schedulers, status)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -47,28 +62,27 @@ func GetSchedulersStatus(c *gin.Context) {
 func GetSchedulerStatus(c *gin.Context) {
 	name := c.Param("name")
 
+	var scheduler interface{}
+	description := ""
+
 	switch name {
 	case "auto_refresh":
-		if AutoRefreshSchedulerInterface != nil {
-			if status, ok := AutoRefreshSchedulerInterface.(interface{ GetStatus() map[string]interface{} }); ok {
-				c.JSON(http.StatusOK, gin.H{
-					"success": true,
-					"data":    status.GetStatus(),
-				})
-				return
-			}
-		}
-
+		scheduler = AutoRefreshSchedulerInterface
+		description = "Auto-refresh RSS feeds"
 	case "auto_summary":
-		if AutoSummarySchedulerInterface != nil {
-			if status, ok := AutoSummarySchedulerInterface.(interface{ GetStatus() map[string]interface{} }); ok {
-				c.JSON(http.StatusOK, gin.H{
-					"success": true,
-					"data":    status.GetStatus(),
-				})
-				return
-			}
-		}
+		scheduler = AutoSummarySchedulerInterface
+		description = "Auto-generate AI summaries for feeds"
+	case "firecrawl":
+		scheduler = FirecrawlSchedulerInterface
+		description = "Auto-crawl full content for articles"
+	}
+
+	if status := safeGetStatus(scheduler, name, description); status != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"data":    status,
+		})
+		return
 	}
 
 	c.JSON(http.StatusNotFound, gin.H{
@@ -83,12 +97,10 @@ func TriggerScheduler(c *gin.Context) {
 	switch name {
 	case "auto_summary":
 		if AutoSummarySchedulerInterface != nil {
-			// Check if it's the right type (even if we don't use the variable)
 			_, ok := AutoSummarySchedulerInterface.(interface {
-				SetAIConfig(baseURL, apiKey, model string) error
+				SetAIConfig(baseURL, apiKey, model string, timeRange int) error
 			})
 			if ok {
-				// Load AI config and trigger
 				log.Println("Triggering auto-summary scheduler manually")
 				c.JSON(http.StatusOK, gin.H{
 					"success": true,

@@ -41,9 +41,19 @@ func (s *FeedService) RefreshFeed(feedID uint) error {
 	feed.RefreshStatus = "success"
 	feed.RefreshError = ""
 
+	var firstArticleImage string
+	for _, entry := range parsed.Entries {
+		if entry.ImageURL != "" && firstArticleImage == "" {
+			firstArticleImage = entry.ImageURL
+			break
+		}
+	}
+
 	if feed.Icon == "" || feed.Icon == "rss" {
 		if parsed.Image != "" {
 			feed.Icon = parsed.Image
+		} else if firstArticleImage != "" {
+			feed.Icon = firstArticleImage
 		} else {
 			feed.Icon = s.rssParser.FetchFaviconURL(feed.URL)
 		}
@@ -71,6 +81,7 @@ func (s *FeedService) RefreshFeed(feedID uint) error {
 			Description: entry.Description,
 			Content:     entry.Content,
 			Link:        entry.Link,
+			ImageURL:    entry.ImageURL,
 			PubDate:     entry.PubDate,
 			Author:      entry.Author,
 		}

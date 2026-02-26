@@ -2,6 +2,8 @@
 import { Icon } from "@iconify/vue";
 import type { RssFeed } from '~/types'
 import type { ReadingStats, UserPreference } from '~/types/reading_behavior'
+import type { SchedulerStatus } from '~/types/scheduler'
+import { useFirecrawlApi, useSchedulerApi } from '~/composables/api'
 
 interface Props {
   show: boolean
@@ -17,10 +19,13 @@ const apiStore = useApiStore()
 const feedsStore = useFeedsStore()
 const preferencesStore = usePreferencesStore()
 
-const activeTab = ref<'feeds' | 'categories' | 'general' | 'preferences' | 'firecrawl'>('feeds')
+const activeTab = ref<'feeds' | 'categories' | 'general' | 'preferences' | 'firecrawl' | 'schedulers'>('feeds')
 const loading = ref(false)
 const error = ref<string | null>(null)
 const success = ref<string | null>(null)
+
+const schedulerStatuses = ref<SchedulerStatus[]>([])
+const schedulerLoading = ref(false)
 
 // AI Summary Settings
 const aiSummaryEnabled = ref(false)
@@ -234,6 +239,8 @@ watch(activeTab, async (newTab) => {
     await loadPreferencesData()
   } else if (newTab === 'firecrawl') {
     await loadFirecrawlSettings()
+  } else if (newTab === 'schedulers') {
+    await loadSchedulersStatus()
   }
 })
 
@@ -284,13 +291,17 @@ async function saveAISummarySettings() {
   }
   localStorage.setItem('aiSettings', JSON.stringify(settings))
 
-  // Update auto-summary scheduler config on backend
+// Update auto-summary scheduler config on backend
   if (autoSummaryEnabled.value && aiAPIKey.value) {
     try {
-      await api.updateAutoSummaryConfig({
-        base_url: aiBaseURL.value || 'https://api.openai.com/v1',
-        api_key: aiAPIKey.value,
-        model: aiModel.value || 'gpt-4o-mini'
+      await fetch('/api/auto-summary/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          base_url: aiBaseURL.value || 'https://api.openai.com/v1',
+          api_key: aiAPIKey.value,
+          model: aiModel.value || 'gpt-4o-mini'
+        })
       })
     } catch (e) {
       console.error('Failed to update auto-summary config:', e)
@@ -324,6 +335,97 @@ async function testAIConnection() {
     error.value = '连接测试失败，请检查配置'
   } finally {
     loading.value = false
+  }
+}
+
+async function loadSchedulersStatus() {
+  schedulerLoading.value = true
+  try {
+    const { getSchedulersStatus } = useSchedulerApi()
+    const response = await getSchedulersStatus()
+    if (response.success && response.data) {
+      schedulerStatuses.value = response.data
+    }
+  } catch (e) {
+    console.error('Failed to load scheduler status:', e)
+  } finally {
+    schedulerLoading.value = false
+  }
+}
+
+async function triggerScheduler(name: string) {
+  loading.value = true
+  try {
+    const { triggerScheduler: trigger } = useSchedulerApi()
+    const response = await trigger(name)
+    if (response.success) {
+      success.value = '任务已触发'
+      setTimeout(() => {
+        success.value = null
+      }, 2000)
+      await loadSchedulersStatus()
+    } else {
+      error.value = response.error || '触发失败'
+    }
+  } catch (e) {
+    error.value = '触发失败'
+  } finally {
+    loading.value = false
+  }
+}
+
+function getSchedulerDisplayName(name: string): string {
+  const names: Record<string, string> = {
+    'auto_refresh': '后台刷新',
+    'auto_summary': '自动总结',
+    'firecrawl': '全文爬取',
+  }
+  return names[name] || name
+}
+
+function getSchedulerIcon(name: string): string {
+  const icons: Record<string, string> = {
+    'auto_refresh': 'mdi:refresh',
+    'auto_summary': 'mdi:brain',
+    'firecrawl': 'mdi:spider-web',
+  }
+  return icons[name] || 'mdi:cog'
+}
+
+function getSchedulerColor(name: string): string {
+  const colors: Record<string, string> = {
+    'auto_refresh': 'from-blue-500 to-cyan-500',
+    'auto_summary': 'from-ink-500 to-amber-500',
+    'firecrawl': 'from-purple-500 to-pink-500',
+  }
+  return colors[name] || 'from-gray-500 to-gray-600'
+}
+
+function getStatusColor(status: string | undefined): string {
+  if (!status) return 'bg-gray-400'
+  if (status === 'running') return 'bg-green-500'
+  if (status === 'error') return 'bg-red-500'
+  return 'bg-blue-500'
+}
+
+function formatDuration(seconds: number | null | undefined): string {
+  if (!seconds) return '-'
+  if (seconds < 60) return `${seconds.toFixed(1)}s`
+  return `${(seconds / 60).toFixed(1)}min`
+}
+
+function formatNextRun(nextRun: string | undefined): string {
+  if (!nextRun) return '-'
+  try {
+    const date = new Date(nextRun)
+    const now = new Date()
+    const diff = date.getTime() - now.getTime()
+    if (diff < 0) return '即将执行'
+    if (diff < 60000) return `${Math.floor(diff / 1000)}秒后`
+    if (diff < 3600000) return `${Math.floor(diff / 60000)}分钟后`
+    return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+  } catch {
+    return '-'
   }
 }
 </script>
@@ -386,6 +488,13 @@ async function testAIConnection() {
           @click="activeTab = 'firecrawl'"
         >
           Firecrawl
+        </button>
+        <button
+          class="px-6 py-3 text-sm font-medium transition-colors"
+          :class="activeTab === 'schedulers' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:text-gray-700'"
+          @click="activeTab = 'schedulers'"
+        >
+          定时任务
         </button>
       </div>
 
@@ -997,6 +1106,125 @@ async function testAIConnection() {
                 Firecrawl 是一个强大的网页抓取服务，可以提取网页的完整 Markdown 内容。
                 在订阅源设置中启用后，系统会自动抓取文章全文。
               </p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Schedulers Status Tab -->
+        <div v-if="activeTab === 'schedulers'" class="space-y-6">
+          <div v-if="schedulerLoading" class="flex items-center justify-center py-12">
+            <Icon icon="mdi:loading" width="48" height="48" class="animate-spin text-blue-500" />
+          </div>
+
+          <div v-else class="space-y-4">
+            <div
+              v-for="scheduler in schedulerStatuses"
+              :key="scheduler.name"
+              class="border border-gray-200 rounded-xl overflow-hidden"
+            >
+              <div class="p-4 flex items-start justify-between">
+                <div class="flex items-start gap-3">
+                  <div
+                    class="w-10 h-10 rounded-lg flex items-center justify-center bg-gradient-to-br"
+                    :class="getSchedulerColor(scheduler.name)"
+                  >
+                    <Icon :icon="getSchedulerIcon(scheduler.name)" width="20" height="20" class="text-white" />
+                  </div>
+                  <div>
+                    <div class="flex items-center gap-2">
+                      <h3 class="font-semibold text-gray-900">{{ getSchedulerDisplayName(scheduler.name) }}</h3>
+                      <span
+                        class="px-2 py-0.5 text-xs font-medium rounded-full text-white"
+                        :class="getStatusColor(scheduler.database_state?.status || scheduler.status)"
+                      >
+                        {{ scheduler.database_state?.status || scheduler.status || 'idle' }}
+                      </span>
+                    </div>
+                    <p class="text-xs text-gray-500 mt-0.5">
+                      检查间隔: {{ scheduler.check_interval }}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  class="px-3 py-1.5 text-xs font-medium text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
+                  :disabled="loading"
+                  @click="triggerScheduler(scheduler.name)"
+                >
+                  <Icon v-if="loading" icon="mdi:loading" width="14" height="14" class="animate-spin inline-block mr-1" />
+                  手动执行
+                </button>
+              </div>
+
+              <div v-if="scheduler.database_state" class="border-t border-gray-100 p-4 bg-gray-50/50">
+                <div class="grid grid-cols-4 gap-4 text-center">
+                  <div>
+                    <div class="text-lg font-bold text-gray-900">
+                      {{ scheduler.database_state.total_executions }}
+                    </div>
+                    <div class="text-xs text-gray-500">总执行</div>
+                  </div>
+                  <div>
+                    <div class="text-lg font-bold text-green-600">
+                      {{ scheduler.database_state.successful_executions }}
+                    </div>
+                    <div class="text-xs text-gray-500">成功</div>
+                  </div>
+                  <div>
+                    <div class="text-lg font-bold text-red-600">
+                      {{ scheduler.database_state.failed_executions }}
+                    </div>
+                    <div class="text-xs text-gray-500">失败</div>
+                  </div>
+                  <div>
+                    <div class="text-lg font-bold text-blue-600">
+                      {{ (scheduler.database_state.success_rate || 0).toFixed(0) }}%
+                    </div>
+                    <div class="text-xs text-gray-500">成功率</div>
+                  </div>
+                </div>
+
+                <div class="mt-4 pt-4 border-t border-gray-200/50 grid grid-cols-3 gap-4 text-xs">
+                  <div class="flex items-center gap-2">
+                    <Icon icon="mdi:clock-outline" width="14" height="14" class="text-gray-400" />
+                    <span class="text-gray-600">上次执行:</span>
+                    <span class="text-gray-900">
+                      {{ scheduler.database_state.last_execution_time ? new Date(scheduler.database_state.last_execution_time).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '-' }}
+                    </span>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <Icon icon="mdi:timer-sand" width="14" height="14" class="text-gray-400" />
+                    <span class="text-gray-600">执行耗时:</span>
+                    <span class="text-gray-900">{{ formatDuration(scheduler.database_state.last_execution_duration) }}</span>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <Icon icon="mdi:calendar-clock" width="14" height="14" class="text-gray-400" />
+                    <span class="text-gray-600">下次执行:</span>
+                    <span class="text-gray-900">{{ formatNextRun(scheduler.next_run) }}</span>
+                  </div>
+                </div>
+
+                <div v-if="scheduler.database_state.last_error" class="mt-3 p-2 bg-red-50 rounded-lg text-xs text-red-700 flex items-start gap-2">
+                  <Icon icon="mdi:alert-circle" width="14" height="14" class="flex-shrink-0 mt-0.5" />
+                  <span>{{ scheduler.database_state.last_error }}</span>
+                </div>
+              </div>
+
+              <div v-else-if="scheduler.is_executing" class="border-t border-gray-100 p-3 bg-green-50/50 text-xs text-green-700 flex items-center gap-2">
+                <Icon icon="mdi:loading" width="14" height="14" class="animate-spin" />
+                正在执行中...
+              </div>
+            </div>
+
+            <div class="bg-amber-50 rounded-lg p-4 flex items-start gap-3">
+              <Icon icon="mdi:information" width="20" height="20" class="text-amber-600 flex-shrink-0 mt-0.5" />
+              <div class="text-sm text-amber-900">
+                <div class="font-medium mb-1">定时任务说明</div>
+                <ul class="text-amber-700 text-xs space-y-1">
+                  <li>• <b>后台刷新</b>: 自动检查并刷新有更新间隔设置的订阅源</li>
+                  <li>• <b>自动总结</b>: 为启用 AI 总结的订阅源自动生成内容汇总</li>
+                  <li>• <b>全文爬取</b>: 使用 Firecrawl 抓取文章完整内容</li>
+                </ul>
+              </div>
             </div>
           </div>
         </div>

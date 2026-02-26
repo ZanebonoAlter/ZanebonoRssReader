@@ -14,6 +14,9 @@ export * from './ai'
 // 阅读行为类型
 export * from './reading_behavior'
 
+// 调度器类型
+export * from './scheduler'
+
 // 通用类型
 export * from './common'
 
