@@ -42,11 +42,12 @@ func (s *DigestScheduler) Start() error {
 	}
 
 	if config.WeeklyEnabled {
-		weeklyExpr := fmt.Sprintf("0 %s * * %s", config.WeeklyTime, s.weekdayToNumber(config.WeeklyDay))
+		weekdayName := s.weekdayToString(config.WeeklyDay)
+		weeklyExpr := fmt.Sprintf("0 %s * * %s", config.WeeklyTime, s.weekdayToNumber(weekdayName))
 		if _, err := s.cron.AddFunc(weeklyExpr, s.generateWeeklyDigest); err != nil {
 			return fmt.Errorf("failed to schedule weekly digest: %w", err)
 		}
-		log.Printf("Weekly digest scheduled at %s on %s", config.WeeklyTime, s.weekdayToString(config.WeeklyDay))
+		log.Printf("Weekly digest scheduled at %s on %s", config.WeeklyTime, weekdayName)
 	}
 
 	s.cron.Start()
@@ -74,15 +75,15 @@ func (s *DigestScheduler) LoadConfig() (*DigestConfig, error) {
 	return &config, nil
 }
 
-func (s *DigestScheduler) weekdayToNumber(day int) string {
-	weekdayMap := map[int]string{
-		0: "0",
-		1: "1",
-		2: "2",
-		3: "3",
-		4: "4",
-		5: "5",
-		6: "6",
+func (s *DigestScheduler) weekdayToNumber(day string) string {
+	weekdayMap := map[string]string{
+		"Monday":    "1",
+		"Tuesday":   "2",
+		"Wednesday": "3",
+		"Thursday":  "4",
+		"Friday":    "5",
+		"Saturday":  "6",
+		"Sunday":    "0",
 	}
 	return weekdayMap[day]
 }
