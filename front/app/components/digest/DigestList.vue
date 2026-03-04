@@ -2,10 +2,12 @@
 import { Icon } from '@iconify/vue'
 import { ref, onMounted } from 'vue'
 import { useDigestApi } from '~/composables/api/digest'
+import DigestSettings from './DigestSettings.vue'
 
 const digestApi = useDigestApi()
 const loading = ref(false)
 const digests = ref([])
+const showSettings = ref(false)
 
 onMounted(async () => {
   loading.value = true
@@ -19,9 +21,29 @@ onMounted(async () => {
     <div class="flex items-center justify-between mb-6">
       <h2 class="text-xl font-bold">日报周报</h2>
       <div class="flex gap-2">
-        <button class="px-4 py-2 bg-ink-600 text-white rounded-lg hover:bg-ink-700">
-          刷新
+        <button
+          @click="showSettings = true"
+          class="px-4 py-2 bg-ink-600 text-white rounded-lg hover:bg-ink-700"
+        >
+          设置
         </button>
+      </div>
+    </div>
+
+    <!-- 对话框 -->
+    <div
+      v-if="showSettings"
+      class="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+      @click.self="showSettings = false"
+    >
+      <div class="bg-white rounded-lg p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-lg font-bold">设置</h3>
+          <button @click="showSettings = false" class="text-ink-medium hover:text-ink-dark">
+            <Icon icon="mdi:close" width="24" height="24" />
+          </button>
+        </div>
+        <DigestSettings />
       </div>
     </div>
 
