@@ -13,6 +13,7 @@
 - 🎨 **现代界面** - Vue 3 + Nuxt 4，三栏 FeedBro 风格布局
 - 🤖 **AI 内容补全** - 自动抓取完整内容并生成总结
 - 📰 **智能汇总** - 按分类自动生成新闻汇总
+- 📅 **日报周报** - 自动生成每日/每周新闻汇总，支持飞书推送和Obsidian导出
 - 🔄 **自动刷新** - 定时自动更新订阅源
 - 📊 **阅读偏好** - 追踪阅读习惯，智能排序
 
@@ -149,6 +150,15 @@ my-robot/
 - **批量汇总**: 按分类自动生成新闻汇总
 - **调度任务**: 每小时自动生成汇总
 
+### 日报周报功能
+
+- **自动生成**: 每日/每周自动生成新闻汇总
+- **飞书推送**: 实时推送日报周报到飞书群组
+- **Obsidian导出**: 导出Markdown文件到Obsidian vault
+- **灵活配置**: 支持自定义生成时间和推送设置
+
+详细文档: [Digest Setup Guide](docs/digest-setup-guide.md)
+
 ### 阅读偏好追踪
 
 - 自动记录阅读行为
@@ -171,6 +181,7 @@ go test ./...
 # 数据库迁移
 go run cmd/migrate/main.go
 go run cmd/migrate-content-completion/main.go
+go run cmd/migrate-digest/main.go
 ```
 
 ### 前端开发
@@ -208,6 +219,7 @@ uv run playwright install chromium
 - [快速启动](docs/QUICKSTART.md) - 5 分钟上手
 - [Content Completion](docs/CONTENT_COMPLETION.md) - 内容补全功能
 - [Reading Preferences](docs/READING_PREFERENCES.md) - 阅读偏好追踪
+- [Digest Setup Guide](docs/digest-setup-guide.md) - 日报周报功能
 - [Backend Development](backend-go/README.md) - 后端开发指南
 - [Frontend Development](front/README.md) - 前端开发指南
 
@@ -258,6 +270,7 @@ cd crawl-service && uv run playwright install chromium
 cd backend-go
 go run cmd/migrate/main.go
 go run cmd/migrate-content-completion/main.go
+go run cmd/migrate-digest/main.go
 ```
 
 ### 前端无法连接后端
