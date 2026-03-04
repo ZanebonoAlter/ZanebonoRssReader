@@ -42,6 +42,12 @@ func (f *FeishuNotifier) SendCard(title, content string) error {
 			"config": map[string]interface{}{
 				"wide_screen_mode": true,
 			},
+			"header": map[string]interface{}{
+				"title": map[string]interface{}{
+					"tag":     "plain_text",
+					"content": title,
+				},
+			},
 			"elements": []map[string]interface{}{
 				{
 					"tag": "div",
