@@ -3,6 +3,7 @@ package digest
 import (
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -12,26 +13,33 @@ import (
 type DigestScheduler struct {
 	cron      *cron.Cron
 	isRunning bool
+	mu        sync.Mutex
+	config    *DigestConfig
 }
 
 func NewDigestScheduler() *DigestScheduler {
 	return &DigestScheduler{
 		cron:      cron.New(),
 		isRunning: false,
+		config:    nil,
 	}
 }
 
 func (s *DigestScheduler) Start() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if s.isRunning {
 		log.Println("Digest scheduler already running")
 		return nil
 	}
 
-	config, err := s.LoadConfig()
+	config, err := s.loadOrCreateConfig()
 	if err != nil {
 		log.Printf("Failed to load digest config: %v", err)
 		return err
 	}
+	s.config = config
 
 	if config.DailyEnabled {
 		dailyExpr := fmt.Sprintf("0 %s * * *", config.DailyTime)
@@ -42,12 +50,12 @@ func (s *DigestScheduler) Start() error {
 	}
 
 	if config.WeeklyEnabled {
-		weekdayName := s.weekdayToString(config.WeeklyDay)
-		weeklyExpr := fmt.Sprintf("0 %s * * %s", config.WeeklyTime, s.weekdayToNumber(weekdayName))
+		cronDay := s.intToCronDay(config.WeeklyDay)
+		weeklyExpr := fmt.Sprintf("0 %s * * %s", config.WeeklyTime, cronDay)
 		if _, err := s.cron.AddFunc(weeklyExpr, s.generateWeeklyDigest); err != nil {
 			return fmt.Errorf("failed to schedule weekly digest: %w", err)
 		}
-		log.Printf("Weekly digest scheduled at %s on %s", config.WeeklyTime, weekdayName)
+		log.Printf("Weekly digest scheduled at %s on day %d", config.WeeklyTime, config.WeeklyDay)
 	}
 
 	s.cron.Start()
@@ -57,6 +65,9 @@ func (s *DigestScheduler) Start() error {
 }
 
 func (s *DigestScheduler) Stop() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if !s.isRunning {
 		return
 	}
@@ -66,39 +77,45 @@ func (s *DigestScheduler) Stop() {
 	log.Println("Digest scheduler stopped")
 }
 
-func (s *DigestScheduler) LoadConfig() (*DigestConfig, error) {
+func (s *DigestScheduler) loadOrCreateConfig() (*DigestConfig, error) {
 	var config DigestConfig
 	err := database.DB.First(&config).Error
 	if err != nil {
-		return nil, fmt.Errorf("failed to load digest config: %w", err)
+		defaultConfig := DigestConfig{
+			DailyEnabled:         false,
+			DailyTime:            "09:00",
+			WeeklyEnabled:        false,
+			WeeklyDay:            1,
+			WeeklyTime:           "09:00",
+			FeishuEnabled:        false,
+			FeishuWebhookURL:     "",
+			FeishuPushSummary:    true,
+			FeishuPushDetails:    false,
+			ObsidianEnabled:      false,
+			ObsidianVaultPath:    "",
+			ObsidianDailyDigest:  true,
+			ObsidianWeeklyDigest: true,
+		}
+		if err := database.DB.Create(&defaultConfig).Error; err != nil {
+			return nil, fmt.Errorf("failed to create default digest config: %w", err)
+		}
+		log.Println("Created default digest config")
+		return &defaultConfig, nil
 	}
 	return &config, nil
 }
 
-func (s *DigestScheduler) weekdayToNumber(day string) string {
-	weekdayMap := map[string]string{
-		"Monday":    "1",
-		"Tuesday":   "2",
-		"Wednesday": "3",
-		"Thursday":  "4",
-		"Friday":    "5",
-		"Saturday":  "6",
-		"Sunday":    "0",
+func (s *DigestScheduler) intToCronDay(day int) string {
+	cronDayMap := map[int]string{
+		0: "0",
+		1: "1",
+		2: "2",
+		3: "3",
+		4: "4",
+		5: "5",
+		6: "6",
 	}
-	return weekdayMap[day]
-}
-
-func (s *DigestScheduler) weekdayToString(day int) string {
-	weekdayMap := map[int]string{
-		0: "Sunday",
-		1: "Monday",
-		2: "Tuesday",
-		3: "Wednesday",
-		4: "Thursday",
-		5: "Friday",
-		6: "Saturday",
-	}
-	return weekdayMap[day]
+	return cronDayMap[day]
 }
 
 func (s *DigestScheduler) generateDailyDigest() {
@@ -110,16 +127,13 @@ func (s *DigestScheduler) generateWeeklyDigest() {
 }
 
 func (s *DigestScheduler) GetStatus() map[string]interface{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	entries := s.cron.Entries()
-
-	var nextRun time.Time
-	if len(entries) > 0 {
-		nextRun = entries[0].Next
-	}
-
-	config, err := s.LoadConfig()
-	if err != nil {
-		log.Printf("Failed to load config for status: %v", err)
+	nextRuns := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		nextRuns = append(nextRuns, entry.Next.Format(time.RFC3339))
 	}
 
 	dailyTime := ""
@@ -128,12 +142,12 @@ func (s *DigestScheduler) GetStatus() map[string]interface{} {
 	dailyEnabled := false
 	weeklyEnabled := false
 
-	if config != nil {
-		dailyTime = config.DailyTime
-		weeklyDay = config.WeeklyDay
-		weeklyTime = config.WeeklyTime
-		dailyEnabled = config.DailyEnabled
-		weeklyEnabled = config.WeeklyEnabled
+	if s.config != nil {
+		dailyTime = s.config.DailyTime
+		weeklyDay = s.config.WeeklyDay
+		weeklyTime = s.config.WeeklyTime
+		dailyEnabled = s.config.DailyEnabled
+		weeklyEnabled = s.config.WeeklyEnabled
 	}
 
 	return map[string]interface{}{
@@ -143,7 +157,7 @@ func (s *DigestScheduler) GetStatus() map[string]interface{} {
 		"daily_time":     dailyTime,
 		"weekly_day":     weeklyDay,
 		"weekly_time":    weeklyTime,
-		"next_run":       nextRun.Format(time.RFC3339),
+		"next_runs":      nextRuns,
 		"active_jobs":    len(entries),
 	}
 }
