@@ -25,12 +25,7 @@ func (g *DigestGenerator) GenerateDailyDigest(date time.Time) ([]CategoryDigest,
 	startTime := date.Truncate(24 * time.Hour)
 	endTime := startTime.Add(24 * time.Hour)
 
-	var summaries []models.AISummary
-	err := database.DB.Where("created_at >= ? AND created_at < ?", startTime, endTime).
-		Preload("Feed").
-		Preload("Category").
-		Find(&summaries).Error
-
+	summaries, err := g.fetchSummariesInRange(startTime, endTime)
 	if err != nil {
 		return nil, err
 	}
@@ -39,25 +34,26 @@ func (g *DigestGenerator) GenerateDailyDigest(date time.Time) ([]CategoryDigest,
 }
 
 func (g *DigestGenerator) GenerateWeeklyDigest(date time.Time) ([]CategoryDigest, error) {
-	weekday := int(date.Weekday())
-	if weekday == 0 {
-		weekday = 7
-	}
-	monday := date.AddDate(0, 0, -weekday+1)
-	monday = time.Date(monday.Year(), monday.Month(), monday.Day(), 0, 0, 0, 0, time.Local)
+	daysSinceMonday := (int(date.Weekday()) + 6) % 7
+	monday := date.AddDate(0, 0, -daysSinceMonday)
+	monday = time.Date(monday.Year(), monday.Month(), monday.Day(), 0, 0, 0, 0, date.Location())
 	sunday := monday.AddDate(0, 0, 7)
 
-	var summaries []models.AISummary
-	err := database.DB.Where("created_at >= ? AND created_at < ?", monday, sunday).
-		Preload("Feed").
-		Preload("Category").
-		Find(&summaries).Error
-
+	summaries, err := g.fetchSummariesInRange(monday, sunday)
 	if err != nil {
 		return nil, err
 	}
 
 	return g.groupByCategory(summaries), nil
+}
+
+func (g *DigestGenerator) fetchSummariesInRange(start, end time.Time) ([]models.AISummary, error) {
+	var summaries []models.AISummary
+	err := database.DB.Where("created_at >= ? AND created_at < ?", start, end).
+		Preload("Feed").
+		Preload("Category").
+		Find(&summaries).Error
+	return summaries, err
 }
 
 func (g *DigestGenerator) groupByCategory(summaries []models.AISummary) []CategoryDigest {
