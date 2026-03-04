@@ -28,6 +28,7 @@ const emit = defineEmits<{
   feedClick: [feedId: string]
   favoritesClick: []
   aiSummariesClick: []
+  digestClick: []
   allArticlesClick: []
   editCategory: [categoryId: string]
   editFeed: [feedId: string]
@@ -100,6 +101,12 @@ function handleFavoritesClick() {
 function handleAISummariesClick() {
   updateSelection('ai-summaries', null)
   emit('aiSummariesClick')
+}
+
+// 处理日报周报点击
+function handleDigestClick() {
+  updateSelection('digest', null)
+  emit('digestClick')
 }
 
 // 处理全部文章点击
@@ -181,6 +188,18 @@ import './AppSidebar.css'
         <Icon icon="mdi:brain" width="20" height="20" class="text-ink-600" />
         <span v-if="!sidebarCollapsed" class="flex-1 text-left font-medium">
           AI 总结
+        </span>
+      </button>
+
+      <!-- 日报周报 -->
+      <button
+        class="sidebar-item"
+        :class="{ active: selectedCategory === 'digest' }"
+        @click="handleDigestClick"
+      >
+        <Icon icon="mdi:newspaper-variant-multiple" width="20" height="20" class="text-ink-600" />
+        <span v-if="!sidebarCollapsed" class="flex-1 text-left font-medium">
+          日报周报
         </span>
       </button>
 
