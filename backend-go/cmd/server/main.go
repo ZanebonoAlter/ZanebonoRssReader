@@ -208,6 +208,15 @@ func SetupRoutes(r *gin.Engine) {
 			firecrawl.POST("/feed/:id/enable", handlers.EnableFeedFirecrawl)
 			firecrawl.GET("/status", handlers.GetFirecrawlStatus)
 		}
+
+		// Digest configuration
+		digestGroup := api.Group("/digest")
+		{
+			digestGroup.GET("/config", handlers.GetDigestConfig)
+			digestGroup.PUT("/config", handlers.UpdateDigestConfig)
+			digestGroup.POST("/test-feishu", handlers.TestFeishuPush)
+			digestGroup.POST("/test-obsidian", handlers.TestObsidianWrite)
+		}
 	}
 }
 
