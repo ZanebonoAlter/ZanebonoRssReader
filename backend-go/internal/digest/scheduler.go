@@ -3,12 +3,36 @@ package digest
 import (
 	"fmt"
 	"log"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/robfig/cron/v3"
 	"my-robot-backend/pkg/database"
 )
+
+func parseTime(timeStr string) (hour, minute int, err error) {
+	parts := strings.Split(timeStr, ":")
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("invalid time format, expected HH:MM")
+	}
+	hour, err = strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid hour: %w", err)
+	}
+	minute, err = strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid minute: %w", err)
+	}
+	if hour < 0 || hour > 23 {
+		return 0, 0, fmt.Errorf("hour must be between 0 and 23")
+	}
+	if minute < 0 || minute > 59 {
+		return 0, 0, fmt.Errorf("minute must be between 0 and 59")
+	}
+	return hour, minute, nil
+}
 
 type DigestScheduler struct {
 	cron      *cron.Cron
@@ -42,7 +66,11 @@ func (s *DigestScheduler) Start() error {
 	s.config = config
 
 	if config.DailyEnabled {
-		dailyExpr := fmt.Sprintf("0 %s * * *", config.DailyTime)
+		hour, minute, err := parseTime(config.DailyTime)
+		if err != nil {
+			return fmt.Errorf("invalid daily time format: %w", err)
+		}
+		dailyExpr := fmt.Sprintf("%d %d * * *", minute, hour)
 		if _, err := s.cron.AddFunc(dailyExpr, s.generateDailyDigest); err != nil {
 			return fmt.Errorf("failed to schedule daily digest: %w", err)
 		}
@@ -50,8 +78,15 @@ func (s *DigestScheduler) Start() error {
 	}
 
 	if config.WeeklyEnabled {
+		hour, minute, err := parseTime(config.WeeklyTime)
+		if err != nil {
+			return fmt.Errorf("invalid weekly time format: %w", err)
+		}
+		if config.WeeklyDay < 0 || config.WeeklyDay > 6 {
+			return fmt.Errorf("invalid weekly day: %d (must be 0-6)", config.WeeklyDay)
+		}
 		cronDay := s.intToCronDay(config.WeeklyDay)
-		weeklyExpr := fmt.Sprintf("0 %s * * %s", config.WeeklyTime, cronDay)
+		weeklyExpr := fmt.Sprintf("%d %d * * %s", minute, hour, cronDay)
 		if _, err := s.cron.AddFunc(weeklyExpr, s.generateWeeklyDigest); err != nil {
 			return fmt.Errorf("failed to schedule weekly digest: %w", err)
 		}

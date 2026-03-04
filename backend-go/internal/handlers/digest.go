@@ -1,7 +1,10 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -34,6 +37,38 @@ type TestObsidianRequest struct {
 	VaultPath string `json:"vault_path" binding:"required"`
 }
 
+func validateTimeFormat(timeStr string) error {
+	if timeStr == "" {
+		return nil
+	}
+	parts := strings.Split(timeStr, ":")
+	if len(parts) != 2 {
+		return fmt.Errorf("invalid time format '%s', expected HH:MM", timeStr)
+	}
+	hour, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return fmt.Errorf("invalid hour in time '%s': %w", timeStr, err)
+	}
+	minute, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return fmt.Errorf("invalid minute in time '%s': %w", timeStr, err)
+	}
+	if hour < 0 || hour > 23 {
+		return fmt.Errorf("hour must be between 0 and 23, got %d in time '%s'", hour, timeStr)
+	}
+	if minute < 0 || minute > 59 {
+		return fmt.Errorf("minute must be between 0 and 59, got %d in time '%s'", minute, timeStr)
+	}
+	return nil
+}
+
+func validateWeekday(day int) error {
+	if day < 0 || day > 6 {
+		return fmt.Errorf("weekday must be between 0 and 6, got %d", day)
+	}
+	return nil
+}
+
 func GetDigestConfig(c *gin.Context) {
 	var config digest.DigestConfig
 	if err := database.DB.First(&config).Error; err != nil {
@@ -58,6 +93,33 @@ func UpdateDigestConfig(c *gin.Context) {
 			"error":   "Invalid request body",
 		})
 		return
+	}
+
+	if req.DailyEnabled {
+		if err := validateTimeFormat(req.DailyTime); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"error":   fmt.Sprintf("Invalid daily time: %v", err),
+			})
+			return
+		}
+	}
+
+	if req.WeeklyEnabled {
+		if err := validateTimeFormat(req.WeeklyTime); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"error":   fmt.Sprintf("Invalid weekly time: %v", err),
+			})
+			return
+		}
+		if err := validateWeekday(req.WeeklyDay); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"error":   fmt.Sprintf("Invalid weekly day: %v", err),
+			})
+			return
+		}
 	}
 
 	var config digest.DigestConfig
