@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"my-robot-backend/internal/config"
+	"my-robot-backend/internal/digest"
 	"my-robot-backend/internal/handlers"
 	"my-robot-backend/internal/middleware"
 	"my-robot-backend/internal/schedulers"
@@ -33,11 +34,10 @@ func main() {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
 
-	// Skip auto-migration when using existing Python database
-	// Uncomment the line below if you want to create a fresh database
-	// if err := database.Migrate(); err != nil {
-	// 	log.Fatalf("Failed to run migrations: %v", err)
-	// }
+	// Migrate digest config models
+	if err := digest.Migrate(); err != nil {
+		log.Fatalf("Failed to run digest migrations: %v", err)
+	}
 
 	if config.AppConfig != nil && config.AppConfig.Server.Mode == "release" {
 		gin.SetMode(gin.ReleaseMode)
