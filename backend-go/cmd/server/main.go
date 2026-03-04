@@ -23,6 +23,7 @@ var (
 	preferenceUpdateScheduler  *schedulers.PreferenceUpdateScheduler
 	contentCompletionScheduler *schedulers.ContentCompletionScheduler
 	firecrawlScheduler         *schedulers.FirecrawlScheduler
+	digestScheduler            *digest.DigestScheduler
 )
 
 func main() {
@@ -265,6 +266,14 @@ func initializeSchedulers() {
 	contentCompletionScheduler.Start()
 	log.Println("Content completion scheduler started successfully")
 
+	// Initialize digest scheduler
+	digestScheduler = digest.NewDigestScheduler()
+	if err := digestScheduler.Start(); err != nil {
+		log.Printf("Warning: Failed to start digest scheduler: %v", err)
+	} else {
+		log.Println("Digest scheduler started successfully")
+	}
+
 	// Set scheduler references in handlers for status queries
 	handlers.AutoRefreshSchedulerInterface = autoRefreshScheduler
 	handlers.AutoSummarySchedulerInterface = autoSummaryScheduler
@@ -303,6 +312,11 @@ func setupGracefulShutdown() {
 		if firecrawlScheduler != nil {
 			log.Println("Stopping firecrawl scheduler...")
 			firecrawlScheduler.Stop()
+		}
+
+		if digestScheduler != nil {
+			log.Println("Stopping digest scheduler...")
+			digestScheduler.Stop()
 		}
 
 		log.Println("Graceful shutdown completed")
