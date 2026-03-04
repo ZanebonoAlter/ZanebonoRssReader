@@ -118,12 +118,131 @@ func (s *DigestScheduler) intToCronDay(day int) string {
 	return cronDayMap[day]
 }
 
+func (s *DigestScheduler) sendFeishuDigest(title string, digests []CategoryDigest, config *DigestConfig) error {
+	notifier := NewFeishuNotifier(config.FeishuWebhookURL)
+
+	if config.FeishuPushDetails {
+		content := s.generateDetailedDigestMessage(digests)
+		return notifier.SendCard(title, content)
+	}
+
+	content := s.generateSummaryMessage(digests)
+	return notifier.SendSummary(title, content)
+}
+
+func (s *DigestScheduler) exportToObsidian(isDaily bool, date time.Time, digests []CategoryDigest, config *DigestConfig) error {
+	exporter := NewObsidianExporter(config.ObsidianVaultPath)
+
+	if isDaily {
+		return exporter.ExportDailyDigest(date, digests)
+	}
+
+	return exporter.ExportWeeklyDigest(date, digests)
+}
+
+func (s *DigestScheduler) generateSummaryMessage(digests []CategoryDigest) string {
+	var message string
+	message += fmt.Sprintf("📊 摘要概览\n\n")
+	message += fmt.Sprintf("共 %d 个分类有新内容\n\n", len(digests))
+
+	for _, digest := range digests {
+		message += fmt.Sprintf("📁 %s\n", digest.CategoryName)
+		message += fmt.Sprintf("   %d 个订阅源有更新\n", digest.FeedCount)
+		message += fmt.Sprintf("   %d 篇文章总结\n\n", len(digest.AISummaries))
+	}
+
+	return message
+}
+
+func (s *DigestScheduler) generateDetailedDigestMessage(digests []CategoryDigest) string {
+	var content string
+
+	for _, digest := range digests {
+		content += fmt.Sprintf("## %s\n\n", digest.CategoryName)
+		content += fmt.Sprintf("**订阅源数量**: %d\n", digest.FeedCount)
+		content += fmt.Sprintf("**文章总结**: %d\n\n", len(digest.AISummaries))
+
+		for _, summary := range digest.AISummaries {
+			feedName := "未知订阅源"
+			if summary.Feed != nil {
+				feedName = summary.Feed.Title
+			}
+			content += fmt.Sprintf("### %s\n\n", feedName)
+			content += fmt.Sprintf("%s\n\n", summary.Summary)
+		}
+	}
+
+	return content
+}
+
 func (s *DigestScheduler) generateDailyDigest() {
 	log.Println("Starting daily digest generation")
+
+	config, err := s.loadOrCreateConfig()
+	if err != nil {
+		log.Printf("Failed to load config for daily digest: %v", err)
+		return
+	}
+
+	generator := NewDigestGenerator(config)
+	digests, err := generator.GenerateDailyDigest(time.Now())
+	if err != nil {
+		log.Printf("Failed to generate daily digest: %v", err)
+		return
+	}
+
+	log.Printf("Generated daily digest with %d categories", len(digests))
+
+	if config.FeishuEnabled && config.FeishuWebhookURL != "" {
+		if err := s.sendFeishuDigest("每日摘要", digests, config); err != nil {
+			log.Printf("Failed to send daily digest to Feishu: %v", err)
+		} else {
+			log.Println("Daily digest sent to Feishu successfully")
+		}
+	}
+
+	if config.ObsidianEnabled && config.ObsidianVaultPath != "" && config.ObsidianDailyDigest {
+		if err := s.exportToObsidian(true, time.Now(), digests, config); err != nil {
+			log.Printf("Failed to export daily digest to Obsidian: %v", err)
+		} else {
+			log.Println("Daily digest exported to Obsidian successfully")
+		}
+	}
 }
 
 func (s *DigestScheduler) generateWeeklyDigest() {
 	log.Println("Starting weekly digest generation")
+
+	config, err := s.loadOrCreateConfig()
+	if err != nil {
+		log.Printf("Failed to load config for weekly digest: %v", err)
+		return
+	}
+
+	generator := NewDigestGenerator(config)
+	digests, err := generator.GenerateWeeklyDigest(time.Now())
+	if err != nil {
+		log.Printf("Failed to generate weekly digest: %v", err)
+		return
+	}
+
+	log.Printf("Generated weekly digest with %d categories", len(digests))
+
+	if config.FeishuEnabled && config.FeishuWebhookURL != "" {
+		if err := s.sendFeishuDigest("每周摘要", digests, config); err != nil {
+			log.Printf("Failed to send weekly digest to Feishu: %v", err)
+		} else {
+			log.Println("Weekly digest sent to Feishu successfully")
+		}
+	}
+
+	if config.ObsidianEnabled && config.ObsidianVaultPath != "" && config.ObsidianWeeklyDigest {
+		if err := s.exportToObsidian(false, time.Now(), digests, config); err != nil {
+			log.Printf("Failed to export weekly digest to Obsidian: %v", err)
+		} else {
+			log.Println("Weekly digest exported to Obsidian successfully")
+		}
+	}
 }
 
 func (s *DigestScheduler) GetStatus() map[string]interface{} {
