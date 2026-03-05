@@ -26,6 +26,7 @@ type CreateFeedRequest struct {
 	ContentCompletionEnabled bool   `json:"content_completion_enabled"`
 	CompletionOnRefresh      bool   `json:"completion_on_refresh"`
 	MaxCompletionRetries     int    `json:"max_completion_retries"`
+	FirecrawlEnabled         bool   `json:"firecrawl_enabled"`
 }
 
 type UpdateFeedRequest struct {
@@ -41,6 +42,7 @@ type UpdateFeedRequest struct {
 	ContentCompletionEnabled *bool  `json:"content_completion_enabled"`
 	CompletionOnRefresh      *bool  `json:"completion_on_refresh"`
 	MaxCompletionRetries     *int   `json:"max_completion_retries"`
+	FirecrawlEnabled         *bool  `json:"firecrawl_enabled"`
 }
 
 func GetFeeds(c *gin.Context) {
@@ -156,6 +158,7 @@ func CreateFeed(c *gin.Context) {
 		ContentCompletionEnabled: req.ContentCompletionEnabled,
 		CompletionOnRefresh:      req.CompletionOnRefresh,
 		MaxCompletionRetries:     req.MaxCompletionRetries,
+		FirecrawlEnabled:         req.FirecrawlEnabled,
 		LastUpdated:              &now,
 	}
 
@@ -270,6 +273,9 @@ func UpdateFeed(c *gin.Context) {
 	}
 	if _, exists := bodyMap["max_completion_retries"]; exists && req.MaxCompletionRetries != nil {
 		updates["max_completion_retries"] = *req.MaxCompletionRetries
+	}
+	if _, exists := bodyMap["firecrawl_enabled"]; exists && req.FirecrawlEnabled != nil {
+		updates["firecrawl_enabled"] = *req.FirecrawlEnabled
 	}
 
 	if err := database.DB.Model(&feed).Updates(updates).Error; err != nil {
