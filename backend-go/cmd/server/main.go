@@ -124,6 +124,7 @@ func SetupRoutes(r *gin.Engine) {
 		feeds := api.Group("/feeds")
 		{
 			feeds.GET("", handlers.GetFeeds)
+			feeds.GET("/:feed_id", handlers.GetFeed)
 			feeds.POST("", handlers.CreateFeed)
 			feeds.PUT("/:feed_id", handlers.UpdateFeed)
 			feeds.DELETE("/:feed_id", handlers.DeleteFeed)

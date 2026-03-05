@@ -125,6 +125,40 @@ func GetFeeds(c *gin.Context) {
 	})
 }
 
+func GetFeed(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("feed_id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "Invalid feed ID",
+		})
+		return
+	}
+
+	var feed models.Feed
+	if err := database.DB.First(&feed, uint(id)).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"error":   "Feed not found",
+			})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"error":   err.Error(),
+			})
+		}
+		return
+	}
+
+	database.DB.Preload("Articles").First(&feed, feed.ID)
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    feed.ToDict(true),
+	})
+}
+
 func CreateFeed(c *gin.Context) {
 	var req CreateFeedRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
