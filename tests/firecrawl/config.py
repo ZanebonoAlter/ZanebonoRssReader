@@ -1,5 +1,10 @@
 """Firecrawl集成测试配置"""
 
+from pathlib import Path
+
+# 项目根目录
+PROJECT_ROOT = Path(__file__).parent.parent.parent
+
 
 class TestConfig:
     """测试配置 - 支持多功能扩展"""
@@ -12,8 +17,8 @@ class TestConfig:
     BACKEND_BASE_URL = "http://localhost:5000"
     BACKEND_TIMEOUT = 60
     
-    # 数据库配置
-    DATABASE_PATH = "backend-go/rss_reader.db"
+    # 数据库配置（使用绝对路径）
+    DATABASE_PATH = str(PROJECT_ROOT / "backend-go" / "rss_reader.db")
     
     # 测试文章配置
     TEST_ARTICLE_ID = 4

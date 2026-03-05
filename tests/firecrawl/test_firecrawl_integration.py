@@ -41,7 +41,7 @@ class TestReport:
         """生成测试报告"""
         report = []
         report.append("=" * 70)
-        report.append("📊 Firecrawl集成测试报告")
+        report.append("Firecrawl集成测试报告")
         report.append("=" * 70)
         
         if self.start_time and self.end_time:
@@ -49,7 +49,7 @@ class TestReport:
             report.append(f"\n总耗时: {total_duration:.2f}秒\n")
         
         for idx, step in enumerate(self.steps, 1):
-            status = "✅" if step["success"] else "❌"
+            status = "[PASS]" if step["success"] else "[FAIL]"
             report.append(f"{idx}. {step['step']}: {status}")
             report.append(f"   耗时: {step['duration']:.2f}秒")
             report.append(f"   详情: {step['details']}")
@@ -152,3 +152,156 @@ class FirecrawlIntegrationTest:
         duration = time.time() - start
         self.report.add_step(step_name, success, duration, details)
         return success
+    
+    # ============ 测试步骤 ============
+    def test_1_firecrawl_health(self):
+        """测试步骤1: Firecrawl服务健康检查"""
+        url = f"{self.config.FIRECRAWL_BASE_URL}/health"
+        response = self._http_request("GET", url, timeout=10)
+        
+        if response.status_code != 200:
+            raise AssertionError(
+                f"Firecrawl服务不可用: HTTP {response.status_code}"
+            )
+        
+        data = response.json()
+        if data.get("status") != "ok":
+            raise AssertionError(f"Firecrawl服务状态异常: {data}")
+    
+    def test_2_backend_health(self):
+        """测试步骤2: 后端服务健康检查"""
+        url = f"{self.config.BACKEND_BASE_URL}/api/categories"
+        response = self._http_request("GET", url, timeout=10)
+        
+        self._verify_response(response)
+    
+    def test_3_firecrawl_scrape(self):
+        """测试步骤3: Firecrawl爬取测试"""
+        url = f"{self.config.FIRECRAWL_BASE_URL}/v1/scrape"
+        payload = {
+            "url": self.config.TEST_ARTICLE_URL
+        }
+        
+        response = self._http_request(
+            "POST",
+            url,
+            json=payload,
+            timeout=self.config.FIRECRAWL_TIMEOUT
+        )
+        
+        if response.status_code != 200:
+            raise AssertionError(
+                f"爬取失败: HTTP {response.status_code}"
+            )
+        
+        data = response.json()
+        if not data.get("success"):
+            raise AssertionError(f"爬取返回失败: {data}")
+        
+        content = data.get("data", {}).get("markdown", "")
+        if len(content) < 100:
+            raise AssertionError(f"爬取内容过短: {len(content)}字符")
+    
+    def test_4_article_content_update(self):
+        """测试步骤4: 文章内容更新测试"""
+        # 清空测试文章内容
+        self._db_execute(
+            "UPDATE articles SET content = NULL WHERE id = ?",
+            (self.config.TEST_ARTICLE_ID,)
+        )
+        
+        # 调用后端API更新文章内容
+        url = f"{self.config.BACKEND_BASE_URL}/api/articles/{self.config.TEST_ARTICLE_ID}/content"
+        response = self._http_request("POST", url, timeout=self.config.BACKEND_TIMEOUT)
+        
+        data = self._verify_response(response)
+        
+        # 验证数据库内容已更新
+        results = self._db_query(
+            "SELECT content FROM articles WHERE id = ?",
+            (self.config.TEST_ARTICLE_ID,)
+        )
+        
+        if not results or not results[0][0]:
+            raise AssertionError("文章内容未更新到数据库")
+        
+        content = results[0][0]
+        if len(content) < 100:
+            raise AssertionError(f"数据库内容过短: {len(content)}字符")
+    
+    def test_5_ai_settings_config(self):
+        """测试步骤5: AI配置验证"""
+        results = self._db_query(
+            "SELECT value FROM ai_settings WHERE key = 'summary_config'"
+        )
+        
+        if not results:
+            raise AssertionError("AI配置不存在")
+        
+        config_str = results[0][0]
+        config = json.loads(config_str)
+        
+        if "firecrawl" not in config:
+            raise AssertionError("Firecrawl配置缺失")
+        
+        firecrawl_config = config["firecrawl"]
+        if not firecrawl_config.get("enabled"):
+            raise AssertionError("Firecrawl未启用")
+        
+        if firecrawl_config.get("api_url") != self.config.FIRECRAWL_BASE_URL:
+            raise AssertionError(
+                f"Firecrawl API URL不匹配: {firecrawl_config.get('api_url')}"
+            )
+    
+    # ============ 主测试流程 ============
+    def run_all_tests(self):
+        """运行所有测试"""
+        print("\n" + "=" * 70)
+        print("开始Firecrawl集成测试")
+        print("=" * 70 + "\n")
+        
+        self.report.start()
+        
+        # 执行测试步骤
+        tests = [
+            ("Firecrawl服务健康检查", self.test_1_firecrawl_health),
+            ("后端服务健康检查", self.test_2_backend_health),
+            ("Firecrawl爬取功能", self.test_3_firecrawl_scrape),
+            ("文章内容更新", self.test_4_article_content_update),
+            ("AI配置验证", self.test_5_ai_settings_config),
+        ]
+        
+        for step_name, test_func in tests:
+            print(f"执行测试: {step_name}...")
+            success = self._execute_test_step(step_name, test_func)
+            if success:
+                print(f"  [PASS] 通过\n")
+            else:
+                print(f"  [FAIL] 失败\n")
+        
+        self.report.finish()
+        
+        # 输出报告
+        print(self.report.generate_report())
+        
+        # 返回是否全部通过
+        passed = sum(1 for s in self.report.steps if s["success"])
+        total = len(self.report.steps)
+        return passed == total
+
+
+def main():
+    """主函数"""
+    test = FirecrawlIntegrationTest()
+    success = test.run_all_tests()
+    
+    if success:
+        print("\n[PASS] 所有测试通过！")
+        exit(0)
+    else:
+        print("\n[FAIL] 部分测试失败")
+        exit(1)
+
+
+if __name__ == "__main__":
+    main()
