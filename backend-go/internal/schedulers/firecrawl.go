@@ -86,7 +86,8 @@ func (s *FirecrawlScheduler) checkAndCrawl() {
 
 	var articles []models.Article
 	database.DB.
-		Where("firecrawl_enabled = ? AND firecrawl_status = ?", true, "pending").
+		Joins("JOIN feeds ON feeds.id = articles.feed_id").
+		Where("feeds.firecrawl_enabled = ? AND articles.firecrawl_status = ?", true, "pending").
 		Limit(50).
 		Find(&articles)
 
@@ -108,30 +109,29 @@ func (s *FirecrawlScheduler) checkAndCrawl() {
 	semaphore := make(chan struct{}, s.concurrency)
 
 	var wg sync.WaitGroup
-	validArticles := 0
 
 	for i := range articles {
 		article := articles[i]
-
-		var feed models.Feed
-		if err := database.DB.First(&feed, article.FeedID).Error; err != nil {
-			continue
-		}
-
-		if !feed.FirecrawlEnabled {
-			continue
-		}
-
-		validArticles++
 		wg.Add(1)
 		go func(art models.Article) {
 			defer wg.Done()
 			semaphore <- struct{}{}
 			defer func() { <-semaphore }()
 
+			var feed models.Feed
+			if err := database.DB.First(&feed, art.FeedID).Error; err != nil {
+				results <- crawlResult{
+					articleID: art.ID,
+					success:   false,
+					errMsg:    err.Error(),
+					title:     art.Title,
+				}
+				return
+			}
+
 			database.DB.Model(&art).Update("firecrawl_status", "processing")
 
-			s.broadcastProgress(batchID, "processing", validArticles, 0, 0, &ws.FirecrawlArticleProgress{
+			s.broadcastProgress(batchID, "processing", len(articles), 0, 0, &ws.FirecrawlArticleProgress{
 				ID:     art.ID,
 				Title:  art.Title,
 				Status: "processing",
@@ -154,6 +154,9 @@ func (s *FirecrawlScheduler) checkAndCrawl() {
 				"firecrawl_status":     "completed",
 				"firecrawl_content":    result.Data.Markdown,
 				"firecrawl_crawled_at": now,
+			}
+			if feed.ContentCompletionEnabled {
+				updates["content_status"] = "incomplete"
 			}
 			database.DB.Model(&art).Updates(updates)
 
@@ -185,7 +188,7 @@ func (s *FirecrawlScheduler) checkAndCrawl() {
 				})
 		}
 
-		s.broadcastProgress(batchID, "processing", validArticles, completed, failed, &ws.FirecrawlArticleProgress{
+		s.broadcastProgress(batchID, "processing", len(articles), completed, failed, &ws.FirecrawlArticleProgress{
 			ID:    res.articleID,
 			Title: res.title,
 			Status: func() string {
@@ -199,9 +202,9 @@ func (s *FirecrawlScheduler) checkAndCrawl() {
 	}
 
 	duration := time.Since(startTime).Seconds()
-	log.Printf("[Firecrawl] Crawled %d/%d articles in %.2fs", completed, validArticles, duration)
+	log.Printf("[Firecrawl] Crawled %d/%d articles in %.2fs", completed, len(articles), duration)
 
-	s.broadcastProgress(batchID, "completed", validArticles, completed, failed, nil)
+	s.broadcastProgress(batchID, "completed", len(articles), completed, failed, nil)
 	s.lastError = ""
 }
 
@@ -234,4 +237,9 @@ func (s *FirecrawlScheduler) GetStatus() map[string]interface{} {
 		"last_error":          s.lastError,
 		"concurrency":         s.concurrency,
 	}
+}
+
+func (s *FirecrawlScheduler) Trigger() {
+	log.Println("[Firecrawl] Manual trigger received")
+	go s.checkAndCrawl()
 }

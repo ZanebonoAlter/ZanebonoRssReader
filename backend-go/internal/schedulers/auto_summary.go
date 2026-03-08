@@ -13,6 +13,7 @@ import (
 
 	"github.com/robfig/cron/v3"
 	"my-robot-backend/internal/models"
+	"my-robot-backend/internal/services"
 	"my-robot-backend/pkg/database"
 )
 
@@ -85,24 +86,18 @@ func (s *AutoSummaryScheduler) SetAIConfig(baseURL, apiKey, model string, timeRa
 
 	s.aiConfig = config
 
-	configJSON, err := json.Marshal(config)
+	settingsJSON, _, err := services.LoadSummaryConfig()
 	if err != nil {
-		return fmt.Errorf("failed to marshal AI config: %w", err)
+		return fmt.Errorf("failed to load AI config: %w", err)
 	}
 
-	var settings models.AISettings
-	err = database.DB.Where("key = ?", "summary_config").First(&settings).Error
+	settingsJSON["base_url"] = config.BaseURL
+	settingsJSON["api_key"] = config.APIKey
+	settingsJSON["model"] = config.Model
+	settingsJSON["time_range"] = config.TimeRange
 
-	if err == nil {
-		settings.Value = string(configJSON)
-		database.DB.Save(&settings)
-	} else {
-		settings = models.AISettings{
-			Key:         "summary_config",
-			Value:       string(configJSON),
-			Description: "AI summary generation configuration",
-		}
-		database.DB.Create(&settings)
+	if err := services.SaveSummaryConfig(settingsJSON, "AI summary generation configuration"); err != nil {
+		return fmt.Errorf("failed to save AI config: %w", err)
 	}
 
 	log.Println("AI configuration updated and saved to database")
@@ -143,7 +138,7 @@ func (s *AutoSummaryScheduler) checkAndGenerateSummaries() {
 	defer func() {
 		s.isExecuting = false
 		if r := recover(); r != nil {
-			log.Printf("❌ PANIC in checkAndGenerateSummaries: %v", r)
+			log.Printf("[ERROR] PANIC in checkAndGenerateSummaries: %v", r)
 			s.updateSchedulerStatus("idle", fmt.Sprintf("Panic: %v", r), nil)
 		}
 	}()
@@ -151,7 +146,6 @@ func (s *AutoSummaryScheduler) checkAndGenerateSummaries() {
 	log.Println("Starting auto-summary generation cycle")
 
 	startTime := time.Now()
-
 	s.updateSchedulerStatus("running", "", nil)
 
 	var feeds []models.Feed
@@ -178,26 +172,32 @@ func (s *AutoSummaryScheduler) checkAndGenerateSummaries() {
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
-					log.Printf("❌ PANIC recovered while processing feed %d (%s): %v", feed.ID, feed.Title, r)
+					log.Printf("[ERROR] PANIC recovered while processing feed %d (%s): %v", feed.ID, feed.Title, r)
 					failedCount++
 				}
 			}()
 
 			result, err := s.generateSummaryForFeed(&feed)
 			if err != nil {
-				log.Printf("❌ Error generating summary for feed %d (%s): %v", feed.ID, feed.Title, err)
+				log.Printf("[ERROR] Error generating summary for feed %d (%s): %v", feed.ID, feed.Title, err)
 				failedCount++
 			} else if result {
-				log.Printf("✓ Successfully generated summary for feed %d (%s)", feed.ID, feed.Title)
+				log.Printf("[OK] Successfully generated summary for feed %d (%s)", feed.ID, feed.Title)
 				successCount++
 			} else {
-				log.Printf("⊘ Skipped feed %d (%s) - no content to summarize", feed.ID, feed.Title)
+				log.Printf("[SKIP] Skipped feed %d (%s) - no content to summarize", feed.ID, feed.Title)
 			}
 		}()
 	}
 
 	duration := time.Since(startTime)
-	resultMsg := fmt.Sprintf("Completed: %d generated, %d skipped, %d failed in %v", successCount, len(feeds)-successCount-failedCount, failedCount, duration)
+	resultMsg := fmt.Sprintf(
+		"Completed: %d generated, %d skipped, %d failed in %v",
+		successCount,
+		len(feeds)-successCount-failedCount,
+		failedCount,
+		duration,
+	)
 
 	log.Printf("Auto-summary cycle completed: %s", resultMsg)
 	s.updateSchedulerStatus("idle", "", &startTime)
@@ -231,32 +231,32 @@ func (s *AutoSummaryScheduler) generateSummaryForFeed(feed *models.Feed) (bool, 
 
 	articleTexts := make([]string, 0, len(articles))
 	for i, article := range articles {
-		if i >= 50 {
+		if i >= 80 {
 			break
 		}
 
-		text := "标题: " + article.Title + "\n"
+		text := "Title: " + article.Title + "\n"
 		if article.Description != "" {
-			maxDesc := 500
+			maxDesc := 1200
 			if len(article.Description) < maxDesc {
 				maxDesc = len(article.Description)
 			}
-			text += "描述: " + article.Description[:maxDesc] + "\n"
+			text += "Description: " + article.Description[:maxDesc] + "\n"
 		}
 		if article.Content != "" {
-			maxContent := 1000
+			maxContent := 2400
 			if len(article.Content) < maxContent {
 				maxContent = len(article.Content)
 			}
-			text += "内容: " + article.Content[:maxContent] + "\n"
+			text += "Content: " + article.Content[:maxContent] + "\n"
 		}
-		text += "链接: " + article.Link + "\n"
+		text += "Link: " + article.Link + "\n"
 		articleTexts = append(articleTexts, text)
 	}
 
 	feedName := feed.Title
 	if feedName == "" {
-		feedName = "未知订阅源"
+		feedName = "Unknown feed"
 	}
 
 	categoryName := ""
@@ -264,10 +264,23 @@ func (s *AutoSummaryScheduler) generateSummaryForFeed(feed *models.Feed) (bool, 
 		categoryName = feed.Category.Name
 	}
 
-	title := feedName + " - " + time.Now().Format("2006-01-02 15:04") + " 新闻汇总"
+	title := feedName + " - " + time.Now().Format("2006-01-02 15:04") + " News Summary"
 	articlesText := joinStrings(articleTexts, "\n---\n")
 
-	summaryPrompt := buildFeedSummaryPrompt(feedName, categoryName, len(articles), articlesText)
+	preferenceService := services.NewPreferenceService(database.DB)
+	promptBuilder := services.NewAISummaryPromptBuilder(preferenceService, database.DB)
+	summaryPrompt, promptContext, err := promptBuilder.BuildPersonalizedPrompt(feedName, categoryName, articlesText, len(articles), "en")
+	if err != nil {
+		return false, fmt.Errorf("failed to build prompt: %w", err)
+	}
+
+	log.Printf(
+		"Auto summary prompt built for feed=%s personalized=%t preferred_feeds=%d preferred_categories=%d",
+		feedName,
+		promptContext.Personalized,
+		promptContext.FeedCount,
+		promptContext.CategoryCount,
+	)
 
 	summaryText, err := s.callAI(summaryPrompt)
 	if err != nil {
@@ -307,45 +320,45 @@ func (s *AutoSummaryScheduler) generateSummaryForFeed(feed *models.Feed) (bool, 
 func buildFeedSummaryPrompt(feedName string, categoryName string, articleCount int, articlesText string) string {
 	catInfo := ""
 	if categoryName != "" {
-		catInfo = "（属于分类：" + categoryName + "）"
+		catInfo = " (Category: " + categoryName + ")"
 	}
 
-	return `请对以下来自"` + feedName + `"订阅源` + catInfo + `的 ` + strconv.Itoa(articleCount) + ` 篇文章进行汇总总结。
+	return `Please summarize the following ` + strconv.Itoa(articleCount) + ` articles from "` + feedName + `"` + catInfo + `.
 
-文章列表（按时间倒序）：
+Articles (newest first):
 ` + articlesText + `
 
-请提供以下格式的总结：
+Use this format:
 
-## 核心主题
-用一句话概括这批文章的核心主题和趋势。
+## Core Theme
+Summarize the main theme in one sentence.
 
-## 重要新闻
+## Important News
 
-### 🔥 热点事件
-列出2-3个最重要的事件，每个事件包含：
-- 事件标题（用加粗）
-- 简要说明（2-3句话）
-- 引文标注新闻来源（使用 > [文章标题](链接) 格式）
+### Top Stories
+List 2-3 key stories. For each story include:
+- A bold title
+- A short explanation in 2-3 sentences
+- A source citation in the form > [Article Title](Link)
 
-### 📰 其他重要新闻
-列出其他重要新闻，每条包含：
-- 新闻标题（用加粗）
-- 简要说明（1-2句话）
-- 引文标注新闻来源（使用 > [文章标题](链接) 格式）
+### Other News
+List the other important stories. For each story include:
+- A bold title
+- A short explanation in 1-2 sentences
+- A source citation in the form > [Article Title](Link)
 
-## 核心观点
-总结3-5个核心观点或趋势，每个观点用简洁的语言表达。
+## Key Takeaways
+Summarize 3-5 important takeaways or trends.
 
-## 相关标签
-#` + feedName + ` #标签1 #标签2 #标签3
+## Tags
+#` + feedName + ` #tag1 #tag2 #tag3
 
-**重要提醒**：
-1. 必须为每条新闻标注来源，使用引文格式
-2. 来源格式：> [文章标题](文章链接)
-3. 确保总结简洁明了，突出重点
-4. 保持客观中立的语气
-5. 标签中必须包含订阅源名称：#` + feedName
+Important:
+1. Every news item must include a source citation.
+2. Use the format > [Article Title](Article Link).
+3. Keep the summary concise and focused.
+4. Stay objective and neutral.
+5. Include the feed name as one of the tags: #` + feedName
 }
 
 func (s *AutoSummaryScheduler) callAI(prompt string) (string, error) {
@@ -377,11 +390,11 @@ func (s *AutoSummaryScheduler) callAI(prompt string) (string, error) {
 	reqBody := openAIRequest{
 		Model: s.aiConfig.Model,
 		Messages: []openAIMessage{
-			{Role: "system", Content: "你是一个专业的新闻分析助手，擅长汇总和分析多篇文章。"},
+			{Role: "system", Content: "You are a professional news analysis assistant who summarizes and compares multiple articles."},
 			{Role: "user", Content: prompt},
 		},
 		Temperature: 0.7,
-		MaxTokens:   3000,
+		MaxTokens:   16000,
 	}
 
 	body, err := json.Marshal(reqBody)
@@ -416,8 +429,12 @@ func (s *AutoSummaryScheduler) callAI(prompt string) (string, error) {
 	}
 
 	if openAIResp.Error != nil {
-		return "", fmt.Errorf("AI API error: %s (type: %s, code: %s)",
-			openAIResp.Error.Message, openAIResp.Error.Type, openAIResp.Error.Code)
+		return "", fmt.Errorf(
+			"AI API error: %s (type: %s, code: %s)",
+			openAIResp.Error.Message,
+			openAIResp.Error.Type,
+			openAIResp.Error.Code,
+		)
 	}
 
 	if len(openAIResp.Choices) == 0 {
@@ -500,8 +517,16 @@ func (s *AutoSummaryScheduler) GetStatus() map[string]interface{} {
 	err := database.DB.Where("name = ?", "auto_summary").First(&task).Error
 
 	status := map[string]interface{}{
-		"running":        s.isRunning,
-		"check_interval": s.checkInterval.String(),
+		"status": func() string {
+			if s.isExecuting {
+				return "running"
+			}
+			if s.isRunning {
+				return "idle"
+			}
+			return "stopped"
+		}(),
+		"check_interval": int(s.checkInterval.Seconds()),
 		"next_run":       nextRun.Format(time.RFC3339),
 		"ai_configured":  s.aiConfig != nil,
 		"is_executing":   s.isExecuting,

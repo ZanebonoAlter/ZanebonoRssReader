@@ -2,6 +2,8 @@
  * 阅读行为相关类型定义
  */
 
+import type { ApiResponse } from './api'
+
 export type ReadingEventType = 'open' | 'close' | 'scroll' | 'favorite' | 'unfavorite'
 
 /**

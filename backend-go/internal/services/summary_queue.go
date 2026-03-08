@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"sync"
@@ -299,20 +300,20 @@ func (q *SummaryQueue) generateSummaryForFeed(feedID *uint, categoryID *uint, fe
 
 	articleTexts := make([]string, 0, len(articles))
 	for i, article := range articles {
-		if i >= 50 {
+		if i >= 80 {
 			break
 		}
 
 		text := "标题: " + article.Title + "\n"
 		if article.Description != "" {
-			maxDesc := 500
+			maxDesc := 1200
 			if len(article.Description) < maxDesc {
 				maxDesc = len(article.Description)
 			}
 			text += "描述: " + article.Description[:maxDesc] + "\n"
 		}
 		if article.Content != "" {
-			maxContent := 1000
+			maxContent := 2400
 			if len(article.Content) < maxContent {
 				maxContent = len(article.Content)
 			}
@@ -328,9 +329,22 @@ func (q *SummaryQueue) generateSummaryForFeed(feedID *uint, categoryID *uint, fe
 	}
 
 	title := displayName + " - " + time.Now().Format("2006-01-02 15:04") + " 新闻汇总"
-
 	articlesText := joinStrings(articleTexts, "\n---\n")
-	summaryPrompt := buildFeedSummaryPrompt(displayName, categoryName, len(articles), articlesText)
+
+	preferenceService := NewPreferenceService(database.DB)
+	promptBuilder := NewAISummaryPromptBuilder(preferenceService, database.DB)
+	summaryPrompt, promptContext, err := promptBuilder.BuildPersonalizedPrompt(displayName, categoryName, articlesText, len(articles), "zh")
+	if err != nil {
+		return nil, &SummaryError{Code: "PROMPT_BUILD_FAILED", Message: "构建总结提示词失败: " + err.Error()}
+	}
+
+	log.Printf(
+		"Queue summary prompt built for feed=%s personalized=%t preferred_feeds=%d preferred_categories=%d",
+		displayName,
+		promptContext.Personalized,
+		promptContext.FeedCount,
+		promptContext.CategoryCount,
+	)
 
 	type openAIMessage struct {
 		Role    string `json:"role"`
@@ -359,11 +373,11 @@ func (q *SummaryQueue) generateSummaryForFeed(feedID *uint, categoryID *uint, fe
 	reqBody := openAIRequest{
 		Model: config.Model,
 		Messages: []openAIMessage{
-			{Role: "system", Content: "你是一个专业的新闻分析助手，擅长汇总和分析多篇文章。"},
+			{Role: "system", Content: "你是一名专业的新闻分析助手，擅长总结并比较多篇文章。"},
 			{Role: "user", Content: summaryPrompt},
 		},
 		Temperature: 0.7,
-		MaxTokens:   3000,
+		MaxTokens:   16000,
 	}
 
 	body, _ := json.Marshal(reqBody)
@@ -378,7 +392,7 @@ func (q *SummaryQueue) generateSummaryForFeed(feedID *uint, categoryID *uint, fe
 	client := &http.Client{Timeout: 120 * time.Second}
 	resp, err := client.Do(httpReq)
 	if err != nil {
-		return nil, &SummaryError{Code: "API_ERROR", Message: "AI API调用失败: " + err.Error()}
+		return nil, &SummaryError{Code: "API_ERROR", Message: "AI API 调用失败: " + err.Error()}
 	}
 	defer resp.Body.Close()
 
@@ -386,15 +400,15 @@ func (q *SummaryQueue) generateSummaryForFeed(feedID *uint, categoryID *uint, fe
 
 	var openAIResp openAIResponse
 	if err := json.Unmarshal(respBody, &openAIResp); err != nil {
-		return nil, &SummaryError{Code: "PARSE_ERROR", Message: "解析AI响应失败: " + err.Error()}
+		return nil, &SummaryError{Code: "PARSE_ERROR", Message: "解析 AI 响应失败: " + err.Error()}
 	}
 
 	if openAIResp.Error != nil {
-		return nil, &SummaryError{Code: "AI_ERROR", Message: "AI API错误: " + openAIResp.Error.Message}
+		return nil, &SummaryError{Code: "AI_ERROR", Message: "AI API 错误: " + openAIResp.Error.Message}
 	}
 
 	if len(openAIResp.Choices) == 0 {
-		return nil, &SummaryError{Code: "NO_RESPONSE", Message: "AI未返回响应"}
+		return nil, &SummaryError{Code: "NO_RESPONSE", Message: "AI 未返回内容"}
 	}
 
 	summaryText := openAIResp.Choices[0].Message.Content
@@ -420,50 +434,6 @@ func (q *SummaryQueue) generateSummaryForFeed(feedID *uint, categoryID *uint, fe
 	}
 
 	return &aiSummary, nil
-}
-
-func buildFeedSummaryPrompt(feedName string, categoryName string, articleCount int, articlesText string) string {
-	catInfo := ""
-	if categoryName != "" {
-		catInfo = "（属于分类：" + categoryName + "）"
-	}
-
-	return `请对以下来自"` + feedName + `"订阅源` + catInfo + `的 ` + strconv.Itoa(articleCount) + ` 篇文章进行汇总总结。
-
-文章列表（按时间倒序）：
-` + articlesText + `
-
-请提供以下格式的总结：
-
-## 核心主题
-用一句话概括这批文章的核心主题和趋势。
-
-## 重要新闻
-
-### 🔥 热点事件
-列出2-3个最重要的事件，每个事件包含：
-- 事件标题（用加粗）
-- 简要说明（2-3句话）
-- 引文标注新闻来源（使用 > [文章标题](链接) 格式）
-
-### 📰 其他重要新闻
-列出其他重要新闻，每条包含：
-- 新闻标题（用加粗）
-- 简要说明（1-2句话）
-- 引文标注新闻来源（使用 > [文章标题](链接) 格式）
-
-## 核心观点
-总结3-5个核心观点或趋势，每个观点用简洁的语言表达。
-
-## 相关标签
-#` + feedName + ` #标签1 #标签2 #标签3
-
-**重要提醒**：
-1. 必须为每条新闻标注来源，使用引文格式
-2. 来源格式：> [文章标题](文章链接)
-3. 确保总结简洁明了，突出重点
-4. 保持客观中立的语气
-5. 标签中必须包含订阅源名称：#` + feedName
 }
 
 type SummaryError struct {

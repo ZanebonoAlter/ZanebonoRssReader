@@ -58,6 +58,24 @@ func (s *DigestScheduler) Start() error {
 		return nil
 	}
 
+	return s.reloadLocked()
+}
+
+func (s *DigestScheduler) Reload() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.reloadLocked()
+}
+
+func (s *DigestScheduler) reloadLocked() error {
+	if s.cron != nil && s.isRunning {
+		ctx := s.cron.Stop()
+		<-ctx.Done()
+	}
+
+	s.cron = cron.New()
+
 	config, err := s.loadOrCreateConfig()
 	if err != nil {
 		log.Printf("Failed to load digest config: %v", err)
@@ -177,13 +195,12 @@ func (s *DigestScheduler) exportToObsidian(isDaily bool, date time.Time, digests
 
 func (s *DigestScheduler) generateSummaryMessage(digests []CategoryDigest) string {
 	var message string
-	message += fmt.Sprintf("📊 摘要概览\n\n")
+	message += "日报周报概览\n\n"
 	message += fmt.Sprintf("共 %d 个分类有新内容\n\n", len(digests))
 
 	for _, digest := range digests {
-		message += fmt.Sprintf("📁 %s\n", digest.CategoryName)
-		message += fmt.Sprintf("   %d 个订阅源有更新\n", digest.FeedCount)
-		message += fmt.Sprintf("   %d 篇文章总结\n\n", len(digest.AISummaries))
+		message += fmt.Sprintf("- %s\n", digest.CategoryName)
+		message += fmt.Sprintf("  %d 条总结\n\n", len(digest.AISummaries))
 	}
 
 	return message
@@ -195,7 +212,7 @@ func (s *DigestScheduler) generateDetailedDigestMessage(digests []CategoryDigest
 	for _, digest := range digests {
 		content += fmt.Sprintf("## %s\n\n", digest.CategoryName)
 		content += fmt.Sprintf("**订阅源数量**: %d\n", digest.FeedCount)
-		content += fmt.Sprintf("**文章总结**: %d\n\n", len(digest.AISummaries))
+		content += fmt.Sprintf("**总结数量**: %d\n\n", len(digest.AISummaries))
 
 		for _, summary := range digest.AISummaries {
 			feedName := "未知订阅源"
@@ -229,7 +246,7 @@ func (s *DigestScheduler) generateDailyDigest() {
 	log.Printf("Generated daily digest with %d categories", len(digests))
 
 	if config.FeishuEnabled && config.FeishuWebhookURL != "" {
-		if err := s.sendFeishuDigest("每日摘要", digests, config); err != nil {
+		if err := s.sendFeishuDigest("每日日报", digests, config); err != nil {
 			log.Printf("Failed to send daily digest to Feishu: %v", err)
 		} else {
 			log.Println("Daily digest sent to Feishu successfully")
@@ -264,7 +281,7 @@ func (s *DigestScheduler) generateWeeklyDigest() {
 	log.Printf("Generated weekly digest with %d categories", len(digests))
 
 	if config.FeishuEnabled && config.FeishuWebhookURL != "" {
-		if err := s.sendFeishuDigest("每周摘要", digests, config); err != nil {
+		if err := s.sendFeishuDigest("每周周报", digests, config); err != nil {
 			log.Printf("Failed to send weekly digest to Feishu: %v", err)
 		} else {
 			log.Println("Weekly digest sent to Feishu successfully")

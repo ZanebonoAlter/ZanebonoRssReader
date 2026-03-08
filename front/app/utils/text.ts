@@ -61,7 +61,7 @@ export function highlightKeyword(text: string, keyword: string): string {
  */
 export function generateRandomColor(): string {
   const colors = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#6b7280']
-  return colors[Math.floor(Math.random() * colors.length)]
+  return colors[Math.floor(Math.random() * colors.length)] || '#6b7280'
 }
 
 /**

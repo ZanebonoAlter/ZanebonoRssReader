@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { UserPreference, ReadingStats } from '~/types'
-import { useReadingBehaviorApi } from '~/composables/api/reading_behavior'
+import { useReadingBehaviorApi } from '~/api/reading_behavior'
 
 export const usePreferencesStore = defineStore('preferences', () => {
   const api = useReadingBehaviorApi()
@@ -19,7 +19,7 @@ export const usePreferencesStore = defineStore('preferences', () => {
     preferences.value.filter((p) => p.category_id)
   )
 
-  const topFeeds = computed(() => 
+  const topFeeds = computed(() =>
     feedPreferences.value
       .sort((a, b) => b.preference_score - a.preference_score)
       .slice(0, 5)
@@ -39,7 +39,9 @@ export const usePreferencesStore = defineStore('preferences', () => {
       const response = await api.getUserPreferences(type)
 
       if (response.success && response.data) {
-        preferences.value = response.data
+        preferences.value = response.data.filter(
+          preference => Boolean(preference.feed_title || preference.category_name)
+        )
       } else {
         error.value = response.error || 'Failed to fetch preferences'
       }

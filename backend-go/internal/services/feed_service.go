@@ -75,16 +75,7 @@ func (s *FeedService) RefreshFeed(feedID uint) error {
 			continue
 		}
 
-		article := models.Article{
-			FeedID:      feed.ID,
-			Title:       entry.Title,
-			Description: entry.Description,
-			Content:     entry.Content,
-			Link:        entry.Link,
-			ImageURL:    entry.ImageURL,
-			PubDate:     entry.PubDate,
-			Author:      entry.Author,
-		}
+		article := s.buildArticleFromEntry(feed, entry)
 
 		if article.PubDate == nil {
 			now := time.Now().In(time.FixedZone("CST", 8*3600))
@@ -124,14 +115,46 @@ func (s *FeedService) cleanupOldArticles(feed *models.Feed) {
 		return
 	}
 
-	if len(articles) > feed.MaxArticles {
-		toDelete := articles[feed.MaxArticles:]
-		for _, article := range toDelete {
-			database.DB.Delete(&article)
+	if len(articles) <= feed.MaxArticles {
+		return
+	}
+
+	articlesToDelete := len(articles) - feed.MaxArticles
+	for i := len(articles) - 1; i >= 0 && articlesToDelete > 0; i-- {
+		article := articles[i]
+		if article.Favorite {
+			continue
 		}
+
+		database.DB.Delete(&article)
+		articlesToDelete--
 	}
 }
 
 func (s *FeedService) FetchFeedPreview(feedURL string) (title, description string, err error) {
 	return s.rssParser.FetchFeedMetadata(feedURL)
+}
+
+func (s *FeedService) buildArticleFromEntry(feed models.Feed, entry ParsedEntry) models.Article {
+	article := models.Article{
+		FeedID:           feed.ID,
+		Title:            entry.Title,
+		Description:      entry.Description,
+		Content:          entry.Content,
+		Link:             entry.Link,
+		ImageURL:         entry.ImageURL,
+		PubDate:          entry.PubDate,
+		Author:           entry.Author,
+		FirecrawlEnabled: feed.FirecrawlEnabled,
+		ContentStatus:    "complete",
+	}
+
+	if feed.FirecrawlEnabled {
+		article.FirecrawlStatus = "pending"
+		if feed.ContentCompletionEnabled {
+			article.ContentStatus = "incomplete"
+		}
+	}
+
+	return article
 }

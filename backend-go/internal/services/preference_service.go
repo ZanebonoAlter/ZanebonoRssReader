@@ -1,6 +1,7 @@
 package services
 
 import (
+	"log"
 	"math"
 	"time"
 
@@ -17,13 +18,121 @@ func NewPreferenceService(db *gorm.DB) *PreferenceService {
 }
 
 func (s *PreferenceService) UpdateAllPreferences() error {
-	if err := s.updateFeedPreferences(); err != nil {
-		return err
-	}
-	return s.updateCategoryPreferences()
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		txService := NewPreferenceService(tx)
+
+		repairedBehaviors, err := txService.repairOrphanReadingBehaviors()
+		if err != nil {
+			return err
+		}
+
+		deletedBehaviors, err := txService.deleteUnrecoverableReadingBehaviors()
+		if err != nil {
+			return err
+		}
+
+		deletedPrefs, err := txService.deleteOrphanPreferences()
+		if err != nil {
+			return err
+		}
+
+		if err := tx.Exec("DELETE FROM user_preferences").Error; err != nil {
+			return err
+		}
+
+		feedCount, err := txService.updateFeedPreferences()
+		if err != nil {
+			return err
+		}
+
+		categoryCount, err := txService.updateCategoryPreferences()
+		if err != nil {
+			return err
+		}
+
+		log.Printf(
+			"Preference update completed: repaired_behaviors=%d deleted_behaviors=%d deleted_orphan_preferences=%d rebuilt_feed_preferences=%d rebuilt_category_preferences=%d",
+			repairedBehaviors,
+			deletedBehaviors,
+			deletedPrefs,
+			feedCount,
+			categoryCount,
+		)
+
+		return nil
+	})
 }
 
-func (s *PreferenceService) updateFeedPreferences() error {
+func (s *PreferenceService) repairOrphanReadingBehaviors() (int64, error) {
+	result := s.db.Exec(`
+		UPDATE reading_behaviors
+		SET category_id = (
+			SELECT feeds.category_id
+			FROM feeds
+			WHERE feeds.id = reading_behaviors.feed_id
+		)
+		WHERE category_id IS NOT NULL
+		  AND NOT EXISTS (
+			SELECT 1 FROM categories
+			WHERE categories.id = reading_behaviors.category_id
+		  )
+		  AND EXISTS (
+			SELECT 1
+			FROM feeds
+			JOIN categories ON categories.id = feeds.category_id
+			WHERE feeds.id = reading_behaviors.feed_id
+		  )
+	`)
+
+	return result.RowsAffected, result.Error
+}
+
+func (s *PreferenceService) deleteUnrecoverableReadingBehaviors() (int64, error) {
+	result := s.db.Exec(`
+		DELETE FROM reading_behaviors
+		WHERE category_id IS NOT NULL
+		  AND NOT EXISTS (
+			SELECT 1 FROM categories
+			WHERE categories.id = reading_behaviors.category_id
+		  )
+	`)
+
+	return result.RowsAffected, result.Error
+}
+
+func (s *PreferenceService) deleteOrphanPreferences() (int64, error) {
+	var totalDeleted int64
+
+	categoryResult := s.db.Exec(`
+		DELETE FROM user_preferences
+		WHERE category_id IS NOT NULL
+		  AND NOT EXISTS (
+			SELECT 1 FROM categories
+			WHERE categories.id = user_preferences.category_id
+		  )
+	`)
+	if categoryResult.Error != nil {
+		return 0, categoryResult.Error
+	}
+	totalDeleted += categoryResult.RowsAffected
+
+	feedResult := s.db.Exec(`
+		DELETE FROM user_preferences
+		WHERE feed_id IS NOT NULL
+		  AND NOT EXISTS (
+			SELECT 1 FROM feeds
+			WHERE feeds.id = user_preferences.feed_id
+		  )
+	`)
+	if feedResult.Error != nil {
+		return 0, feedResult.Error
+	}
+	totalDeleted += feedResult.RowsAffected
+
+	return totalDeleted, nil
+}
+
+func (s *PreferenceService) updateFeedPreferences() (int, error) {
 	type FeedStats struct {
 		FeedID           uint
 		TotalEvents      int64
@@ -44,7 +153,7 @@ func (s *PreferenceService) updateFeedPreferences() error {
 		Where("feed_id IS NOT NULL").
 		Group("feed_id").
 		Scan(&feedStats).Error; err != nil {
-		return err
+		return 0, err
 	}
 
 	for _, stats := range feedStats {
@@ -65,39 +174,23 @@ func (s *PreferenceService) updateFeedPreferences() error {
 			avgReadingTime = stats.TotalReadingTime / int(stats.TotalEvents)
 		}
 
-		var pref models.UserPreference
-		if err := s.db.Where("feed_id = ?", stats.FeedID).First(&pref).Error; err != nil {
-			if err == gorm.ErrRecordNotFound {
-				pref = models.UserPreference{
-					FeedID:            &stats.FeedID,
-					PreferenceScore:   preferenceScore,
-					AvgReadingTime:    avgReadingTime,
-					InteractionCount:  int(stats.TotalEvents),
-					ScrollDepthAvg:    stats.AvgScrollDepth,
-					LastInteractionAt: &lastInteraction,
-				}
-				if err := s.db.Create(&pref).Error; err != nil {
-					return err
-				}
-			} else {
-				return err
-			}
-		} else {
-			pref.PreferenceScore = preferenceScore
-			pref.AvgReadingTime = avgReadingTime
-			pref.InteractionCount = int(stats.TotalEvents)
-			pref.ScrollDepthAvg = stats.AvgScrollDepth
-			pref.LastInteractionAt = &lastInteraction
-			if err := s.db.Save(&pref).Error; err != nil {
-				return err
-			}
+		pref := models.UserPreference{
+			FeedID:            &stats.FeedID,
+			PreferenceScore:   preferenceScore,
+			AvgReadingTime:    avgReadingTime,
+			InteractionCount:  int(stats.TotalEvents),
+			ScrollDepthAvg:    stats.AvgScrollDepth,
+			LastInteractionAt: &lastInteraction,
+		}
+		if err := s.db.Create(&pref).Error; err != nil {
+			return 0, err
 		}
 	}
 
-	return nil
+	return len(feedStats), nil
 }
 
-func (s *PreferenceService) updateCategoryPreferences() error {
+func (s *PreferenceService) updateCategoryPreferences() (int, error) {
 	type CategoryStats struct {
 		CategoryID       *uint
 		TotalEvents      int64
@@ -118,7 +211,7 @@ func (s *PreferenceService) updateCategoryPreferences() error {
 		Where("category_id IS NOT NULL").
 		Group("category_id").
 		Scan(&categoryStats).Error; err != nil {
-		return err
+		return 0, err
 	}
 
 	for _, stats := range categoryStats {
@@ -143,36 +236,20 @@ func (s *PreferenceService) updateCategoryPreferences() error {
 			avgReadingTime = stats.TotalReadingTime / int(stats.TotalEvents)
 		}
 
-		var pref models.UserPreference
-		if err := s.db.Where("category_id = ?", stats.CategoryID).First(&pref).Error; err != nil {
-			if err == gorm.ErrRecordNotFound {
-				pref = models.UserPreference{
-					CategoryID:        stats.CategoryID,
-					PreferenceScore:   preferenceScore,
-					AvgReadingTime:    avgReadingTime,
-					InteractionCount:  int(stats.TotalEvents),
-					ScrollDepthAvg:    stats.AvgScrollDepth,
-					LastInteractionAt: &lastInteraction,
-				}
-				if err := s.db.Create(&pref).Error; err != nil {
-					return err
-				}
-			} else {
-				return err
-			}
-		} else {
-			pref.PreferenceScore = preferenceScore
-			pref.AvgReadingTime = avgReadingTime
-			pref.InteractionCount = int(stats.TotalEvents)
-			pref.ScrollDepthAvg = stats.AvgScrollDepth
-			pref.LastInteractionAt = &lastInteraction
-			if err := s.db.Save(&pref).Error; err != nil {
-				return err
-			}
+		pref := models.UserPreference{
+			CategoryID:        stats.CategoryID,
+			PreferenceScore:   preferenceScore,
+			AvgReadingTime:    avgReadingTime,
+			InteractionCount:  int(stats.TotalEvents),
+			ScrollDepthAvg:    stats.AvgScrollDepth,
+			LastInteractionAt: &lastInteraction,
+		}
+		if err := s.db.Create(&pref).Error; err != nil {
+			return 0, err
 		}
 	}
 
-	return nil
+	return len(categoryStats), nil
 }
 
 func (s *PreferenceService) calculatePreferenceScore(
@@ -204,7 +281,8 @@ func (s *PreferenceService) calculatePreferenceScore(
 
 func (s *PreferenceService) GetUserFeedPreferences() ([]models.UserPreference, error) {
 	var preferences []models.UserPreference
-	err := s.db.Where("feed_id IS NOT NULL").
+	err := s.db.Joins("JOIN feeds ON feeds.id = user_preferences.feed_id").
+		Where("user_preferences.feed_id IS NOT NULL").
 		Preload("Feed").
 		Order("preference_score DESC").
 		Find(&preferences).Error
@@ -213,7 +291,8 @@ func (s *PreferenceService) GetUserFeedPreferences() ([]models.UserPreference, e
 
 func (s *PreferenceService) GetUserCategoryPreferences() ([]models.UserPreference, error) {
 	var preferences []models.UserPreference
-	err := s.db.Where("category_id IS NOT NULL").
+	err := s.db.Joins("JOIN categories ON categories.id = user_preferences.category_id").
+		Where("user_preferences.category_id IS NOT NULL").
 		Preload("Category").
 		Order("preference_score DESC").
 		Find(&preferences).Error
@@ -229,11 +308,11 @@ func (s *PreferenceService) GetTopPreferredFeeds(limit int) ([]uint, error) {
 	var results []FeedIDScore
 	err := s.db.Model(&models.UserPreference{}).
 		Select("feed_id, preference_score as score").
-		Where("feed_id IS NOT NULL").
+		Joins("JOIN feeds ON feeds.id = user_preferences.feed_id").
+		Where("user_preferences.feed_id IS NOT NULL").
 		Order("preference_score DESC").
 		Limit(limit).
 		Scan(&results).Error
-
 	if err != nil {
 		return nil, err
 	}
@@ -255,11 +334,11 @@ func (s *PreferenceService) GetTopPreferredCategories(limit int) ([]uint, error)
 	var results []CategoryIDScore
 	err := s.db.Model(&models.UserPreference{}).
 		Select("category_id, preference_score as score").
-		Where("category_id IS NOT NULL").
+		Joins("JOIN categories ON categories.id = user_preferences.category_id").
+		Where("user_preferences.category_id IS NOT NULL").
 		Order("preference_score DESC").
 		Limit(limit).
 		Scan(&results).Error
-
 	if err != nil {
 		return nil, err
 	}

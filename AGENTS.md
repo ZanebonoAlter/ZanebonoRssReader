@@ -1,4 +1,4 @@
-# AGENTS.md - Agent Coding Guidelines
+﻿# AGENTS.md - Agent Coding Guidelines
 
 This document provides guidance to agentic coding assistants working in this repository.
 
@@ -160,6 +160,13 @@ const apiStore = useApiStore()
 const { categories } = storeToRefs(apiStore)
 </script>
 ```
+
+#### File Encoding
+- **All frontend source files must be UTF-8**. This includes `.vue`, `.ts`, `.js`, `.css`, `.json`, and config files.
+- **Never save frontend files as GBK, ANSI, UTF-16, or system-default encodings**. Nuxt/Vite toolchains will crash on mixed encodings.
+- **When editing files from PowerShell, always specify UTF-8 explicitly**. Use `Set-Content -Encoding utf8` or another explicit UTF-8 write path.
+- **If a file is rewritten by script, preserve UTF-8 on write-back**. Do not rely on editor or shell defaults.
+- **If the frontend build throws a UTF-8 parse or Vue preprocessor panic, check file encoding first before debugging component logic**.
 
 #### Type Definitions
 - **Centralized types** in `app/types/` - separate files by domain (category.ts, feed.ts, article.ts)

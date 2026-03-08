@@ -1,24 +1,42 @@
-import { ref } from 'vue'
+﻿import { ref } from 'vue'
+import { apiClient } from '~/api/client'
 
 export interface ContentCompletionStatus {
+  contentStatus: 'complete' | 'incomplete' | 'pending' | 'failed'
+  attempts: number
+  error: string | null
+  fetchedAt: string | null
+  aiContentSummary?: string
+  fullContent?: string
+  firecrawlContent?: string
+  firecrawlStatus?: 'pending' | 'processing' | 'completed' | 'failed'
+  firecrawlError?: string | null
+}
+
+interface CompletionStatusPayload {
   content_status: 'complete' | 'incomplete' | 'pending' | 'failed'
   attempts: number
   error: string | null
   fetched_at: string | null
+  ai_content_summary?: string
+  full_content?: string
+  firecrawl_content?: string
+  firecrawl_status?: 'pending' | 'processing' | 'completed' | 'failed'
+  firecrawl_error?: string | null
 }
 
 export function useContentCompletion() {
   const loading = ref(false)
   const error = ref<string | null>(null)
 
-  const completeArticle = async (articleId: string) => {
+  const completeArticle = async (articleId: string, options: { force?: boolean } = {}) => {
     loading.value = true
     error.value = null
 
     try {
-      const response = await $fetch<{ success: boolean; message?: string; error?: string }>(
-        `/api/content-completion/articles/${articleId}/complete`,
-        { method: 'POST' }
+      const response = await apiClient.post<{ message?: string }>(
+        `/content-completion/articles/${articleId}/complete`,
+        options.force ? { force: true } : undefined,
       )
 
       if (!response.success) {
@@ -35,18 +53,24 @@ export function useContentCompletion() {
   }
 
   const getCompletionStatus = async (articleId: string): Promise<ContentCompletionStatus> => {
-    try {
-      const response = await $fetch<{ success: boolean; data: ContentCompletionStatus }>(
-        `/api/content-completion/articles/${articleId}/status`
-      )
+    const response = await apiClient.get<CompletionStatusPayload>(
+      `/content-completion/articles/${articleId}/status`
+    )
 
-      if (!response.success) {
-        throw new Error('Failed to get completion status')
-      }
+    if (!response.success || !response.data) {
+      throw new Error(response.error || 'Failed to get completion status')
+    }
 
-      return response.data
-    } catch (e) {
-      throw e
+    return {
+      contentStatus: response.data.content_status,
+      attempts: response.data.attempts,
+      error: response.data.error,
+      fetchedAt: response.data.fetched_at,
+      aiContentSummary: response.data.ai_content_summary,
+      fullContent: response.data.full_content,
+      firecrawlContent: response.data.firecrawl_content,
+      firecrawlStatus: response.data.firecrawl_status,
+      firecrawlError: response.data.firecrawl_error,
     }
   }
 
@@ -55,21 +79,21 @@ export function useContentCompletion() {
     error.value = null
 
     try {
-      const response = await $fetch<{
-        success: boolean
+      const response = await apiClient.post<{
         completed: number
         failed: number
         total: number
-      }>(
-        `/api/content-completion/feeds/${feedId}/complete-all`,
-        { method: 'POST' }
-      )
+      }>(`/content-completion/feeds/${feedId}/complete-all`)
 
-      if (!response.success) {
-        throw new Error('Failed to complete feed articles')
+      if (!response.success || !response.data) {
+        throw new Error(response.error || 'Failed to complete feed articles')
       }
 
-      return response.data
+      return {
+        completed: response.data.completed,
+        failed: response.data.failed,
+        total: response.data.total,
+      }
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Unknown error'
       throw e

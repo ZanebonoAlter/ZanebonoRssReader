@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import DigestList from '~/components/digest/DigestList.vue'
+import DigestListView from '~/features/digest/components/DigestListView.vue'
 </script>
 
 <template>
   <div class="h-full">
-    <DigestList />
+    <DigestListView />
   </div>
 </template>

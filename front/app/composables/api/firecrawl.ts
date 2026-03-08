@@ -40,9 +40,14 @@ export function useFirecrawlApi() {
     return apiClient.get('/firecrawl/status')
   }
 
+  async function saveSettings(config: FirecrawlConfig): Promise<ApiResponse<FirecrawlStatus>> {
+    return apiClient.post('/firecrawl/settings', config)
+  }
+
   return {
     crawlArticle,
     enableFeedFirecrawl,
     getStatus,
+    saveSettings,
   }
 }

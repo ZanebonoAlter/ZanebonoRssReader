@@ -1,6 +1,13 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { Icon } from '@iconify/vue'
 import type { Article, RssFeed } from '~/types'
+import {
+  getFirecrawlStatusMeta,
+  getStatusToneClasses,
+  getSummaryStatusMeta,
+  shouldShowFirecrawlStatus,
+  shouldShowSummaryStatus,
+} from '~/composables/useArticleProcessingStatus'
 
 import './ArticleCard.css'
 
@@ -12,7 +19,7 @@ interface Props {
 
 const props = withDefaults(defineProps<Props>(), {
   compact: false,
-  selected: false
+  selected: false,
 })
 
 const emit = defineEmits<{
@@ -20,17 +27,22 @@ const emit = defineEmits<{
   favorite: [id: string]
 }>()
 
-const articlesStore = useArticlesStore()
 const feedsStore = useFeedsStore()
 
 const feed = computed(() => feedsStore.feeds.find((f: RssFeed) => f.id === props.article.feedId))
 const category = computed(() => feedsStore.getCategoryBySlug(props.article.category))
+const firecrawlMeta = computed(() => getFirecrawlStatusMeta(props.article))
+const summaryMeta = computed(() => getSummaryStatusMeta(props.article))
+const showFirecrawlStatus = computed(() => shouldShowFirecrawlStatus(props.article, feed.value))
+const showSummaryStatus = computed(() => shouldShowSummaryStatus(props.article, feed.value))
+const hasError = computed(() => Boolean(props.article.firecrawlError || props.article.completionError))
+const errorHint = computed(() => props.article.completionError || props.article.firecrawlError || '')
 </script>
 
 <template>
   <article
-    class="paper-card group cursor-pointer overflow-hidden mx-2 mb-2 first:mt-2"
-    :class="{ 'opacity-60': article.read, 'selected': selected }"
+    class="paper-card group article-card cursor-pointer overflow-hidden mx-2 mb-2 first:mt-2"
+    :class="{ 'opacity-60': article.read, selected }"
     @click="emit('click', article)"
   >
     <div
@@ -50,7 +62,7 @@ const category = computed(() => feedsStore.getCategoryBySlug(props.article.categ
         <div
           v-if="feed && !compact"
           class="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
-          :style="{ backgroundColor: feed.color + '20' }"
+          :style="{ backgroundColor: `${feed.color}20` }"
         >
           <FeedIcon
             :icon="feed.icon"
@@ -62,20 +74,52 @@ const category = computed(() => feedsStore.getCategoryBySlug(props.article.categ
 
         <div class="flex-1 min-w-0">
           <div class="flex items-start justify-between gap-2">
-            <div class="flex-1">
+            <div class="flex-1 min-w-0">
               <h3
                 class="font-semibold text-ink-black group-hover:text-ink-500 transition-colors line-clamp-2"
                 :class="{ 'text-sm': compact, 'text-base': !compact }"
               >
                 {{ article.title }}
               </h3>
+
+              <div class="mt-2 flex flex-wrap items-center gap-2">
+                <span
+                  v-if="showFirecrawlStatus"
+                  class="inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-medium"
+                  :class="getStatusToneClasses(firecrawlMeta.tone)"
+                >
+                  <Icon
+                    :icon="firecrawlMeta.icon"
+                    width="12"
+                    height="12"
+                    :class="{ 'animate-spin': article.firecrawlStatus === 'processing' }"
+                  />
+                  {{ firecrawlMeta.label }}
+                </span>
+                <span
+                  v-if="showSummaryStatus"
+                  class="inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-medium"
+                  :class="getStatusToneClasses(summaryMeta.tone)"
+                >
+                  <Icon
+                    :icon="summaryMeta.icon"
+                    width="12"
+                    height="12"
+                    :class="{ 'animate-spin': article.contentStatus === 'pending' }"
+                  />
+                  {{ summaryMeta.label }}
+                </span>
+              </div>
+
               <div
-                v-if="!compact && article.description"
-                class="text-sm text-ink-medium mt-1.5 prose prose-sm max-h-10 overflow-hidden"
+                v-if="hasError"
+                class="mt-2 text-xs text-rose-600 line-clamp-1"
+                :title="errorHint"
               >
-                <div v-html="article.description" />
+                {{ errorHint }}
               </div>
             </div>
+
             <button
               class="flex-shrink-0 p-2 hover:bg-amber-50/80 rounded-xl transition-all"
               :class="{ 'text-amber-500': article.favorite, 'text-ink-muted hover:text-amber-500': !article.favorite }"
@@ -89,46 +133,21 @@ const category = computed(() => feedsStore.getCategoryBySlug(props.article.categ
             </button>
           </div>
 
-          <div class="flex flex-wrap items-center gap-2 mt-2.5 text-xs text-ink-light">
+          <div class="flex flex-wrap items-center gap-2 mt-3 text-xs text-ink-light">
             <span
               v-if="category"
               class="px-2.5 py-1 rounded-full"
-              :style="{ backgroundColor: category.color + '20', color: category.color }"
+              :style="{ backgroundColor: `${category.color}20`, color: category.color }"
             >
               {{ category.name }}
             </span>
             <span v-if="feed" class="text-ink-medium">{{ feed.title }}</span>
             <span>{{ $dayjs(article.pubDate).fromNow() }}</span>
             <span v-if="article.author">{{ article.author }}</span>
-            <span
-              v-if="article.read"
-              class="text-ink-muted"
-            >
-              已读
-            </span>
+            <span v-if="article.read" class="text-ink-muted">已读</span>
           </div>
         </div>
       </div>
     </div>
   </article>
 </template>
-
-<style scoped>
-.prose {
-  line-height: 1.5;
-}
-
-.prose :deep(p) {
-  margin: 0;
-}
-
-.prose :deep(img) {
-  display: none;
-}
-
-.prose-sm :deep(*),
-.prose-sm :deep(p) {
-  font-size: 0.875rem;
-  line-height: 1.25;
-}
-</style>

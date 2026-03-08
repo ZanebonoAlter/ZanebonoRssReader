@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -78,14 +77,14 @@ func TestAIConnection(c *gin.Context) {
 	if err := aiService.TestConnection(); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
-			"error":   "连接测试失败: " + err.Error(),
+			"error":   "Connection test failed: " + err.Error(),
 		})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"message": "连接测试成功",
+		"message": "Connection test succeeded",
 	})
 }
 
@@ -125,13 +124,7 @@ func SaveAISettings(c *gin.Context) {
 		model = "gpt-4o-mini"
 	}
 
-	configJSON := map[string]interface{}{
-		"base_url": baseURL,
-		"api_key":  req.APIKey,
-		"model":    model,
-	}
-
-	configBytes, err := json.Marshal(configJSON)
+	configJSON, _, err := services.LoadSummaryConfig()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
@@ -140,20 +133,19 @@ func SaveAISettings(c *gin.Context) {
 		return
 	}
 
-	var settings models.AISettings
-	err = database.DB.Where("key = ?", "summary_config").First(&settings).Error
+	configJSON["base_url"] = baseURL
+	configJSON["api_key"] = req.APIKey
+	configJSON["model"] = model
 
-	if err == nil {
-		settings.Value = string(configBytes)
-		database.DB.Save(&settings)
-	} else {
-		settings = models.AISettings{
-			Key:         "summary_config",
-			Value:       string(configBytes),
-			Description: "AI summary generation configuration",
-		}
-		database.DB.Create(&settings)
+	if err := services.SaveSummaryConfig(configJSON, "AI summary generation configuration"); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
 	}
+
+	SetCompletionAICredentials(baseURL, req.APIKey, model)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,

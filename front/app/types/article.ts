@@ -1,10 +1,7 @@
-/**
- * 文章相关类型定义
+﻿/**
+ * Article type definitions.
  */
 
-/**
- * 文章数据模型
- */
 export interface Article {
   id: string
   feedId: string
@@ -17,18 +14,19 @@ export interface Article {
   category: string
   read?: boolean
   favorite?: boolean
-  content_status?: 'complete' | 'incomplete' | 'pending' | 'failed'
-  full_content?: string
-  content_fetched_at?: string
-  completion_attempts?: number
-  completion_error?: string
-  ai_content_summary?: string
+  contentStatus?: 'complete' | 'incomplete' | 'pending' | 'failed'
+  fullContent?: string
+  contentFetchedAt?: string
+  completionAttempts?: number
+  completionError?: string
+  aiContentSummary?: string
+  firecrawlStatus?: 'pending' | 'processing' | 'completed' | 'failed'
+  firecrawlError?: string
+  firecrawlContent?: string
+  firecrawlCrawledAt?: string
   imageUrl?: string
 }
 
-/**
- * 文章筛选条件
- */
 export interface ArticleFilters {
   page?: number
   per_page?: number
@@ -42,17 +40,11 @@ export interface ArticleFilters {
   end_date?: string
 }
 
-/**
- * 文章更新数据
- */
 export interface UpdateArticleData {
   read?: boolean
   favorite?: boolean
 }
 
-/**
- * 批量更新文章数据
- */
 export interface BulkUpdateArticlesData {
   ids: number[]
   read?: boolean

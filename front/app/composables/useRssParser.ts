@@ -1,5 +1,5 @@
 import type { RssFeed, Article, FeedResponse } from '~/types'
-import { getCategoryColor } from '~/utils/text'
+import { cleanHtml, extractFirstImage, getCategoryColor } from '~/utils/text'
 
 export function useRssParser() {
   const config = useRuntimeConfig()
@@ -42,7 +42,7 @@ export function useRssParser() {
       id: `${feedId}-${index}`,
       feedId,
       title: item.title,
-      description: cleanDescription(item.description || ''),
+      description: cleanHtml(item.description || ''),
       content: item.content || item.description || '',
       link: item.link,
       pubDate: item.pubDate,
@@ -50,7 +50,7 @@ export function useRssParser() {
       category: feedId, // Will be updated by the caller
       read: false,
       favorite: false,
-      imageUrl: item.thumbnail || item.enclosure?.link || extractFirstImage(item.content || '')
+      imageUrl: item.thumbnail || item.enclosure?.link || extractFirstImage(item.content || ''),
     }))
   }
 
@@ -69,7 +69,7 @@ export function useRssParser() {
       category: categoryId,
       icon: 'mdi:rss',
       color: getCategoryColor(categoryId),
-      lastUpdated: new Date().toISOString()
+      lastUpdated: new Date().toISOString(),
     }
   }
 
@@ -78,7 +78,7 @@ export function useRssParser() {
     error: readonly(error),
     fetchFeed,
     convertToArticles,
-    createFeedFromResponse
+    createFeedFromResponse,
   }
 }
 

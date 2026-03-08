@@ -3,8 +3,11 @@ package digest
 import (
 	"my-robot-backend/internal/models"
 	"my-robot-backend/pkg/database"
+	"sort"
 	"time"
 )
+
+var digestCST = time.FixedZone("CST", 8*3600)
 
 type DigestGenerator struct {
 	config *DigestConfig
@@ -21,9 +24,18 @@ type CategoryDigest struct {
 	AISummaries  []models.AISummary
 }
 
+func normalizeDigestDate(date time.Time) time.Time {
+	return date.In(digestCST)
+}
+
+func startOfDigestDay(date time.Time) time.Time {
+	current := normalizeDigestDate(date)
+	return time.Date(current.Year(), current.Month(), current.Day(), 0, 0, 0, 0, digestCST)
+}
+
 func (g *DigestGenerator) GenerateDailyDigest(date time.Time) ([]CategoryDigest, error) {
-	startTime := date.Truncate(24 * time.Hour)
-	endTime := startTime.Add(24 * time.Hour)
+	startTime := startOfDigestDay(date)
+	endTime := startTime.AddDate(0, 0, 1)
 
 	summaries, err := g.fetchSummariesInRange(startTime, endTime)
 	if err != nil {
@@ -34,9 +46,9 @@ func (g *DigestGenerator) GenerateDailyDigest(date time.Time) ([]CategoryDigest,
 }
 
 func (g *DigestGenerator) GenerateWeeklyDigest(date time.Time) ([]CategoryDigest, error) {
-	daysSinceMonday := (int(date.Weekday()) + 6) % 7
-	monday := date.AddDate(0, 0, -daysSinceMonday)
-	monday = time.Date(monday.Year(), monday.Month(), monday.Day(), 0, 0, 0, 0, date.Location())
+	current := normalizeDigestDate(date)
+	daysSinceMonday := (int(current.Weekday()) + 6) % 7
+	monday := startOfDigestDay(current.AddDate(0, 0, -daysSinceMonday))
 	sunday := monday.AddDate(0, 0, 7)
 
 	summaries, err := g.fetchSummariesInRange(monday, sunday)
@@ -52,12 +64,14 @@ func (g *DigestGenerator) fetchSummariesInRange(start, end time.Time) ([]models.
 	err := database.DB.Where("created_at >= ? AND created_at < ?", start, end).
 		Preload("Feed").
 		Preload("Category").
+		Order("created_at DESC").
 		Find(&summaries).Error
 	return summaries, err
 }
 
 func (g *DigestGenerator) groupByCategory(summaries []models.AISummary) []CategoryDigest {
 	categoryMap := make(map[uint]*CategoryDigest)
+	feedSeenMap := make(map[uint]map[uint]struct{})
 
 	for _, summary := range summaries {
 		categoryID := uint(0)
@@ -75,16 +89,33 @@ func (g *DigestGenerator) groupByCategory(summaries []models.AISummary) []Catego
 				FeedCount:    0,
 				AISummaries:  []models.AISummary{},
 			}
+			feedSeenMap[categoryID] = make(map[uint]struct{})
 		}
 
 		categoryMap[categoryID].AISummaries = append(categoryMap[categoryID].AISummaries, summary)
-		categoryMap[categoryID].FeedCount++
+
+		if summary.FeedID != nil {
+			if _, exists := feedSeenMap[categoryID][*summary.FeedID]; !exists {
+				feedSeenMap[categoryID][*summary.FeedID] = struct{}{}
+				categoryMap[categoryID].FeedCount++
+			}
+		}
 	}
 
 	result := make([]CategoryDigest, 0, len(categoryMap))
 	for _, digest := range categoryMap {
+		sort.SliceStable(digest.AISummaries, func(i, j int) bool {
+			return digest.AISummaries[i].CreatedAt.After(digest.AISummaries[j].CreatedAt)
+		})
 		result = append(result, *digest)
 	}
+
+	sort.SliceStable(result, func(i, j int) bool {
+		if len(result[i].AISummaries) == len(result[j].AISummaries) {
+			return result[i].CategoryName < result[j].CategoryName
+		}
+		return len(result[i].AISummaries) > len(result[j].AISummaries)
+	})
 
 	return result
 }

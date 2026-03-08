@@ -1,24 +1,9 @@
 package services
 
-import (
-	"my-robot-backend/internal/models"
-	"my-robot-backend/pkg/database"
-)
-
 func GetFirecrawlConfig() (*FirecrawlConfig, error) {
-	var settings models.AISettings
-	if err := database.DB.Where("key = ?", "summary_config").First(&settings).Error; err != nil {
+	settingsData, _, err := LoadSummaryConfig()
+	if err != nil {
 		return nil, err
-	}
-
-	settingsDict := settings.ToDict()
-	if settingsDict == nil {
-		return nil, ErrInvalidSettingsFormat
-	}
-
-	settingsData, ok := settingsDict["value"].(map[string]interface{})
-	if !ok {
-		return nil, ErrInvalidSettingsFormat
 	}
 
 	firecrawlData, ok := settingsData["firecrawl"].(map[string]interface{})
@@ -45,6 +30,9 @@ func GetFirecrawlConfig() (*FirecrawlConfig, error) {
 	return config, nil
 }
 
+func GetFirecrawlAPIKey(data map[string]interface{}) string {
+	return getStringValue(data, "api_key")
+}
 func getStringValue(m map[string]interface{}, key string) string {
 	if val, ok := m[key]; ok {
 		if s, ok := val.(string); ok {
@@ -58,6 +46,12 @@ func getBoolValue(m map[string]interface{}, key string) bool {
 	if val, ok := m[key]; ok {
 		if b, ok := val.(bool); ok {
 			return b
+		}
+		switch v := val.(type) {
+		case float64:
+			return v != 0
+		case int:
+			return v != 0
 		}
 	}
 	return false

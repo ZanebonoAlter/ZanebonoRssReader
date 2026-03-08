@@ -40,6 +40,7 @@ func (s *AutoRefreshScheduler) Start() error {
 	s.cron.Start()
 	s.isRunning = true
 	log.Printf("Auto-refresh scheduler started with interval: %v", s.checkInterval)
+	s.initSchedulerTask()
 
 	return nil
 }
@@ -104,8 +105,48 @@ func (s *AutoRefreshScheduler) GetStatus() map[string]interface{} {
 	}
 
 	return map[string]interface{}{
-		"running":        s.isRunning,
-		"check_interval": s.checkInterval.String(),
+		"status": func() string {
+			if s.isRunning {
+				return "idle"
+			}
+			return "stopped"
+		}(),
+		"check_interval": int(s.checkInterval.Seconds()),
 		"next_run":       nextRun.Format(time.RFC3339),
 	}
+}
+
+func (s *AutoRefreshScheduler) Trigger() {
+	go s.checkAndRefreshFeeds()
+}
+
+func (s *AutoRefreshScheduler) initSchedulerTask() {
+	var task models.SchedulerTask
+	now := time.Now()
+	nextRun := now.Add(s.checkInterval)
+
+	if err := database.DB.Where("name = ?", "auto_refresh").First(&task).Error; err == nil {
+		updates := map[string]interface{}{
+			"description":         "Auto-refresh RSS feeds",
+			"check_interval":      int(s.checkInterval.Seconds()),
+			"next_execution_time": &nextRun,
+		}
+
+		if task.Status == "" || task.Status == "success" || task.Status == "failed" {
+			updates["status"] = "idle"
+			updates["last_error"] = ""
+		}
+
+		database.DB.Model(&task).Updates(updates)
+		return
+	}
+
+	task = models.SchedulerTask{
+		Name:              "auto_refresh",
+		Description:       "Auto-refresh RSS feeds",
+		CheckInterval:     int(s.checkInterval.Seconds()),
+		Status:            "idle",
+		NextExecutionTime: &nextRun,
+	}
+	database.DB.Create(&task)
 }

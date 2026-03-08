@@ -203,9 +203,20 @@ func GetUserPreferences(c *gin.Context) {
 	query := database.DB.Model(&models.UserPreference{})
 
 	if preferenceType == "feed" {
-		query = query.Where("feed_id IS NOT NULL")
+		query = query.Joins("JOIN feeds ON feeds.id = user_preferences.feed_id").
+			Where("user_preferences.feed_id IS NOT NULL")
 	} else if preferenceType == "category" {
-		query = query.Where("category_id IS NOT NULL")
+		query = query.Joins("JOIN categories ON categories.id = user_preferences.category_id").
+			Where("user_preferences.category_id IS NOT NULL")
+	} else {
+		query = query.Where(`
+			(user_preferences.feed_id IS NOT NULL AND EXISTS (
+				SELECT 1 FROM feeds WHERE feeds.id = user_preferences.feed_id
+			)) OR
+			(user_preferences.category_id IS NOT NULL AND EXISTS (
+				SELECT 1 FROM categories WHERE categories.id = user_preferences.category_id
+			))
+		`)
 	}
 
 	if err := query.
@@ -220,9 +231,13 @@ func GetUserPreferences(c *gin.Context) {
 		return
 	}
 
-	data := make([]map[string]interface{}, len(preferences))
-	for i, pref := range preferences {
-		data[i] = pref.ToDict()
+	data := make([]map[string]interface{}, 0, len(preferences))
+	for _, pref := range preferences {
+		prefData := pref.ToDict()
+		if prefData["feed_title"] == "" && prefData["category_name"] == "" {
+			continue
+		}
+		data = append(data, prefData)
 	}
 
 	c.JSON(http.StatusOK, gin.H{

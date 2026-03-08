@@ -2,10 +2,9 @@ import { apiClient } from './client'
 import type {
   ApiResponse,
   CreateFeedData,
-  UpdateFeedData,
-  RssFeed,
   PaginationParams,
-  PaginatedResponse,
+  RssFeed,
+  UpdateFeedData,
 } from '~/types'
 
 /**

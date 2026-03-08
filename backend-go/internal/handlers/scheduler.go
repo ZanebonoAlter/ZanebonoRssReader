@@ -13,14 +13,15 @@ type UpdateSchedulerIntervalRequest struct {
 
 var AutoRefreshSchedulerInterface interface{}
 var AutoSummarySchedulerInterface interface{}
+var AISummarySchedulerInterface interface{}
 var FirecrawlSchedulerInterface interface{}
+var DigestSchedulerInterface interface{}
 
 func safeGetStatus(scheduler interface{}, name, description string) map[string]interface{} {
 	if scheduler == nil {
 		return nil
 	}
 
-	// Use recover to handle nil pointer dereference
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("Panic in %s scheduler GetStatus: %v", name, r)
@@ -49,6 +50,10 @@ func GetSchedulersStatus(c *gin.Context) {
 		schedulers = append(schedulers, status)
 	}
 
+	if status := safeGetStatus(AISummarySchedulerInterface, "ai_summary", "AI summarize Firecrawl content"); status != nil {
+		schedulers = append(schedulers, status)
+	}
+
 	if status := safeGetStatus(FirecrawlSchedulerInterface, "firecrawl", "Auto-crawl full content for articles"); status != nil {
 		schedulers = append(schedulers, status)
 	}
@@ -72,6 +77,9 @@ func GetSchedulerStatus(c *gin.Context) {
 	case "auto_summary":
 		scheduler = AutoSummarySchedulerInterface
 		description = "Auto-generate AI summaries for feeds"
+	case "ai_summary":
+		scheduler = AISummarySchedulerInterface
+		description = "AI summarize Firecrawl content"
 	case "firecrawl":
 		scheduler = FirecrawlSchedulerInterface
 		description = "Auto-crawl full content for articles"
@@ -95,6 +103,22 @@ func TriggerScheduler(c *gin.Context) {
 	name := c.Param("name")
 
 	switch name {
+	case "auto_refresh":
+		if AutoRefreshSchedulerInterface != nil {
+			if scheduler, ok := AutoRefreshSchedulerInterface.(interface{ Trigger() }); ok {
+				log.Println("Triggering auto-refresh scheduler manually")
+				scheduler.Trigger()
+				c.JSON(http.StatusOK, gin.H{
+					"success": true,
+					"message": "Auto-refresh scheduler triggered",
+					"data": gin.H{
+						"name":   name,
+						"status": "triggered",
+					},
+				})
+				return
+			}
+		}
 	case "auto_summary":
 		if AutoSummarySchedulerInterface != nil {
 			_, ok := AutoSummarySchedulerInterface.(interface {
@@ -105,6 +129,38 @@ func TriggerScheduler(c *gin.Context) {
 				c.JSON(http.StatusOK, gin.H{
 					"success": true,
 					"message": "Auto-summary scheduler triggered (Note: actual trigger not yet implemented)",
+					"data": gin.H{
+						"name":   name,
+						"status": "triggered",
+					},
+				})
+				return
+			}
+		}
+	case "ai_summary":
+		if AISummarySchedulerInterface != nil {
+			if scheduler, ok := AISummarySchedulerInterface.(interface{ Trigger() }); ok {
+				log.Println("Triggering ai_summary scheduler manually")
+				scheduler.Trigger()
+				c.JSON(http.StatusOK, gin.H{
+					"success": true,
+					"message": "AI summary scheduler triggered",
+					"data": gin.H{
+						"name":   name,
+						"status": "triggered",
+					},
+				})
+				return
+			}
+		}
+	case "firecrawl":
+		if FirecrawlSchedulerInterface != nil {
+			if scheduler, ok := FirecrawlSchedulerInterface.(interface{ Trigger() }); ok {
+				log.Println("Triggering firecrawl scheduler manually")
+				scheduler.Trigger()
+				c.JSON(http.StatusOK, gin.H{
+					"success": true,
+					"message": "Firecrawl scheduler triggered",
 					"data": gin.H{
 						"name":   name,
 						"status": "triggered",
@@ -124,7 +180,6 @@ func TriggerScheduler(c *gin.Context) {
 func ResetSchedulerStats(c *gin.Context) {
 	name := c.Param("name")
 
-	// Note: This would require implementing ResetStats() method in schedulers
 	log.Printf("Reset stats requested for scheduler: %s (not yet implemented)", name)
 
 	c.JSON(http.StatusOK, gin.H{
@@ -153,7 +208,6 @@ func UpdateSchedulerInterval(c *gin.Context) {
 		return
 	}
 
-	// Note: This would require implementing SetInterval() method in schedulers
 	log.Printf("Update interval requested for scheduler %s: %d seconds (not yet implemented)", name, req.Interval)
 
 	c.JSON(http.StatusOK, gin.H{

@@ -10,6 +10,15 @@ import (
 	"my-robot-backend/pkg/database"
 )
 
+type SaveFirecrawlSettingsRequest struct {
+	Enabled          bool   `json:"enabled"`
+	APIUrl           string `json:"api_url"`
+	APIKey           string `json:"api_key"`
+	Mode             string `json:"mode"`
+	Timeout          int    `json:"timeout"`
+	MaxContentLength int    `json:"max_content_length"`
+}
+
 func CrawlArticle(c *gin.Context) {
 	articleID := c.Param("id")
 
@@ -76,6 +85,8 @@ func CrawlArticle(c *gin.Context) {
 
 	article.FirecrawlStatus = "completed"
 	article.FirecrawlContent = result.Data.Markdown
+	article.FirecrawlError = ""
+	article.ContentStatus = "incomplete"
 	now := time.Now()
 	article.FirecrawlCrawledAt = &now
 	database.DB.Save(&article)
@@ -85,6 +96,7 @@ func CrawlArticle(c *gin.Context) {
 		"data": gin.H{
 			"firecrawl_content": result.Data.Markdown,
 			"firecrawl_status":  "completed",
+			"content_status":    "incomplete",
 		},
 	})
 }
@@ -119,14 +131,11 @@ func EnableFeedFirecrawl(c *gin.Context) {
 	if req.Enabled {
 		database.DB.Model(&models.Article{}).
 			Where("feed_id = ?", feed.ID).
+			Where("(firecrawl_content IS NULL OR firecrawl_content = '') AND firecrawl_status <> ?", "processing").
 			Updates(map[string]interface{}{
-				"firecrawl_enabled": true,
-				"firecrawl_status":  "pending",
+				"firecrawl_status": "pending",
+				"firecrawl_error":  "",
 			})
-	} else {
-		database.DB.Model(&models.Article{}).
-			Where("feed_id = ?", feed.ID).
-			Update("firecrawl_enabled", false)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -159,6 +168,71 @@ func GetFirecrawlStatus(c *gin.Context) {
 			"timeout":            config.Timeout,
 			"max_content_length": config.MaxContentLength,
 			"api_key_configured": config.APIKey != "",
+		},
+	})
+}
+
+func SaveFirecrawlSettings(c *gin.Context) {
+	var req SaveFirecrawlSettingsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "Invalid request body",
+		})
+		return
+	}
+
+	if req.Mode == "" {
+		req.Mode = "scrape"
+	}
+	if req.Timeout <= 0 {
+		req.Timeout = 60
+	}
+	if req.MaxContentLength <= 0 {
+		req.MaxContentLength = 50000
+	}
+
+	configJSON, _, err := services.LoadSummaryConfig()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	apiKey := req.APIKey
+	if existing, ok := configJSON["firecrawl"].(map[string]interface{}); ok && apiKey == "" {
+		apiKey = services.GetFirecrawlAPIKey(existing)
+	}
+
+	configJSON["firecrawl"] = map[string]interface{}{
+		"enabled":            req.Enabled,
+		"api_url":            req.APIUrl,
+		"api_key":            apiKey,
+		"mode":               req.Mode,
+		"timeout":            req.Timeout,
+		"max_content_length": req.MaxContentLength,
+	}
+
+	if err := services.SaveSummaryConfig(configJSON, "AI summary and Firecrawl configuration"); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Firecrawl settings saved successfully",
+		"data": gin.H{
+			"enabled":            req.Enabled,
+			"api_url":            req.APIUrl,
+			"mode":               req.Mode,
+			"timeout":            req.Timeout,
+			"max_content_length": req.MaxContentLength,
+			"api_key_configured": apiKey != "",
 		},
 	})
 }

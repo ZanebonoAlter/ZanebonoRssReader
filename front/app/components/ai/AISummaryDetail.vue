@@ -2,7 +2,7 @@
 import { Icon } from "@iconify/vue"
 import { marked } from 'marked'
 import type { Article } from '~/types'
-import { useArticlesApi } from '~/composables/api/articles'
+import { useArticlesApi } from '~/api/articles'
 
 interface AISummary {
   id: number

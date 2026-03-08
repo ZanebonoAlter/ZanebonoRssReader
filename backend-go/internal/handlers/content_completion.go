@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 
@@ -14,6 +15,31 @@ var completionService *services.ContentCompletionService
 
 func InitContentCompletionHandler(crawlBaseURL string) {
 	completionService = services.NewContentCompletionService(crawlBaseURL)
+	loadCompletionAISettings()
+}
+
+func loadCompletionAISettings() {
+	if completionService == nil {
+		return
+	}
+
+	var settings models.AISettings
+	if err := database.DB.Where("key = ?", "summary_config").First(&settings).Error; err != nil {
+		return
+	}
+
+	var config struct {
+		BaseURL string `json:"base_url"`
+		APIKey  string `json:"api_key"`
+		Model   string `json:"model"`
+	}
+	if err := json.Unmarshal([]byte(settings.Value), &config); err != nil {
+		return
+	}
+
+	if config.BaseURL != "" && config.APIKey != "" && config.Model != "" {
+		completionService.SetAICredentials(config.BaseURL, config.APIKey, config.Model)
+	}
 }
 
 func SetCompletionAICredentials(baseURL, apiKey, model string) {
@@ -29,7 +55,7 @@ func SetCompletionCrawlAPIToken(token string) {
 }
 
 func CompleteArticleContent(c *gin.Context) {
-	id := c.Param("id")
+	id := c.Param("article_id")
 	if id == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Article ID is required"})
 		return
@@ -41,7 +67,17 @@ func CompleteArticleContent(c *gin.Context) {
 		return
 	}
 
-	if err := completionService.CompleteArticle(articleID); err != nil {
+	if completionService == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "Content completion service not initialized"})
+		return
+	}
+
+	var req struct {
+		Force bool `json:"force"`
+	}
+	_ = c.ShouldBindJSON(&req)
+
+	if err := completionService.CompleteArticleWithForce(articleID, req.Force); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 		return
 	}
@@ -50,7 +86,7 @@ func CompleteArticleContent(c *gin.Context) {
 }
 
 func CompleteFeedArticles(c *gin.Context) {
-	id := c.Param("id")
+	id := c.Param("feed_id")
 	if id == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Feed ID is required"})
 		return
@@ -62,8 +98,13 @@ func CompleteFeedArticles(c *gin.Context) {
 		return
 	}
 
+	if completionService == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "Content completion service not initialized"})
+		return
+	}
+
 	var articles []models.Article
-	if err := database.DB.Where("feed_id = ? AND content_status = ?", feedID, "incomplete").Find(&articles).Error; err != nil {
+	if err := database.DB.Where("feed_id = ? AND content_status IN ?", feedID, []string{"incomplete", "failed"}).Find(&articles).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 		return
 	}
@@ -72,7 +113,7 @@ func CompleteFeedArticles(c *gin.Context) {
 	failed := 0
 
 	for _, article := range articles {
-		if err := completionService.CompleteArticle(article.ID); err != nil {
+		if err := completionService.CompleteArticleWithForce(article.ID, true); err != nil {
 			failed++
 		} else {
 			completed++
@@ -88,7 +129,7 @@ func CompleteFeedArticles(c *gin.Context) {
 }
 
 func GetCompletionStatus(c *gin.Context) {
-	id := c.Param("id")
+	id := c.Param("article_id")
 	if id == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Article ID is required"})
 		return
@@ -101,12 +142,60 @@ func GetCompletionStatus(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"success":        true,
-		"content_status": article.ContentStatus,
-		"attempts":       article.CompletionAttempts,
-		"error":          article.CompletionError,
-		"fetched_at":     article.ContentFetchedAt,
+		"success": true,
+		"data": gin.H{
+			"content_status":       article.ContentStatus,
+			"attempts":             article.CompletionAttempts,
+			"error":                article.CompletionError,
+			"fetched_at":           article.ContentFetchedAt,
+			"ai_content_summary":   article.AIContentSummary,
+			"full_content":         article.FullContent,
+			"firecrawl_content":    article.FirecrawlContent,
+			"firecrawl_status":     article.FirecrawlStatus,
+			"firecrawl_error":      article.FirecrawlError,
+			"firecrawl_crawled_at": article.FirecrawlCrawledAt,
+		},
 	})
+}
+
+func GetCompletionOverview(c *gin.Context) {
+	if completionService == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "Content completion service not initialized"})
+		return
+	}
+
+	overview, err := completionService.GetOverview()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	data := gin.H{
+		"pending_count":    overview.PendingCount,
+		"processing_count": overview.ProcessingCount,
+		"completed_count":  overview.CompletedCount,
+		"failed_count":     overview.FailedCount,
+		"blocked_count":    overview.BlockedCount,
+		"total_count":      overview.TotalCount,
+		"ai_configured":    overview.AIConfigured,
+		"blocked_reasons": gin.H{
+			"waiting_for_firecrawl_count":     overview.BlockedReasons.WaitingForFirecrawlCount,
+			"feed_disabled_count":             overview.BlockedReasons.FeedDisabledCount,
+			"ai_unconfigured_count":           overview.BlockedReasons.AIUnconfiguredCount,
+			"ready_but_missing_content_count": overview.BlockedReasons.ReadyButMissingContentCount,
+		},
+	}
+
+	if scheduler, ok := AISummarySchedulerInterface.(interface{ GetStatus() map[string]interface{} }); ok {
+		status := scheduler.GetStatus()
+		for _, key := range []string{"is_executing", "current_article", "last_processed", "next_run", "last_error", "database_state", "overview"} {
+			if value, exists := status[key]; exists {
+				data[key] = value
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": data})
 }
 
 func GetContentCompletionService() *services.ContentCompletionService {

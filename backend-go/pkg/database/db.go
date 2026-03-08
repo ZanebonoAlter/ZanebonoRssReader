@@ -119,7 +119,6 @@ func EnsureTables() error {
 				completion_attempts INTEGER DEFAULT 0,
 				completion_error TEXT,
 				ai_content_summary TEXT,
-				firecrawl_enabled BOOLEAN DEFAULT 0,
 				firecrawl_status VARCHAR(20) DEFAULT 'pending',
 				firecrawl_error TEXT,
 				firecrawl_content TEXT,
@@ -214,6 +213,17 @@ func EnsureTables() error {
 				FOREIGN KEY(summary_id) REFERENCES ai_summaries(id) ON DELETE CASCADE,
 				FOREIGN KEY(feed_id) REFERENCES feeds(id) ON DELETE CASCADE
 			)`,
+		"ai_summary_queue": `
+			CREATE TABLE IF NOT EXISTS ai_summary_queue (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				article_id INTEGER NOT NULL,
+				status VARCHAR(20) DEFAULT 'pending',
+				retry_count INTEGER DEFAULT 0,
+				error_message TEXT,
+				created_at DATETIME,
+				updated_at DATETIME,
+				FOREIGN KEY(article_id) REFERENCES articles(id) ON DELETE CASCADE
+			)`,
 	}
 
 	indexes := map[string][]string{
@@ -299,7 +309,6 @@ func runMigrations() error {
 		{"completion_attempts", "INTEGER DEFAULT 0"},
 		{"completion_error", "TEXT"},
 		{"ai_content_summary", "TEXT"},
-		{"firecrawl_enabled", "BOOLEAN DEFAULT 0"},
 		{"firecrawl_status", "VARCHAR(20) DEFAULT 'pending'"},
 		{"firecrawl_error", "TEXT"},
 		{"firecrawl_content", "TEXT"},

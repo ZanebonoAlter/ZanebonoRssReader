@@ -7,7 +7,11 @@
     "dev": "nuxt dev",
     "generate": "nuxt generate",
     "preview": "nuxt preview",
-    "postinstall": "nuxt prepare"
+    "postinstall": "nuxt prepare",
+    "test:unit": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.4"
   },
   "dependencies": {
     "@floating-ui/core": "^1.7.4",

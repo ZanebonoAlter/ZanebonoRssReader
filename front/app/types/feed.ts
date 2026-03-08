@@ -1,9 +1,9 @@
-/**
- * 订阅源相关类型定义
+﻿/**
+ * Feed-related type definitions.
  */
 
 /**
- * 订阅源数据模型
+ * RSS feed data model.
  */
 export interface RssFeed {
   id: string
@@ -22,14 +22,14 @@ export interface RssFeed {
   refreshError?: string
   lastRefreshAt?: string
   aiSummaryEnabled?: boolean
-  content_completion_enabled?: boolean
-  completion_on_refresh?: boolean
-  max_completion_retries?: number
-  firecrawl_enabled?: boolean
+  contentCompletionEnabled?: boolean
+  completionOnRefresh?: boolean
+  maxCompletionRetries?: number
+  firecrawlEnabled?: boolean
 }
 
 /**
- * 订阅源创建数据
+ * Payload for creating a feed.
  */
 export interface CreateFeedData {
   url: string
@@ -41,7 +41,7 @@ export interface CreateFeedData {
 }
 
 /**
- * 订阅源更新数据
+ * Payload for updating a feed.
  */
 export interface UpdateFeedData {
   url?: string
@@ -63,7 +63,7 @@ export interface UpdateFeedData {
 }
 
 /**
- * RSS 响应数据
+ * RSS fetch response data.
  */
 export interface FeedResponse {
   status: string
@@ -76,7 +76,7 @@ export interface FeedResponse {
 }
 
 /**
- * RSS 文章条目
+ * RSS item entry.
  */
 export interface FeedItem {
   title: string

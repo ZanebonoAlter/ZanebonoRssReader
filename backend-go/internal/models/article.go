@@ -7,6 +7,7 @@ import (
 type Article struct {
 	ID                 uint       `gorm:"primaryKey" json:"id"`
 	FeedID             uint       `gorm:"index;not null" json:"feed_id"`
+	CategoryID         *uint      `gorm:"-" json:"category_id"`
 	Title              string     `gorm:"size:500;not null" json:"title"`
 	Description        string     `gorm:"type:text" json:"description"`
 	Content            string     `gorm:"type:text" json:"content"`
@@ -35,6 +36,7 @@ func (a *Article) ToDict() map[string]interface{} {
 	return map[string]interface{}{
 		"id":                   a.ID,
 		"feed_id":              a.FeedID,
+		"category_id":          a.CategoryID,
 		"title":                a.Title,
 		"description":          a.Description,
 		"content":              a.Content,

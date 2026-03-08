@@ -1,6 +1,6 @@
-<script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+﻿<script setup lang="ts">
 import { Icon } from '@iconify/vue'
+import { marked } from 'marked'
 import { useContentCompletion, type ContentCompletionStatus } from '~/composables/useContentCompletion'
 
 interface Props {
@@ -22,114 +22,84 @@ const emit = defineEmits<{
   completed: [fullContent: string, aiSummary: string]
 }>()
 
-const { loading, error, completeArticle, getCompletionStatus } = useContentCompletion()
+const { loading, completeArticle, getCompletionStatus } = useContentCompletion()
 
 const status = ref<ContentCompletionStatus>({
-  content_status: props.contentStatus as any,
+  contentStatus: props.contentStatus as ContentCompletionStatus['contentStatus'],
   attempts: 0,
   error: null,
-  fetched_at: null,
+  fetchedAt: null,
 })
 
-const isIncomplete = computed(() => status.value.content_status === 'incomplete')
-const isPending = computed(() => status.value.content_status === 'pending')
-const isFailed = computed(() => status.value.content_status === 'failed')
-const isComplete = computed(() => status.value.content_status === 'complete' || props.fullContent)
+const isIncomplete = computed(() => status.value.contentStatus === 'incomplete')
+const isPending = computed(() => status.value.contentStatus === 'pending')
+const isFailed = computed(() => status.value.contentStatus === 'failed')
+const isComplete = computed(() => status.value.contentStatus === 'complete' || Boolean(props.fullContent))
+const renderedSummary = computed(() => props.aiSummary ? marked.parse(props.aiSummary) as string : '')
 
 const statusText = computed(() => {
   if (isPending.value) return '正在补全...'
   if (isFailed.value) return '补全失败'
   if (isComplete.value && props.fullContent) return '内容已补全'
-  return '内容不完整'
+  return '内容未补全'
 })
 
 const statusIcon = computed(() => {
   if (isPending.value) return 'mdi:loading'
   if (isFailed.value) return 'mdi:alert-circle'
   if (isComplete.value && props.fullContent) return 'mdi:check-circle'
-  return 'mdi:alert'
+  return 'mdi:file-refresh-outline'
 })
 
-const statusColor = computed(() => {
-  if (isPending.value) return 'text-amber-500'
-  if (isFailed.value) return 'text-red-500'
-  if (isComplete.value && props.fullContent) return 'text-emerald-500'
-  return 'text-amber-500'
+const statusClasses = computed(() => {
+  if (isPending.value) return 'bg-amber-50 text-amber-700 border-amber-200'
+  if (isFailed.value) return 'bg-rose-50 text-rose-700 border-rose-200'
+  if (isComplete.value && props.fullContent) return 'bg-emerald-50 text-emerald-700 border-emerald-200'
+  return 'bg-stone-100 text-stone-700 border-stone-200'
 })
 
-const canComplete = computed(() => 
-  !props.readonly && (isIncomplete.value || isFailed.value) && !loading.value
-)
+const canComplete = computed(() => !props.readonly && (isIncomplete.value || isFailed.value) && !loading.value)
 
-const handleComplete = async () => {
-  try {
-    await completeArticle(props.articleId)
-    
-    const newStatus = await getCompletionStatus(props.articleId)
-    status.value = newStatus
+async function handleComplete() {
+  await completeArticle(props.articleId, { force: true })
+  const newStatus = await getCompletionStatus(props.articleId)
+  status.value = newStatus
 
-    if (newStatus.content_status === 'complete') {
-      emit('completed', props.fullContent || '', props.aiSummary || '')
-    }
-  } catch (e) {
-    console.error('Failed to complete article:', e)
+  if (newStatus.contentStatus === 'complete') {
+    emit('completed', newStatus.fullContent || props.fullContent || '', newStatus.aiContentSummary || props.aiSummary || '')
   }
 }
 
 onMounted(async () => {
   try {
     status.value = await getCompletionStatus(props.articleId)
-  } catch (e) {
-    console.error('Failed to fetch completion status:', e)
+  } catch {
+    // Keep initial status from props if polling fails.
   }
 })
 </script>
 
 <template>
   <div class="content-completion">
-    <div v-if="isComplete && fullContent" class="completion-status complete">
-      <Icon :icon="statusIcon" :class="statusColor" class="w-4 h-4" />
-      <span :class="statusColor" class="text-sm">{{ statusText }}</span>
-    </div>
-
-    <div v-else-if="isPending" class="completion-status pending">
-      <Icon :icon="statusIcon" class="w-4 h-4 animate-spin" :class="statusColor" />
-      <span :class="statusColor" class="text-sm">{{ statusText }}</span>
-    </div>
-
-    <div v-else-if="isFailed" class="completion-status failed">
-      <Icon :icon="statusIcon" :class="statusColor" class="w-4 h-4" />
-      <div class="flex-1">
-        <span :class="statusColor" class="text-sm">{{ statusText }}</span>
-        <span v-if="status.error" class="text-xs text-gray-500 block mt-1">
-          {{ status.error }}
-        </span>
+    <div class="completion-status rounded-xl border p-3" :class="statusClasses">
+      <Icon :icon="statusIcon" class="h-4 w-4" :class="{ 'animate-spin': isPending }" />
+      <div class="min-w-0 flex-1">
+        <div class="text-sm font-medium">{{ statusText }}</div>
+        <div v-if="status.error" class="mt-1 text-xs opacity-80">{{ status.error }}</div>
       </div>
       <button
         v-if="canComplete"
-        @click="handleComplete"
-        class="ml-2 px-3 py-1 text-xs bg-amber-500 hover:bg-amber-600 text-white rounded"
-      >
-        重试
-      </button>
-    </div>
-
-    <div v-else class="completion-status incomplete">
-      <Icon :icon="statusIcon" :class="statusColor" class="w-4 h-4" />
-      <span :class="statusColor" class="text-sm">{{ statusText }}</span>
-      <button
-        v-if="canComplete"
-        @click="handleComplete"
+        class="rounded-lg bg-ink-900 px-3 py-1 text-xs font-medium text-white transition hover:bg-ink-700 disabled:opacity-50"
         :disabled="loading"
-        class="ml-2 px-3 py-1 text-xs bg-blue-500 hover:bg-blue-600 text-white rounded disabled:opacity-50"
+        @click="handleComplete"
       >
-        {{ loading ? '处理中...' : '补全内容' }}
+        {{ loading ? '处理中...' : (isFailed ? '重试' : '补全内容') }}
       </button>
     </div>
 
-    <div v-if="aiSummary" class="ai-summary mt-4 p-4 bg-purple-50 dark:bg-purple-900/20 rounded-lg">
-      <h3 class="text-sm font-semibold text-purple-700 dark:text-purple-300 mb-2">AI 总结</h3>
-      <div class="text-sm prose dark:prose-invert max-w-none" v-html="aiSummary" />
+    <div v-if="renderedSummary" class="mt-4 rounded-xl border border-purple-200 bg-purple-50 p-4">
+      <h3 class="mb-2 text-sm font-semibold text-purple-700">AI 总结</h3>
+      <div class="prose max-w-none text-sm" v-html="renderedSummary" />
     </div>
   </div>
 </template>
@@ -137,25 +107,5 @@ onMounted(async () => {
 <style scoped>
 .content-completion {
   @apply flex flex-col gap-2;
-}
-
-.completion-status {
-  @apply flex items-center gap-2 p-3 rounded-lg;
-}
-
-.completion-status.complete {
-  @apply bg-emerald-50 dark:bg-emerald-900/20;
-}
-
-.completion-status.pending {
-  @apply bg-amber-50 dark:bg-amber-900/20;
-}
-
-.completion-status.failed {
-  @apply bg-red-50 dark:bg-red-900/20;
-}
-
-.completion-status.incomplete {
-  @apply bg-amber-50 dark:bg-amber-900/20;
 }
 </style>

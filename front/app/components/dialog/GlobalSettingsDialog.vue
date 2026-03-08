@@ -3,7 +3,7 @@ import { Icon } from "@iconify/vue";
 import type { RssFeed } from '~/types'
 import type { ReadingStats, UserPreference } from '~/types/reading_behavior'
 import type { SchedulerStatus } from '~/types/scheduler'
-import { useFirecrawlApi, useSchedulerApi } from '~/composables/api'
+import { useFirecrawlApi, useSchedulerApi } from '~/api'
 
 interface Props {
   show: boolean
@@ -26,6 +26,7 @@ const success = ref<string | null>(null)
 
 const schedulerStatuses = ref<SchedulerStatus[]>([])
 const schedulerLoading = ref(false)
+let schedulerPollTimer: ReturnType<typeof setTimeout> | null = null
 
 // AI Summary Settings
 const aiSummaryEnabled = ref(false)
@@ -241,7 +242,19 @@ watch(activeTab, async (newTab) => {
     await loadFirecrawlSettings()
   } else if (newTab === 'schedulers') {
     await loadSchedulersStatus()
+  } else {
+    stopSchedulerPolling()
   }
+})
+
+watch(() => props.show, (visible) => {
+  if (!visible) {
+    stopSchedulerPolling()
+  }
+})
+
+onBeforeUnmount(() => {
+  stopSchedulerPolling()
 })
 
 // Load reading preferences data
@@ -253,7 +266,9 @@ async function loadPreferencesData() {
       preferencesStore.fetchPreferences(preferenceType.value)
     ])
     readingStats.value = preferencesStore.stats
-    userPreferences.value = preferencesStore.preferences
+    userPreferences.value = preferencesStore.preferences.filter(
+      preference => Boolean(preference.feed_title || preference.category_name)
+    )
   } catch (e) {
     console.error('Failed to load preferences:', e)
   } finally {
@@ -350,7 +365,26 @@ async function loadSchedulersStatus() {
     console.error('Failed to load scheduler status:', e)
   } finally {
     schedulerLoading.value = false
+    scheduleSchedulerPolling()
   }
+}
+
+function stopSchedulerPolling() {
+  if (schedulerPollTimer) {
+    clearTimeout(schedulerPollTimer)
+    schedulerPollTimer = null
+  }
+}
+
+function scheduleSchedulerPolling() {
+  stopSchedulerPolling()
+  if (!props.show || activeTab.value !== 'schedulers') return
+
+  const aiSummary = schedulerStatuses.value.find(item => item.name === 'ai_summary')
+  const interval = aiSummary?.is_executing ? 8000 : 30000
+  schedulerPollTimer = setTimeout(() => {
+    loadSchedulersStatus()
+  }, interval)
 }
 
 async function triggerScheduler(name: string) {
@@ -378,6 +412,7 @@ function getSchedulerDisplayName(name: string): string {
   const names: Record<string, string> = {
     'auto_refresh': '后台刷新',
     'auto_summary': '自动总结',
+    'ai_summary': '文章总结',
     'firecrawl': '全文爬取',
   }
   return names[name] || name
@@ -387,6 +422,7 @@ function getSchedulerIcon(name: string): string {
   const icons: Record<string, string> = {
     'auto_refresh': 'mdi:refresh',
     'auto_summary': 'mdi:brain',
+    'ai_summary': 'mdi:text-box-search-outline',
     'firecrawl': 'mdi:spider-web',
   }
   return icons[name] || 'mdi:cog'
@@ -396,7 +432,8 @@ function getSchedulerColor(name: string): string {
   const colors: Record<string, string> = {
     'auto_refresh': 'from-blue-500 to-cyan-500',
     'auto_summary': 'from-ink-500 to-amber-500',
-    'firecrawl': 'from-purple-500 to-pink-500',
+    'ai_summary': 'from-amber-500 to-orange-500',
+    'firecrawl': 'from-rose-500 to-orange-500',
   }
   return colors[name] || 'from-gray-500 to-gray-600'
 }
@@ -405,7 +442,58 @@ function getStatusColor(status: string | undefined): string {
   if (!status) return 'bg-gray-400'
   if (status === 'running') return 'bg-green-500'
   if (status === 'error') return 'bg-red-500'
+  if (status === 'stopped') return 'bg-stone-400'
+  if (status === 'triggered') return 'bg-amber-500'
   return 'bg-blue-500'
+}
+
+function formatSchedulerInterval(seconds: number | undefined): string {
+  if (!seconds) return '-'
+  if (seconds < 60) return `${seconds} 秒`
+  if (seconds % 3600 === 0) return `${seconds / 3600} 小时`
+  if (seconds % 60 === 0) return `${seconds / 60} 分钟`
+  return `${seconds} 秒`
+}
+
+function formatArticleLabel(article: SchedulerStatus['current_article'] | SchedulerStatus['last_processed']): string {
+  if (!article) return '-'
+  return article.title
+}
+
+function formatErrorCategory(category: string | undefined): string {
+  switch (category) {
+    case 'network':
+      return '网络波动'
+    case 'config':
+      return '配置问题'
+    case 'content':
+      return '正文异常'
+    case 'retries':
+      return '重试耗尽'
+    default:
+      return '其他错误'
+  }
+}
+
+function getOverviewValue(
+  scheduler: SchedulerStatus,
+  key: 'pending_count' | 'processing_count' | 'completed_count' | 'failed_count' | 'blocked_count' | 'total_count'
+): number {
+  return scheduler.overview?.[key] ?? 0
+}
+
+function getBlockedReasonValue(
+  scheduler: SchedulerStatus,
+  key: keyof NonNullable<NonNullable<SchedulerStatus['overview']>['blocked_reasons']>
+): number {
+  return scheduler.overview?.blocked_reasons?.[key] ?? 0
+}
+
+function getLastRunValue(
+  scheduler: SchedulerStatus,
+  key: 'completed_count' | 'failed_count' | 'blocked_count' | 'stale_processing_count'
+): number {
+  return scheduler.last_run_summary?.[key] ?? 0
 }
 
 function formatDuration(seconds: number | null | undefined): string {
@@ -414,7 +502,7 @@ function formatDuration(seconds: number | null | undefined): string {
   return `${(seconds / 60).toFixed(1)}min`
 }
 
-function formatNextRun(nextRun: string | undefined): string {
+function formatNextRun(nextRun: string | null | undefined): string {
   if (!nextRun) return '-'
   try {
     const date = new Date(nextRun)
@@ -1141,7 +1229,7 @@ function formatNextRun(nextRun: string | undefined): string {
                       </span>
                     </div>
                     <p class="text-xs text-gray-500 mt-0.5">
-                      检查间隔: {{ scheduler.check_interval }}
+                      检查间隔: {{ formatSchedulerInterval(scheduler.check_interval) }}
                     </p>
                   </div>
                 </div>
@@ -1203,6 +1291,144 @@ function formatNextRun(nextRun: string | undefined): string {
                   </div>
                 </div>
 
+                <div
+                  v-if="scheduler.name === 'ai_summary' && scheduler.overview"
+                  class="mt-4 rounded-2xl border border-amber-200 bg-gradient-to-br from-amber-50 via-orange-50 to-white p-4"
+                >
+                  <div class="flex items-start justify-between gap-4">
+                    <div>
+                      <div class="text-sm font-semibold text-gray-900">文章总结进度</div>
+                      <p class="mt-1 text-xs text-gray-600">
+                        别再猜了，这里直接看队列。
+                      </p>
+                    </div>
+                    <div class="rounded-full border border-amber-200 bg-white px-3 py-1 text-xs font-medium text-amber-700">
+                      下次 {{ formatNextRun(scheduler.next_run || scheduler.database_state.next_execution_time) }}
+                    </div>
+                  </div>
+
+                  <div class="mt-4 grid grid-cols-2 gap-3 md:grid-cols-5">
+                    <div class="rounded-xl bg-white p-3 shadow-sm ring-1 ring-amber-100">
+                      <div class="text-xs text-gray-500">待总结</div>
+                      <div class="mt-1 text-2xl font-bold text-gray-900">{{ getOverviewValue(scheduler, 'pending_count') }}</div>
+                    </div>
+                    <div class="rounded-xl bg-white p-3 shadow-sm ring-1 ring-amber-100">
+                      <div class="text-xs text-gray-500">总结中</div>
+                      <div class="mt-1 text-2xl font-bold text-amber-600">{{ getOverviewValue(scheduler, 'processing_count') }}</div>
+                    </div>
+                    <div class="rounded-xl bg-white p-3 shadow-sm ring-1 ring-amber-100">
+                      <div class="text-xs text-gray-500">已完成</div>
+                      <div class="mt-1 text-2xl font-bold text-emerald-600">{{ getOverviewValue(scheduler, 'completed_count') }}</div>
+                    </div>
+                    <div class="rounded-xl bg-white p-3 shadow-sm ring-1 ring-amber-100">
+                      <div class="text-xs text-gray-500">失败</div>
+                      <div class="mt-1 text-2xl font-bold text-rose-600">{{ getOverviewValue(scheduler, 'failed_count') }}</div>
+                    </div>
+                    <div class="rounded-xl bg-white p-3 shadow-sm ring-1 ring-amber-100">
+                      <div class="text-xs text-gray-500">卡住</div>
+                      <div class="mt-1 text-2xl font-bold text-sky-600">{{ getOverviewValue(scheduler, 'blocked_count') }}</div>
+                    </div>
+                  </div>
+
+                  <div class="mt-4 rounded-xl border border-orange-200 bg-orange-50/80 p-4">
+                    <div class="flex items-center gap-2 text-sm font-semibold text-gray-900">
+                      <Icon icon="mdi:history" width="16" height="16" class="text-orange-600" />
+                      <span>上一轮执行</span>
+                    </div>
+
+                    <div class="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4">
+                      <div class="rounded-lg bg-white px-3 py-2 ring-1 ring-orange-100">
+                        <div class="text-[11px] text-gray-500">完成</div>
+                        <div class="mt-1 text-lg font-semibold text-emerald-600">{{ getLastRunValue(scheduler, 'completed_count') }}</div>
+                      </div>
+                      <div class="rounded-lg bg-white px-3 py-2 ring-1 ring-orange-100">
+                        <div class="text-[11px] text-gray-500">失败</div>
+                        <div class="mt-1 text-lg font-semibold text-rose-600">{{ getLastRunValue(scheduler, 'failed_count') }}</div>
+                      </div>
+                      <div class="rounded-lg bg-white px-3 py-2 ring-1 ring-orange-100">
+                        <div class="text-[11px] text-gray-500">卡住</div>
+                        <div class="mt-1 text-lg font-semibold text-sky-600">{{ getLastRunValue(scheduler, 'blocked_count') }}</div>
+                      </div>
+                      <div class="rounded-lg bg-white px-3 py-2 ring-1 ring-orange-100">
+                        <div class="text-[11px] text-gray-500">遗留 pending</div>
+                        <div class="mt-1 text-lg font-semibold text-stone-700">{{ getLastRunValue(scheduler, 'stale_processing_count') }}</div>
+                      </div>
+                    </div>
+
+                    <div class="mt-3 grid gap-3 text-xs md:grid-cols-2">
+                      <div class="rounded-lg bg-white px-3 py-2 ring-1 ring-orange-100">
+                        <div class="text-gray-500">上一轮最后处理</div>
+                        <div class="mt-1 font-medium text-gray-900">{{ formatArticleLabel(scheduler.last_run_summary?.last_processed || null) }}</div>
+                      </div>
+                      <div class="rounded-lg bg-white px-3 py-2 ring-1 ring-orange-100">
+                        <div class="text-gray-500">遗留 pending 指向</div>
+                        <div class="mt-1 font-medium text-gray-900">{{ formatArticleLabel(scheduler.last_run_summary?.stale_processing_article || scheduler.stale_processing_article || null) }}</div>
+                      </div>
+                    </div>
+
+                    <div v-if="scheduler.last_run_summary?.error_samples?.length" class="mt-3 rounded-lg bg-white px-3 py-3 ring-1 ring-orange-100">
+                      <div class="text-xs text-gray-500">上一轮失败样本</div>
+                      <div class="mt-2 space-y-2 text-xs">
+                        <div v-for="sample in scheduler.last_run_summary.error_samples" :key="`${sample.article_id}-${sample.message}`" class="rounded-lg bg-stone-50 px-3 py-2">
+                          <div class="font-medium text-gray-900">#{{ sample.article_id }} · {{ formatErrorCategory(sample.category) }}</div>
+                          <div class="mt-1 text-gray-600">{{ sample.message }}</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="mt-4 grid gap-3 text-xs md:grid-cols-2">
+                    <div class="rounded-xl bg-white/90 p-3 ring-1 ring-amber-100">
+                      <div class="flex items-center gap-2 text-gray-500">
+                        <Icon icon="mdi:loading" width="14" height="14" :class="scheduler.is_executing ? 'animate-spin text-amber-600' : 'text-gray-400'" />
+                        <span>当前处理</span>
+                      </div>
+                      <div class="mt-2 font-medium text-gray-900">{{ formatArticleLabel(scheduler.current_article) }}</div>
+                      <div v-if="!scheduler.current_article && (scheduler.stale_processing_count || scheduler.overview?.stale_processing_count)" class="mt-1 text-[11px] text-stone-500">
+                        当前进程没在跑，这更像遗留 pending。
+                      </div>
+                    </div>
+                    <div class="rounded-xl bg-white/90 p-3 ring-1 ring-amber-100">
+                      <div class="flex items-center gap-2 text-gray-500">
+                        <Icon icon="mdi:check-decagram-outline" width="14" height="14" class="text-emerald-500" />
+                        <span>最近处理</span>
+                      </div>
+                      <div class="mt-2 font-medium text-gray-900">{{ formatArticleLabel(scheduler.last_processed) }}</div>
+                    </div>
+                  </div>
+
+                  <div class="mt-4 rounded-xl bg-white/90 p-3 ring-1 ring-amber-100">
+                    <div class="flex items-center gap-2 text-xs text-gray-500">
+                      <Icon icon="mdi:traffic-cone" width="14" height="14" class="text-amber-600" />
+                      <span>卡住原因</span>
+                    </div>
+
+                    <div class="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4">
+                      <div class="rounded-lg bg-stone-50 px-3 py-2">
+                        <div class="text-[11px] text-gray-500">等全文</div>
+                        <div class="mt-1 text-lg font-semibold text-gray-900">{{ getBlockedReasonValue(scheduler, 'waiting_for_firecrawl_count') }}</div>
+                      </div>
+                      <div class="rounded-lg bg-stone-50 px-3 py-2">
+                        <div class="text-[11px] text-gray-500">Feed 没开</div>
+                        <div class="mt-1 text-lg font-semibold text-gray-900">{{ getBlockedReasonValue(scheduler, 'feed_disabled_count') }}</div>
+                      </div>
+                      <div class="rounded-lg bg-stone-50 px-3 py-2">
+                        <div class="text-[11px] text-gray-500">AI 没配</div>
+                        <div class="mt-1 text-lg font-semibold text-gray-900">{{ getBlockedReasonValue(scheduler, 'ai_unconfigured_count') }}</div>
+                      </div>
+                      <div class="rounded-lg bg-stone-50 px-3 py-2">
+                        <div class="text-[11px] text-gray-500">正文是空的</div>
+                        <div class="mt-1 text-lg font-semibold text-gray-900">{{ getBlockedReasonValue(scheduler, 'ready_but_missing_content_count') }}</div>
+                      </div>
+                    </div>
+
+                    <div class="mt-3 text-[11px] text-gray-500">
+                      <span v-if="scheduler.overview?.ai_configured">AI 配置在线。</span>
+                      <span v-else>AI 配置还没就位，待总结那批会继续排队。</span>
+                    </div>
+                  </div>
+                </div>
+
                 <div v-if="scheduler.database_state.last_error" class="mt-3 p-2 bg-red-50 rounded-lg text-xs text-red-700 flex items-start gap-2">
                   <Icon icon="mdi:alert-circle" width="14" height="14" class="flex-shrink-0 mt-0.5" />
                   <span>{{ scheduler.database_state.last_error }}</span>
@@ -1222,6 +1448,7 @@ function formatNextRun(nextRun: string | undefined): string {
                 <ul class="text-amber-700 text-xs space-y-1">
                   <li>• <b>后台刷新</b>: 自动检查并刷新有更新间隔设置的订阅源</li>
                   <li>• <b>自动总结</b>: 为启用 AI 总结的订阅源自动生成内容汇总</li>
+                  <li>• <b>文章总结</b>: 用 Firecrawl 全文生成单篇 AI 总结</li>
                   <li>• <b>全文爬取</b>: 使用 Firecrawl 抓取文章完整内容</li>
                 </ul>
               </div>
@@ -1239,3 +1466,4 @@ function formatNextRun(nextRun: string | undefined): string {
     </div>
   </div>
 </template>
+

@@ -1,10 +1,10 @@
-import { apiClient } from '~/composables/api'
+import { apiClient } from '~/api'
 import type { Category, RssFeed, Article } from '~/types'
-import { useCategoriesApi } from '~/composables/api/categories'
-import { useFeedsApi } from '~/composables/api/feeds'
-import { useArticlesApi } from '~/composables/api/articles'
-import { useOpmlApi } from '~/composables/api/opml'
-import { useSummariesApi } from '~/composables/api/summaries'
+import { useCategoriesApi } from '~/api/categories'
+import { useFeedsApi } from '~/api/feeds'
+import { useArticlesApi } from '~/api/articles'
+import { useOpmlApi } from '~/api/opml'
+import { useSummariesApi } from '~/api/summaries'
 
 export const useApiStore = defineStore('api', () => {
   const loading = ref(false)
@@ -126,6 +126,10 @@ export const useApiStore = defineStore('api', () => {
         refreshError: feed.refresh_error,
         lastRefreshAt: feed.last_refresh_at,
         aiSummaryEnabled: feed.ai_summary_enabled !== undefined ? feed.ai_summary_enabled : true, // Default to true if not set
+        contentCompletionEnabled: feed.content_completion_enabled,
+        completionOnRefresh: feed.completion_on_refresh,
+        maxCompletionRetries: feed.max_completion_retries,
+        firecrawlEnabled: feed.firecrawl_enabled,
       }))
 
       feeds.value = mappedFeeds
@@ -192,6 +196,10 @@ export const useApiStore = defineStore('api', () => {
       max_articles?: number
       refresh_interval?: number
       ai_summary_enabled?: boolean
+      content_completion_enabled?: boolean
+      completion_on_refresh?: boolean
+      max_completion_retries?: number
+      firecrawl_enabled?: boolean
     }
   ) {
     loading.value = true
@@ -262,9 +270,19 @@ export const useApiStore = defineStore('api', () => {
         link: article.link,
         pubDate: article.pub_date || article.created_at,
         author: article.author,
-        category: String(article.feed_id), // Will be mapped from feed
+        category: article.category_id ? String(article.category_id) : '',
         read: article.read || false,
         favorite: article.favorite || false,
+        contentStatus: article.content_status,
+        fullContent: article.full_content,
+        contentFetchedAt: article.content_fetched_at,
+        completionAttempts: article.completion_attempts,
+        completionError: article.completion_error,
+        aiContentSummary: article.ai_content_summary,
+        firecrawlStatus: article.firecrawl_status,
+        firecrawlError: article.firecrawl_error,
+        firecrawlContent: article.firecrawl_content,
+        firecrawlCrawledAt: article.firecrawl_crawled_at,
         imageUrl: article.image_url,
       }))
 
@@ -414,7 +432,7 @@ export const useApiStore = defineStore('api', () => {
     return response
   }
 
-  // Queue Summary - 队列总结
+  // Queue Summary
   async function submitQueueSummary(data: {
     category_ids: number[]
     time_range?: number
@@ -484,7 +502,7 @@ export const useApiStore = defineStore('api', () => {
     articlesStore.articles = articles.value
   }
 
-return {
+  return {
     loading,
     error,
     categories,
@@ -521,3 +539,6 @@ return {
     syncToLocalStores,
   }
 })
+
+
+

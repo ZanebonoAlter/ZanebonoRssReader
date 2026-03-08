@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { Icon } from "@iconify/vue";
+import { useFeedsApi } from '~/api/feeds'
+
+const feedsApi = useFeedsApi()
 
 const emit = defineEmits<{
   close: []
@@ -23,10 +26,14 @@ async function handlePreview() {
   error.value = null
 
   try {
-    const response = await api.createFeed({
-      url: url.value,
-      category_id: categoryId.value,
-    })
+    const response = await feedsApi.fetchFeed(url.value)
+    if (categoryId.value !== undefined && response.success && response.data) {
+      preview.value = {
+        ...response.data,
+        category_id: categoryId.value,
+      }
+      return
+    }
 
     if (response.success && response.data) {
       preview.value = response.data

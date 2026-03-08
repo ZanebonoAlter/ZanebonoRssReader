@@ -2,7 +2,7 @@ import { ref, watch, onUnmounted, computed, type Ref } from 'vue'
 import { useIntervalFn, useScroll } from '@vueuse/core'
 import type { Article } from '~/types'
 import type { ReadingBehaviorEvent, ReadingEventType } from '~/types/reading_behavior'
-import { useReadingBehaviorApi } from '~/composables/api/reading_behavior'
+import { useReadingBehaviorApi } from '~/api/reading_behavior'
 
 interface ReadingTrackerOptions {
   article: Ref<Article | null>

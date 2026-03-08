@@ -255,13 +255,27 @@ func UpdateFeed(c *gin.Context) {
 		return
 	}
 
-	// Read raw body to check which fields are present
-	rawBody, _ := c.GetRawData()
+	// Read raw body first to preserve it for later field checking
+	rawBody, err := c.GetRawData()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "Failed to read request body",
+		})
+		return
+	}
+
 	var bodyMap map[string]interface{}
-	json.Unmarshal(rawBody, &bodyMap)
+	if err := json.Unmarshal(rawBody, &bodyMap); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "Failed to parse JSON",
+		})
+		return
+	}
 
 	var req UpdateFeedRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := json.Unmarshal(rawBody, &req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
 			"error":   "Invalid request body",

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -13,9 +14,9 @@ type FirecrawlConfig struct {
 	APIUrl           string `json:"api_url"`
 	APIKey           string `json:"api_key"`
 	Enabled          bool   `json:"enabled"`
-	Mode             string `json:"mode"`               // "crawl" 或 "scrape"
-	Timeout          int    `json:"timeout"`            // 秒
-	MaxContentLength int    `json:"max_content_length"` // 字符数
+	Mode             string `json:"mode"`
+	Timeout          int    `json:"timeout"`
+	MaxContentLength int    `json:"max_content_length"`
 }
 
 type FirecrawlService struct {
@@ -63,12 +64,17 @@ func (s *FirecrawlService) ScrapePage(url string) (*ScrapeResponse, error) {
 		requestBody["formats"] = []string{"markdown", "html"}
 	}
 
+	if s.config.Timeout > 0 {
+		requestBody["timeout"] = s.config.Timeout * 1000
+	}
+
 	body, err := json.Marshal(requestBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", s.config.APIUrl+"/v1/scrape", bytes.NewReader(body))
+	endpoint := buildFirecrawlEndpoint(s.config.APIUrl, "/v1/scrape")
+	req, err := http.NewRequest("POST", endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -110,6 +116,15 @@ func (s *FirecrawlService) ScrapePage(url string) (*ScrapeResponse, error) {
 	}
 
 	return &result, nil
+}
+
+func buildFirecrawlEndpoint(baseURL, path string) string {
+	trimmedBaseURL := strings.TrimRight(baseURL, "/")
+	if strings.HasSuffix(trimmedBaseURL, "/v1") && strings.HasPrefix(path, "/v1/") {
+		path = strings.TrimPrefix(path, "/v1")
+	}
+
+	return trimmedBaseURL + path
 }
 
 func (s *FirecrawlService) ShouldUseFirecrawl(globalEnabled, feedEnabled bool, articleContent string) bool {

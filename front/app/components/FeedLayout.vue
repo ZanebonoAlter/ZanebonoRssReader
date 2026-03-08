@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { Icon } from '@iconify/vue'
 import { SIDEBAR_DEFAULT_WIDTH, MAX_POLLING_TIME, REFRESH_POLLING_INTERVAL } from '~/utils/constants'
 
@@ -28,7 +28,7 @@ const showGlobalSettings = ref(false)
 const editCategoryId = ref<string | null>(null)
 const editFeedId = ref<string | null>(null)
 
-// 刷新消息
+// 刷新提示
 const refreshMessage = ref('')
 const refreshMessageType = ref<'success' | 'error' | 'info'>('info')
 const showRefreshMessage = ref(false)
@@ -145,7 +145,7 @@ async function handleFeedClick(feedId: string) {
     // 开始轮询刷新状态
     pollRefreshStatus()
   } else {
-    refreshMessage.value = response.error || '刷新失败'
+      refreshMessage.value = response.error || '刷新失败'
     refreshMessageType.value = 'error'
     showRefreshMessage.value = true
   }
@@ -177,12 +177,20 @@ async function handleAllArticlesClick() {
   apiStore.syncToLocalStores()
 }
 
-// 处理 AI 摘要点击
+// 处理 AI 总结点击
 function handleAISummariesClick() {
   selectedCategory.value = 'ai-summaries'
   selectedFeed.value = null
   showAISummaries.value = true
   selectedSummary.value = null
+}
+
+function handleDigestClick() {
+  selectedCategory.value = 'digest'
+  selectedFeed.value = null
+  showAISummaries.value = false
+  selectedSummary.value = null
+  navigateTo('/digest')
 }
 
 // 处理总结选择
@@ -219,7 +227,7 @@ async function pollRefreshStatus() {
 
     apiStore.syncToLocalStores()
 
-    // 检查是否有订阅源仍在刷新
+    // 检查是否还有订阅源仍在刷新
     const monitoredFeeds = selectedFeed.value
       ? feedsStore.feeds.filter(f => f.id === selectedFeed.value)
       : feedsStore.feeds
@@ -272,7 +280,7 @@ async function handleRefresh() {
   if (selectedFeed.value) {
     const response = await apiStore.refreshFeed(selectedFeed.value)
     if (response.success) {
-      refreshMessage.value = response.message || '已开始后台刷新'
+      refreshMessage.value = response.message || '已开始后台刷新当前订阅源'
       refreshMessageType.value = 'info'
       await apiStore.fetchFeeds({ per_page: 10000 })
       apiStore.syncToLocalStores()
@@ -284,7 +292,7 @@ async function handleRefresh() {
   } else {
     const response = await apiStore.refreshAllFeeds()
     if (response.success) {
-      refreshMessage.value = response.message || '已开始后台刷新所有订阅源'
+      refreshMessage.value = response.message || '已开始后台刷新全部订阅源'
       refreshMessageType.value = 'info'
       await apiStore.fetchFeeds({ per_page: 10000 })
       apiStore.syncToLocalStores()
@@ -347,7 +355,7 @@ function handleEditFeed(feedId: string) {
 
 // 删除分类
 async function handleDeleteCategory(categoryId: string, categoryName: string) {
-  if (confirm(`确定要删除分类"${categoryName}"吗？此操作不会删除该分类下的订阅源。`)) {
+  if (confirm(`确定要删除分类 "${categoryName}" 吗？这个操作不会删除分类下的订阅源。`)) {
     const response = await apiStore.deleteCategory(categoryId)
     if (response.success) {
       apiStore.syncToLocalStores()
@@ -377,7 +385,7 @@ import './FeedLayout.css'
       @close-refresh-message="showRefreshMessage = false"
     />
 
-    <!-- 主内容区 -->
+      <!-- 主内容区 -->
     <div class="main-content">
       <!-- 侧边栏 -->
       <LayoutAppSidebar
@@ -391,6 +399,7 @@ import './FeedLayout.css'
         @feed-click="handleFeedClick"
         @favorites-click="handleFavoritesClick"
         @ai-summaries-click="handleAISummariesClick"
+        @digest-click="handleDigestClick"
         @all-articles-click="handleAllArticlesClick"
         @edit-category="handleEditCategory"
         @edit-feed="handleEditFeed"
@@ -408,14 +417,14 @@ import './FeedLayout.css'
         @article-favorite="handleArticleFavorite"
       />
 
-      <!-- AI 摘要列表 -->
+      <!-- AI 总结列表 -->
       <AISummariesList
         v-else
         :category-id="null"
         @select="handleSummarySelect"
       />
 
-      <!-- 文章内容 / AI 摘要详情 -->
+      <!-- 文章内容 / AI 总结详情 -->
       <div v-if="!showAISummaries && !selectedSummary" class="content-panel">
         <ArticleContent
           :article="selectedArticle"
@@ -425,7 +434,7 @@ import './FeedLayout.css'
         />
       </div>
 
-      <!-- AI 摘要详情 -->
+      <!-- AI 总结详情 -->
       <div v-else class="content-panel">
         <AISummaryDetail
           :key="selectedSummary?.id || 'empty'"
@@ -477,3 +486,7 @@ import './FeedLayout.css'
     <DialogGlobalSettingsDialog :show="showGlobalSettings" @update:show="showGlobalSettings = $event" />
   </div>
 </template>
+
+
+
+

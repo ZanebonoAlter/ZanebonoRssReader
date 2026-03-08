@@ -198,22 +198,26 @@ func UpdateAutoSummaryConfig(c *gin.Context) {
 		return
 	}
 
-	configJSON, _ := models.ToJSONValue(req)
+	configJSON, _, err := services.LoadSummaryConfig()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
 
-	var settings models.AISettings
-	err := database.DB.Where("key = ?", "summary_config").First(&settings).Error
+	configJSON["base_url"] = req.BaseURL
+	configJSON["api_key"] = req.APIKey
+	configJSON["model"] = req.Model
+	configJSON["time_range"] = req.TimeRange
 
-	if err == nil {
-		settings.Value = configJSON
-		settings.Description = "AI summary generation configuration (including auto-summary)"
-		database.DB.Save(&settings)
-	} else {
-		settings = models.AISettings{
-			Key:         "summary_config",
-			Value:       configJSON,
-			Description: "AI summary generation configuration (including auto-summary)",
-		}
-		database.DB.Create(&settings)
+	if err := services.SaveSummaryConfig(configJSON, "AI summary generation configuration (including auto-summary)"); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
 	}
 
 	if AutoSummarySchedulerInterface != nil {
@@ -269,7 +273,7 @@ func SubmitQueueSummary(c *gin.Context) {
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"success": true,
-		"message": "总结任务已加入队列",
+		"message": "Summary job queued successfully",
 		"data":    batch,
 	})
 }
@@ -308,7 +312,7 @@ func GetQueueJob(c *gin.Context) {
 	if job == nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"success": false,
-			"error":   "任务不存在",
+			"error":   "Job not found",
 		})
 		return
 	}

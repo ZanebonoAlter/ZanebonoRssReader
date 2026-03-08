@@ -5,9 +5,9 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 	"my-robot-backend/internal/models"
 	"my-robot-backend/pkg/database"
-	"gorm.io/gorm"
 )
 
 type UpdateArticleRequest struct {
@@ -48,36 +48,36 @@ func GetArticles(c *gin.Context) {
 	favorite := c.Query("favorite")
 	search := c.Query("search")
 
-	query := database.DB.Model(&models.Article{})
+	query := database.DB.Model(&models.Article{}).
+		Joins("LEFT JOIN feeds ON articles.feed_id = feeds.id").
+		Select("articles.*, feeds.category_id AS category_id")
 
 	if feedID > 0 {
-		query = query.Where("feed_id = ?", feedID)
+		query = query.Where("articles.feed_id = ?", feedID)
 	}
 
 	if categoryID > 0 {
-		query = query.Joins("JOIN feeds ON articles.feed_id = feeds.id").
-			Where("feeds.category_id = ?", categoryID)
+		query = query.Where("feeds.category_id = ?", categoryID)
 	}
 
 	if uncategorized {
-		query = query.Joins("JOIN feeds ON articles.feed_id = feeds.id").
-			Where("feeds.category_id IS NULL")
+		query = query.Where("feeds.category_id IS NULL")
 	}
 
 	if read == "true" || read == "false" {
-		query = query.Where("read = ?", read == "true")
+		query = query.Where("articles.read = ?", read == "true")
 	}
 
 	if favorite == "true" || favorite == "false" {
-		query = query.Where("favorite = ?", favorite == "true")
+		query = query.Where("articles.favorite = ?", favorite == "true")
 	}
 
 	if search != "" {
 		searchTerm := "%" + search + "%"
-		query = query.Where("title LIKE ? OR description LIKE ?", searchTerm, searchTerm)
+		query = query.Where("articles.title LIKE ? OR articles.description LIKE ?", searchTerm, searchTerm)
 	}
 
-	query = query.Order("pub_date DESC")
+	query = query.Order("articles.pub_date DESC")
 
 	var total int64
 	query.Count(&total)
@@ -152,7 +152,10 @@ func GetArticle(c *gin.Context) {
 	}
 
 	var article models.Article
-	if err := database.DB.First(&article, uint(id)).Error; err != nil {
+	if err := database.DB.Model(&models.Article{}).
+		Joins("LEFT JOIN feeds ON articles.feed_id = feeds.id").
+		Select("articles.*, feeds.category_id AS category_id").
+		First(&article, uint(id)).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			c.JSON(http.StatusNotFound, gin.H{
 				"success": false,
@@ -226,7 +229,10 @@ func UpdateArticle(c *gin.Context) {
 		}
 	}
 
-	database.DB.First(&article, uint(id))
+	database.DB.Model(&models.Article{}).
+		Joins("LEFT JOIN feeds ON articles.feed_id = feeds.id").
+		Select("articles.*, feeds.category_id AS category_id").
+		First(&article, uint(id))
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
