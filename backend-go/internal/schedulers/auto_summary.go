@@ -33,6 +33,17 @@ type AIConfig struct {
 	TimeRange int    `json:"time_range"`
 }
 
+type AutoSummaryRunSummary struct {
+	TriggerSource  string `json:"trigger_source"`
+	StartedAt      string `json:"started_at"`
+	FinishedAt     string `json:"finished_at"`
+	FeedCount      int    `json:"feed_count"`
+	GeneratedCount int    `json:"generated_count"`
+	SkippedCount   int    `json:"skipped_count"`
+	FailedCount    int    `json:"failed_count"`
+	Reason         string `json:"reason"`
+}
+
 func NewAutoSummaryScheduler(checkInterval int) *AutoSummaryScheduler {
 	return &AutoSummaryScheduler{
 		cron:          cron.New(),
@@ -45,9 +56,11 @@ func (s *AutoSummaryScheduler) Start() error {
 	if s.isRunning {
 		return fmt.Errorf("auto-summary scheduler already running")
 	}
+	s.initSchedulerTask()
 
 	if err := s.loadAIConfig(); err != nil {
 		log.Printf("Warning: Failed to load AI config: %v", err)
+		s.updateSchedulerStatus("idle", "AI config not set", nil, nil)
 	}
 
 	scheduleExpr := fmt.Sprintf("@every %ds", int64(s.checkInterval.Seconds()))
@@ -122,42 +135,53 @@ func (s *AutoSummaryScheduler) loadAIConfig() error {
 }
 
 func (s *AutoSummaryScheduler) checkAndGenerateSummaries() {
-	if err := s.loadAIConfig(); err != nil {
-		log.Printf("AI config not available, skipping summary generation: %v", err)
-		s.updateSchedulerStatus("idle", "AI config not set", nil)
-		return
-	}
-
 	if !s.executionMutex.TryLock() {
 		log.Println("Summary generation already in progress, skipping this cycle")
 		return
 	}
-	defer s.executionMutex.Unlock()
-
 	s.isExecuting = true
 	defer func() {
+		s.executionMutex.Unlock()
 		s.isExecuting = false
 		if r := recover(); r != nil {
 			log.Printf("[ERROR] PANIC in checkAndGenerateSummaries: %v", r)
-			s.updateSchedulerStatus("idle", fmt.Sprintf("Panic: %v", r), nil)
+			s.updateSchedulerStatus("idle", fmt.Sprintf("Panic: %v", r), nil, nil)
 		}
 	}()
 
-	log.Println("Starting auto-summary generation cycle")
+	if err := s.loadAIConfig(); err != nil {
+		log.Printf("AI config not available, skipping summary generation: %v", err)
+		s.updateSchedulerStatus("idle", "AI config not set", nil, nil)
+		return
+	}
 
+	s.runSummaryCycle("scheduled")
+}
+
+func (s *AutoSummaryScheduler) runSummaryCycle(triggerSource string) {
+	log.Println("Starting auto-summary generation cycle")
 	startTime := time.Now()
-	s.updateSchedulerStatus("running", "", nil)
+	summary := &AutoSummaryRunSummary{
+		TriggerSource: triggerSource,
+		StartedAt:     startTime.Format(time.RFC3339),
+	}
+	s.updateSchedulerStatus("running", "", nil, nil)
 
 	var feeds []models.Feed
 	if err := database.DB.Where("ai_summary_enabled = ?", true).Preload("Category").Find(&feeds).Error; err != nil {
 		log.Printf("Error fetching feeds: %v", err)
-		s.updateSchedulerStatus("idle", err.Error(), &startTime)
+		summary.Reason = "query_failed"
+		summary.FinishedAt = time.Now().Format(time.RFC3339)
+		s.updateSchedulerStatus("idle", err.Error(), &startTime, summary)
 		return
 	}
+	summary.FeedCount = len(feeds)
 
 	if len(feeds) == 0 {
 		log.Println("No feeds with AI summary enabled found, skipping")
-		s.updateSchedulerStatus("idle", "No feeds enabled", &startTime)
+		summary.Reason = "no_feeds_enabled"
+		summary.FinishedAt = time.Now().Format(time.RFC3339)
+		s.updateSchedulerStatus("idle", "No feeds enabled", &startTime, summary)
 		return
 	}
 
@@ -186,8 +210,14 @@ func (s *AutoSummaryScheduler) checkAndGenerateSummaries() {
 				successCount++
 			} else {
 				log.Printf("[SKIP] Skipped feed %d (%s) - no content to summarize", feed.ID, feed.Title)
+				summary.SkippedCount++
 			}
 		}()
+	}
+	summary.GeneratedCount = successCount
+	summary.FailedCount = failedCount
+	if summary.SkippedCount == 0 {
+		summary.SkippedCount = len(feeds) - successCount - failedCount
 	}
 
 	duration := time.Since(startTime)
@@ -200,7 +230,15 @@ func (s *AutoSummaryScheduler) checkAndGenerateSummaries() {
 	)
 
 	log.Printf("Auto-summary cycle completed: %s", resultMsg)
-	s.updateSchedulerStatus("idle", "", &startTime)
+	summary.FinishedAt = time.Now().Format(time.RFC3339)
+	if successCount > 0 {
+		summary.Reason = "summaries_generated"
+	} else if failedCount > 0 {
+		summary.Reason = "generation_failed"
+	} else {
+		summary.Reason = "no_content_to_summarize"
+	}
+	s.updateSchedulerStatus("idle", "", &startTime, summary)
 }
 
 func (s *AutoSummaryScheduler) generateSummaryForFeed(feed *models.Feed) (bool, error) {
@@ -444,11 +482,91 @@ func (s *AutoSummaryScheduler) callAI(prompt string) (string, error) {
 	return openAIResp.Choices[0].Message.Content, nil
 }
 
-func (s *AutoSummaryScheduler) updateSchedulerStatus(status, lastError string, startTime *time.Time) {
+func (s *AutoSummaryScheduler) TriggerNow() map[string]interface{} {
+	if !s.executionMutex.TryLock() {
+		return map[string]interface{}{
+			"accepted":    false,
+			"started":     false,
+			"reason":      "already_running",
+			"message":     "自动总结正在执行中，别连点。",
+			"status_code": http.StatusConflict,
+		}
+	}
+
+	if err := s.loadAIConfig(); err != nil {
+		s.updateSchedulerStatus("idle", "AI config not set", nil, nil)
+		s.executionMutex.Unlock()
+		return map[string]interface{}{
+			"accepted":    false,
+			"started":     false,
+			"reason":      "ai_config_missing",
+			"message":     "自动总结还没配好 AI。",
+			"status_code": http.StatusBadRequest,
+		}
+	}
+
+	s.isExecuting = true
+	go func() {
+		defer s.executionMutex.Unlock()
+		defer func() {
+			s.isExecuting = false
+			if r := recover(); r != nil {
+				log.Printf("[ERROR] PANIC in manual auto-summary trigger: %v", r)
+				s.updateSchedulerStatus("idle", fmt.Sprintf("Panic: %v", r), nil, nil)
+			}
+		}()
+		s.runSummaryCycle("manual")
+	}()
+
+	return map[string]interface{}{
+		"accepted": true,
+		"started":  true,
+		"reason":   "manual_run_started",
+		"message":  "自动总结已经开始跑了。",
+	}
+}
+
+func (s *AutoSummaryScheduler) initSchedulerTask() {
+	var task models.SchedulerTask
+	now := time.Now()
+	nextRun := now.Add(s.checkInterval)
+
+	if err := database.DB.Where("name = ?", "auto_summary").First(&task).Error; err == nil {
+		updates := map[string]interface{}{
+			"description":         "Auto-generate AI summaries for feeds",
+			"check_interval":      int(s.checkInterval.Seconds()),
+			"next_execution_time": &nextRun,
+		}
+
+		if task.Status == "" || task.Status == "success" || task.Status == "failed" {
+			updates["status"] = "idle"
+		}
+
+		database.DB.Model(&task).Updates(updates)
+		return
+	}
+
+	task = models.SchedulerTask{
+		Name:              "auto_summary",
+		Description:       "Auto-generate AI summaries for feeds",
+		CheckInterval:     int(s.checkInterval.Seconds()),
+		Status:            "idle",
+		NextExecutionTime: &nextRun,
+	}
+	database.DB.Create(&task)
+}
+
+func (s *AutoSummaryScheduler) updateSchedulerStatus(status, lastError string, startTime *time.Time, summary *AutoSummaryRunSummary) {
 	var task models.SchedulerTask
 	err := database.DB.Where("name = ?", "auto_summary").First(&task).Error
 
 	now := time.Now()
+	resultJSON := ""
+	if summary != nil {
+		if data, marshalErr := json.Marshal(summary); marshalErr == nil {
+			resultJSON = string(data)
+		}
+	}
 
 	if err == nil {
 		task.Status = status
@@ -456,6 +574,9 @@ func (s *AutoSummaryScheduler) updateSchedulerStatus(status, lastError string, s
 		if lastError != "" {
 			errTime := now
 			task.LastErrorTime = &errTime
+		}
+		if resultJSON != "" {
+			task.LastExecutionResult = resultJSON
 		}
 
 		if startTime != nil {
@@ -495,6 +616,7 @@ func (s *AutoSummaryScheduler) updateSchedulerStatus(status, lastError string, s
 			LastError:             lastError,
 			NextExecutionTime:     &nextExecution,
 			LastExecutionDuration: durationFloat,
+			LastExecutionResult:   resultJSON,
 		}
 
 		if startTime != nil {
@@ -535,6 +657,10 @@ func (s *AutoSummaryScheduler) GetStatus() map[string]interface{} {
 
 	if err == nil {
 		status["database_state"] = task.ToDict()
+		status["next_run"] = task.NextExecutionTime
+		if summary := parseAutoSummaryRunSummary(task); summary != nil {
+			status["last_run_summary"] = summary
+		}
 	}
 
 	return status
@@ -542,6 +668,19 @@ func (s *AutoSummaryScheduler) GetStatus() map[string]interface{} {
 
 func (s *AutoSummaryScheduler) IsExecuting() bool {
 	return s.isExecuting
+}
+
+func parseAutoSummaryRunSummary(task models.SchedulerTask) *AutoSummaryRunSummary {
+	if task.LastExecutionResult == "" {
+		return nil
+	}
+
+	var summary AutoSummaryRunSummary
+	if err := json.Unmarshal([]byte(task.LastExecutionResult), &summary); err != nil {
+		return nil
+	}
+
+	return &summary
 }
 
 func joinStrings(strs []string, sep string) string {

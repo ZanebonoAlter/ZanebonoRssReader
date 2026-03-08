@@ -20,7 +20,7 @@ func setupSchedulersTestDB(t *testing.T) {
 	}
 
 	database.DB = db
-	if err := database.DB.AutoMigrate(&models.Feed{}, &models.Article{}, &models.SchedulerTask{}); err != nil {
+	if err := database.DB.AutoMigrate(&models.Feed{}, &models.Article{}, &models.SchedulerTask{}, &models.AISettings{}); err != nil {
 		t.Fatalf("migrate test db: %v", err)
 	}
 }
@@ -40,11 +40,11 @@ func TestContentCompletionSchedulerGetStatusIncludesOverviewAndCurrentArticle(t 
 	}
 
 	article := models.Article{
-		FeedID:          feed.ID,
-		Title:           "Queue me",
-		Link:            "https://feed.example/a1",
-		FirecrawlStatus: "completed",
-		ContentStatus:   "incomplete",
+		FeedID:           feed.ID,
+		Title:            "Queue me",
+		Link:             "https://feed.example/a1",
+		FirecrawlStatus:  "completed",
+		ContentStatus:    "incomplete",
 		FirecrawlContent: "ready",
 	}
 	if err := database.DB.Create(&article).Error; err != nil {
@@ -107,8 +107,8 @@ func TestContentCompletionSchedulerGetStatusIncludesOverviewAndCurrentArticle(t 
 func TestParseLastRunSummaryFromSchedulerTask(t *testing.T) {
 	nextRun := time.Now().Add(time.Hour)
 	task := models.SchedulerTask{
-		Name:              "ai_summary",
-		NextExecutionTime: &nextRun,
+		Name:                "ai_summary",
+		NextExecutionTime:   &nextRun,
 		LastExecutionResult: `{"started_at":"2026-03-08T10:00:00+08:00","finished_at":"2026-03-08T10:01:00+08:00","completed_count":3,"failed_count":1,"blocked_count":2,"stale_processing_count":1,"error_samples":[{"article_id":18118,"message":"unexpected EOF","category":"network"}]}`,
 	}
 

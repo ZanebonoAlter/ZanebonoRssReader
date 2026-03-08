@@ -51,17 +51,36 @@ export interface SchedulerRunErrorSample {
 }
 
 export interface SchedulerLastRunSummary {
-	started_at: string
-	finished_at: string
-	completed_count: number
-	failed_count: number
-	blocked_count: number
-	stale_processing_count: number
-	live_processing_count: number
+	started_at?: string
+	finished_at?: string
+	completed_count?: number
+	failed_count?: number
+	blocked_count?: number
+	stale_processing_count?: number
+	trigger_source?: string
+	feed_count?: number
+	generated_count?: number
+	skipped_count?: number
+	scanned_feeds?: number
+	due_feeds?: number
+	triggered_feeds?: number
+	already_refreshing_feeds?: number
+	reason?: string
+	live_processing_count?: number
 	current_article?: SchedulerArticleRef | null
 	last_processed?: SchedulerArticleRef | null
 	stale_processing_article?: SchedulerArticleRef | null
 	error_samples?: SchedulerRunErrorSample[]
+}
+
+export interface SchedulerTriggerResult {
+	name: string
+	accepted: boolean
+	started: boolean
+	effectful?: boolean
+	reason?: string
+	message?: string
+	summary?: SchedulerLastRunSummary | null
 }
 
 export interface SchedulerStatus {

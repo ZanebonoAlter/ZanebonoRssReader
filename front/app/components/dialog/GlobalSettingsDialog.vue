@@ -2,7 +2,7 @@
 import { Icon } from "@iconify/vue";
 import type { RssFeed } from '~/types'
 import type { ReadingStats, UserPreference } from '~/types/reading_behavior'
-import type { SchedulerStatus } from '~/types/scheduler'
+import type { SchedulerStatus, SchedulerTriggerResult } from '~/types/scheduler'
 import { useFirecrawlApi, useSchedulerApi } from '~/api'
 import { useGlobalAutoRefresh } from '~/features/feeds/composables/useAutoRefresh'
 
@@ -26,6 +26,8 @@ const error = ref<string | null>(null)
 const success = ref<string | null>(null)
 
 const schedulerStatuses = ref<SchedulerStatus[]>([])
+const schedulerTriggerFeedback = ref<Record<string, SchedulerTriggerResult | undefined>>({})
+const lastSchedulerTriggerAt = ref<number | null>(null)
 const schedulerLoading = ref(false)
 let schedulerPollTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -381,8 +383,14 @@ function scheduleSchedulerPolling() {
   stopSchedulerPolling()
   if (!props.show || activeTab.value !== 'schedulers') return
 
-  const aiSummary = schedulerStatuses.value.find(item => item.name === 'ai_summary')
-  const interval = aiSummary?.is_executing ? 8000 : 30000
+  const hasHotScheduler = schedulerStatuses.value.some(item => {
+    if (item.name === 'auto_refresh' || item.name === 'auto_summary' || item.name === 'ai_summary' || item.name === 'firecrawl') {
+      return item.is_executing === true
+    }
+    return false
+  })
+  const hasRecentFeedback = lastSchedulerTriggerAt.value !== null && Date.now() - lastSchedulerTriggerAt.value < 20000
+  const interval = hasHotScheduler ? 8000 : hasRecentFeedback ? 15000 : 30000
   schedulerPollTimer = setTimeout(() => {
     loadSchedulersStatus()
   }, interval)
@@ -390,22 +398,95 @@ function scheduleSchedulerPolling() {
 
 async function triggerScheduler(name: string) {
   loading.value = true
+  error.value = null
   try {
     const { triggerScheduler: trigger } = useSchedulerApi()
     const response = await trigger(name)
     if (response.success) {
-      success.value = '任务已触发'
+      schedulerTriggerFeedback.value[name] = response.data
+      lastSchedulerTriggerAt.value = Date.now()
+      success.value = response.data?.message || response.message || '任务请求已处理'
       setTimeout(() => {
         success.value = null
       }, 2000)
       await loadSchedulersStatus()
     } else {
+      schedulerTriggerFeedback.value[name] = response.data ?? {
+        name,
+        accepted: false,
+        started: false,
+        reason: 'request_rejected',
+        message: response.error || response.message || '触发失败',
+      }
+      lastSchedulerTriggerAt.value = Date.now()
       error.value = response.error || '触发失败'
     }
   } catch (e) {
+    schedulerTriggerFeedback.value[name] = {
+      name,
+      accepted: false,
+      started: false,
+      reason: 'request_failed',
+      message: '触发失败',
+    }
+    lastSchedulerTriggerAt.value = Date.now()
     error.value = '触发失败'
   } finally {
     loading.value = false
+  }
+}
+
+function isSchedulerBusy(scheduler: SchedulerStatus): boolean {
+  return scheduler.is_executing === true || scheduler.database_state?.status === 'running'
+}
+
+function getSchedulerFeedback(name: string): SchedulerTriggerResult | undefined {
+  return schedulerTriggerFeedback.value[name]
+}
+
+function getAutoRefreshRunSummary(scheduler: SchedulerStatus) {
+  return scheduler.last_run_summary?.scanned_feeds !== undefined ? scheduler.last_run_summary : null
+}
+
+function getAutoSummaryRunSummary(scheduler: SchedulerStatus) {
+  return scheduler.name === 'auto_summary' ? scheduler.last_run_summary : null
+}
+
+function getAutoRefreshReasonLabel(reason: string | undefined): string {
+  switch (reason) {
+    case 'feeds_triggered':
+      return '有 feed 到点，已经放出去刷了。'
+    case 'no_feeds_due':
+      return '这轮扫描没发现到点的 feed。'
+    case 'all_due_feeds_already_refreshing':
+      return '到点的 feed 已经在刷新中。'
+    case 'no_feeds_enabled':
+      return '现在没有开启自动刷新的 feed。'
+    case 'query_failed':
+      return '查 feed 时就出错了。'
+    default:
+      return '这轮扫描已经结束。'
+  }
+}
+
+function getAutoSummaryReasonLabel(reason: string | undefined): string {
+  switch (reason) {
+    case 'manual_run_started':
+      return '这次是你手动点的。'
+    case 'summaries_generated':
+      return '这轮真的产出了新总结。'
+    case 'no_content_to_summarize':
+      return '有 feed，但这轮没凑出可总结内容。'
+    case 'no_feeds_enabled':
+      return '没有 feed 开着 AI 总结。'
+    case 'generation_failed':
+      return '这轮进去了，但中途有失败。'
+    case 'ai_config_missing':
+      return 'AI 配置没就位，所以不会开跑。'
+    case 'already_running':
+      return '它已经在跑了。'
+    default:
+      return '等下一轮状态回传。'
   }
 }
 
@@ -1236,12 +1317,20 @@ function formatNextRun(nextRun: string | null | undefined): string {
                 </div>
                 <button
                   class="px-3 py-1.5 text-xs font-medium text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
-                  :disabled="loading"
+                  :disabled="loading || isSchedulerBusy(scheduler)"
                   @click="triggerScheduler(scheduler.name)"
                 >
                   <Icon v-if="loading" icon="mdi:loading" width="14" height="14" class="animate-spin inline-block mr-1" />
-                  手动执行
+                  {{ isSchedulerBusy(scheduler) ? '执行中' : '手动执行' }}
                 </button>
+              </div>
+
+              <div
+                v-if="getSchedulerFeedback(scheduler.name)"
+                class="mx-4 mb-4 rounded-lg border px-3 py-3 text-xs"
+                :class="getSchedulerFeedback(scheduler.name)?.accepted ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-rose-200 bg-rose-50 text-rose-700'"
+              >
+                {{ getSchedulerFeedback(scheduler.name)?.message }}
               </div>
 
               <div v-if="scheduler.database_state" class="border-t border-gray-100 p-4 bg-gray-50/50">
@@ -1289,6 +1378,78 @@ function formatNextRun(nextRun: string | null | undefined): string {
                     <Icon icon="mdi:calendar-clock" width="14" height="14" class="text-gray-400" />
                     <span class="text-gray-600">下次执行:</span>
                     <span class="text-gray-900">{{ formatNextRun(scheduler.next_run) }}</span>
+                  </div>
+                </div>
+
+                <div
+                  v-if="scheduler.name === 'auto_refresh' && getAutoRefreshRunSummary(scheduler)"
+                  class="mt-4 rounded-2xl border border-sky-200 bg-gradient-to-br from-sky-50 via-cyan-50 to-white p-4"
+                >
+                  <div class="flex items-start justify-between gap-4">
+                    <div>
+                      <div class="text-sm font-semibold text-gray-900">后台刷新状态</div>
+                      <p class="mt-1 text-xs text-gray-600">
+                        {{ getAutoRefreshReasonLabel(getAutoRefreshRunSummary(scheduler)?.reason) }}
+                      </p>
+                    </div>
+                    <div class="rounded-full border border-sky-200 bg-white px-3 py-1 text-xs font-medium text-sky-700">
+                      下次 {{ formatNextRun(scheduler.next_run || scheduler.database_state.next_execution_time) }}
+                    </div>
+                  </div>
+
+                  <div class="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+                    <div class="rounded-xl bg-white p-3 shadow-sm ring-1 ring-sky-100">
+                      <div class="text-xs text-gray-500">扫描 feed</div>
+                      <div class="mt-1 text-2xl font-bold text-gray-900">{{ getAutoRefreshRunSummary(scheduler)?.scanned_feeds ?? 0 }}</div>
+                    </div>
+                    <div class="rounded-xl bg-white p-3 shadow-sm ring-1 ring-sky-100">
+                      <div class="text-xs text-gray-500">到点 feed</div>
+                      <div class="mt-1 text-2xl font-bold text-sky-700">{{ getAutoRefreshRunSummary(scheduler)?.due_feeds ?? 0 }}</div>
+                    </div>
+                    <div class="rounded-xl bg-white p-3 shadow-sm ring-1 ring-sky-100">
+                      <div class="text-xs text-gray-500">已触发</div>
+                      <div class="mt-1 text-2xl font-bold text-emerald-600">{{ getAutoRefreshRunSummary(scheduler)?.triggered_feeds ?? 0 }}</div>
+                    </div>
+                    <div class="rounded-xl bg-white p-3 shadow-sm ring-1 ring-sky-100">
+                      <div class="text-xs text-gray-500">已在刷新</div>
+                      <div class="mt-1 text-2xl font-bold text-amber-600">{{ getAutoRefreshRunSummary(scheduler)?.already_refreshing_feeds ?? 0 }}</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div
+                  v-if="scheduler.name === 'auto_summary' && getAutoSummaryRunSummary(scheduler)"
+                  class="mt-4 rounded-2xl border border-ink-200 bg-gradient-to-br from-paper-cream via-white to-amber-50 p-4"
+                >
+                  <div class="flex items-start justify-between gap-4">
+                    <div>
+                      <div class="text-sm font-semibold text-gray-900">自动总结状态</div>
+                      <p class="mt-1 text-xs text-gray-600">
+                        {{ getAutoSummaryReasonLabel(getAutoSummaryRunSummary(scheduler)?.reason || getSchedulerFeedback(scheduler.name)?.reason) }}
+                      </p>
+                    </div>
+                    <div class="rounded-full border border-ink-200 bg-white px-3 py-1 text-xs font-medium text-ink-700">
+                      {{ scheduler.ai_configured ? 'AI 已配置' : 'AI 未配置' }}
+                    </div>
+                  </div>
+
+                  <div class="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+                    <div class="rounded-xl bg-white p-3 shadow-sm ring-1 ring-amber-100">
+                      <div class="text-xs text-gray-500">启用 feed</div>
+                      <div class="mt-1 text-2xl font-bold text-gray-900">{{ getAutoSummaryRunSummary(scheduler)?.feed_count ?? 0 }}</div>
+                    </div>
+                    <div class="rounded-xl bg-white p-3 shadow-sm ring-1 ring-amber-100">
+                      <div class="text-xs text-gray-500">新总结</div>
+                      <div class="mt-1 text-2xl font-bold text-emerald-600">{{ getAutoSummaryRunSummary(scheduler)?.generated_count ?? 0 }}</div>
+                    </div>
+                    <div class="rounded-xl bg-white p-3 shadow-sm ring-1 ring-amber-100">
+                      <div class="text-xs text-gray-500">跳过</div>
+                      <div class="mt-1 text-2xl font-bold text-stone-700">{{ getAutoSummaryRunSummary(scheduler)?.skipped_count ?? 0 }}</div>
+                    </div>
+                    <div class="rounded-xl bg-white p-3 shadow-sm ring-1 ring-amber-100">
+                      <div class="text-xs text-gray-500">失败</div>
+                      <div class="mt-1 text-2xl font-bold text-rose-600">{{ getAutoSummaryRunSummary(scheduler)?.failed_count ?? 0 }}</div>
+                    </div>
                   </div>
                 </div>
 

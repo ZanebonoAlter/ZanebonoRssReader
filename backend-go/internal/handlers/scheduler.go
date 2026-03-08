@@ -105,6 +105,10 @@ func TriggerScheduler(c *gin.Context) {
 	switch name {
 	case "auto_refresh":
 		if AutoRefreshSchedulerInterface != nil {
+			if scheduler, ok := AutoRefreshSchedulerInterface.(interface{ TriggerNow() map[string]interface{} }); ok {
+				respondTriggerResult(c, name, scheduler.TriggerNow())
+				return
+			}
 			if scheduler, ok := AutoRefreshSchedulerInterface.(interface{ Trigger() }); ok {
 				log.Println("Triggering auto-refresh scheduler manually")
 				scheduler.Trigger()
@@ -121,19 +125,8 @@ func TriggerScheduler(c *gin.Context) {
 		}
 	case "auto_summary":
 		if AutoSummarySchedulerInterface != nil {
-			_, ok := AutoSummarySchedulerInterface.(interface {
-				SetAIConfig(baseURL, apiKey, model string, timeRange int) error
-			})
-			if ok {
-				log.Println("Triggering auto-summary scheduler manually")
-				c.JSON(http.StatusOK, gin.H{
-					"success": true,
-					"message": "Auto-summary scheduler triggered (Note: actual trigger not yet implemented)",
-					"data": gin.H{
-						"name":   name,
-						"status": "triggered",
-					},
-				})
+			if scheduler, ok := AutoSummarySchedulerInterface.(interface{ TriggerNow() map[string]interface{} }); ok {
+				respondTriggerResult(c, name, scheduler.TriggerNow())
 				return
 			}
 		}
@@ -174,6 +167,32 @@ func TriggerScheduler(c *gin.Context) {
 	c.JSON(http.StatusNotFound, gin.H{
 		"success": false,
 		"error":   "Scheduler not found or cannot be triggered: " + name,
+	})
+}
+
+func respondTriggerResult(c *gin.Context, name string, result map[string]interface{}) {
+	statusCode := http.StatusOK
+	if rawCode, ok := result["status_code"].(int); ok {
+		statusCode = rawCode
+	}
+	delete(result, "status_code")
+	result["name"] = name
+
+	accepted, _ := result["accepted"].(bool)
+	message, _ := result["message"].(string)
+	if accepted {
+		c.JSON(statusCode, gin.H{
+			"success": true,
+			"message": message,
+			"data":    result,
+		})
+		return
+	}
+
+	c.JSON(statusCode, gin.H{
+		"success": false,
+		"error":   message,
+		"data":    result,
 	})
 }
 
