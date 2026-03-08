@@ -7,13 +7,13 @@ interface Props {
   refreshMessageType?: 'success' | 'error' | 'info'
 }
 
-const props = withDefaults(defineProps<Props>(), {
+withDefaults(defineProps<Props>(), {
   showRefreshMessage: false,
   refreshMessage: '',
   refreshMessageType: 'info'
 })
 
-const emit = defineEmits<{
+defineEmits<{
   toggleSidebar: []
   refresh: []
   markAllRead: []
@@ -24,7 +24,7 @@ const emit = defineEmits<{
   closeRefreshMessage: []
 }>()
 
-import './AppHeader.css'
+import '~/components/layout/AppHeader.css'
 </script>
 
 <template>
@@ -66,7 +66,6 @@ import './AppHeader.css'
     </div>
   </header>
 
-  <!-- 刷新消息提示 -->
   <transition
     enter-active-class="transition ease-out duration-300"
     enter-from-class="transform opacity-0 translate-y-2"

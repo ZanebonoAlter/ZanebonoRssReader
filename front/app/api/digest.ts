@@ -1,1 +1,114 @@
-export * from '~/composables/api/digest'
+import { apiClient } from './client'
+
+export type DigestType = 'daily' | 'weekly'
+
+export interface DigestConfig {
+  id?: number
+  daily_enabled: boolean
+  daily_time: string
+  weekly_enabled: boolean
+  weekly_day: number
+  weekly_time: string
+  feishu_enabled: boolean
+  feishu_webhook_url: string
+  feishu_push_summary: boolean
+  feishu_push_details: boolean
+  obsidian_enabled: boolean
+  obsidian_vault_path: string
+  obsidian_daily_digest: boolean
+  obsidian_weekly_digest: boolean
+}
+
+export interface DigestPreviewSummary {
+  id: number
+  feed_id: number | null
+  feed_name: string
+  feed_icon: string
+  feed_color: string
+  category_id: number
+  category_name: string
+  summary_text: string
+  article_count: number
+  article_ids: number[]
+  created_at: string
+}
+
+export interface DigestPreviewCategory {
+  id: number
+  name: string
+  feed_count: number
+  summary_count: number
+  summaries: DigestPreviewSummary[]
+}
+
+export interface DigestPreview {
+  type: DigestType
+  title: string
+  period_label: string
+  generated_at: string
+  anchor_date: string
+  category_count: number
+  summary_count: number
+  markdown: string
+  categories: DigestPreviewCategory[]
+  default_category_id?: number | null
+  default_summary_id?: number | null
+}
+
+export interface DigestStatus {
+  running: boolean
+  daily_enabled: boolean
+  weekly_enabled: boolean
+  daily_time: string
+  weekly_day: number
+  weekly_time: string
+  next_runs: string[]
+  active_jobs: number
+}
+
+export interface DigestRunResult {
+  preview: DigestPreview
+  sent_to_feishu: boolean
+  exported_to_obsidian: boolean
+}
+
+function withDateQuery(endpoint: string, date?: string) {
+  const query = apiClient.buildQueryParams({ date })
+  return query ? `${endpoint}?${query}` : endpoint
+}
+
+export function useDigestApi() {
+  return {
+    async getConfig() {
+      return apiClient.get<DigestConfig>('/digest/config')
+    },
+
+    async getStatus() {
+      return apiClient.get<DigestStatus>('/digest/status')
+    },
+
+    async getPreview(type: DigestType, date?: string) {
+      return apiClient.get<DigestPreview>(withDateQuery(`/digest/preview/${type}`, date))
+    },
+
+    async updateConfig(config: DigestConfig) {
+      return apiClient.put<DigestConfig>('/digest/config', config)
+    },
+
+    async runNow(type: DigestType, date?: string) {
+      return apiClient.post<DigestRunResult>(withDateQuery(`/digest/run/${type}`, date), {})
+    },
+
+    async testFeishu(webhookURL?: string) {
+      return apiClient.post('/digest/test-feishu', {
+        webhook_url: webhookURL,
+      })
+    },
+
+    async testObsidian(vaultPath?: string) {
+      return apiClient.post('/digest/test-obsidian', {
+        vault_path: vaultPath,
+      })
+    },
+  }
+}

@@ -16,17 +16,23 @@ pnpm exec nuxi typecheck
 - 应用壳：`front/app/app.vue`
 - 首页：`front/app/pages/index.vue`
 - Digest 页面：`front/app/pages/digest/index.vue`
+- 主布局实现：`front/app/features/shell/components/FeedLayoutShell.vue`
 
 ## 架构文档
 
 - 前端架构：`docs/architecture/frontend.md`
+- 组件分工：`docs/architecture/frontend-components.md`
+- 功能说明：`docs/guides/frontend-features.md`
 - 数据流：`docs/architecture/data-flow.md`
 - 开发流程：`docs/operations/development.md`
 
-## 目录重组方向
+## 当前目录原则
 
-前端将从“按技术层堆目录”逐步迁移到“按 feature 组织”的结构，核心目标是：
+前端现在以 feature 组织为主，核心规则是：
 
 - `api/` 成为唯一接口边界
 - `features/` 收拢业务代码
-- `shared/` 只放通用能力
+- `stores/api.ts` 作为后端数据源
+- `stores/feeds.ts`、`stores/articles.ts` 只暴露衍生视图，不再手工同步副本
+- `components/` 只放通用组件和弹窗
+- 业务实现统一从 `features/` 进入，不再兼容旧入口

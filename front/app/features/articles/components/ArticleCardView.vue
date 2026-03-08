@@ -7,9 +7,9 @@ import {
   getSummaryStatusMeta,
   shouldShowFirecrawlStatus,
   shouldShowSummaryStatus,
-} from '~/composables/useArticleProcessingStatus'
+} from '~/features/articles/composables/useArticleProcessingStatus'
 
-import './ArticleCard.css'
+import '~/components/article/ArticleCard.css'
 
 interface Props {
   article: Article

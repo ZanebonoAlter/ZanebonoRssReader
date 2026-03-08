@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { Icon } from "@iconify/vue"
+import { useSummaryWebSocket } from '~/features/summaries/composables/useSummaryWebSocket'
 import type { SummaryBatch, SummaryJob } from '~/types'
 
 interface AISummary {

@@ -2,8 +2,8 @@
 import { Icon } from '@iconify/vue'
 import { marked } from 'marked'
 import type { Article, RssFeed } from '~/types'
-import { useReadingTracker, useScrollDepthTracker } from '~/composables/useReadingTracker'
-import { useContentCompletion, type ContentCompletionStatus } from '~/composables/useContentCompletion'
+import { useReadingTracker, useScrollDepthTracker } from '~/features/preferences/composables/useReadingTracker'
+import { useContentCompletion, type ContentCompletionStatus } from '~/features/articles/composables/useContentCompletion'
 import { useFirecrawlApi } from '~/api/firecrawl'
 import { shouldShowArticleDescription } from '~/utils/articleContentGuards'
 import {
@@ -17,7 +17,7 @@ import {
   getSummaryStatusMeta,
   shouldShowFirecrawlStatus,
   shouldShowSummaryStatus,
-} from '~/composables/useArticleProcessingStatus'
+} from '~/features/articles/composables/useArticleProcessingStatus'
 
 marked.setOptions({ gfm: true, breaks: true })
 
@@ -387,7 +387,7 @@ const detailLines = computed(() => {
   return lines
 })
 
-import './ArticleContent.css'
+import '~/components/article/ArticleContent.css'
 </script>
 
 <template>

@@ -1,4 +1,3 @@
-import { apiClient } from '~/api'
 import type { Category, RssFeed, Article } from '~/types'
 import { useCategoriesApi } from '~/api/categories'
 import { useFeedsApi } from '~/api/feeds'
@@ -52,7 +51,6 @@ export const useApiStore = defineStore('api', () => {
 
     if (response.success) {
       await fetchCategories()
-      syncToLocalStores()
     }
 
     return response
@@ -74,7 +72,6 @@ export const useApiStore = defineStore('api', () => {
 
     if (response.success) {
       await fetchCategories()
-      syncToLocalStores()
     }
 
     return response
@@ -88,7 +85,6 @@ export const useApiStore = defineStore('api', () => {
 
     if (response.success) {
       await fetchCategories()
-      syncToLocalStores()
     }
 
     return response
@@ -163,7 +159,6 @@ export const useApiStore = defineStore('api', () => {
     if (response.success) {
       await fetchFeeds({ per_page: 10000 })
       await fetchArticles({ per_page: 10000 })
-      syncToLocalStores()
     }
 
     return response
@@ -178,7 +173,6 @@ export const useApiStore = defineStore('api', () => {
     if (response.success) {
       await fetchFeeds({ per_page: 10000 })
       await fetchArticles({ per_page: 10000 })
-      syncToLocalStores()
     }
 
     return response
@@ -210,7 +204,6 @@ export const useApiStore = defineStore('api', () => {
     if (response.success) {
       await fetchFeeds({ per_page: 10000 })
       await fetchArticles({ per_page: 10000 })
-      syncToLocalStores()
     }
 
     return response
@@ -300,34 +293,26 @@ export const useApiStore = defineStore('api', () => {
     data: { read?: boolean; favorite?: boolean }
   ) {
     const articlesApi = useArticlesApi()
-    const articlesStore = useArticlesStore()
-    const article = articlesStore.articles.find((a) => a.id === id)
+    const article = articles.value.find((a) => a.id === id)
     const wasFavorite = article?.favorite
 
     const response = await articlesApi.updateArticle(Number(id), data)
 
     if (response.success) {
-      // Update local article store
       if (article) {
         Object.assign(article, data)
       }
 
-      // Update feed unread count when marking as read
       if (data.read === true && article) {
-        const feedsStore = useFeedsStore()
-        const feed = feedsStore.feeds.find((f) => f.id === article.feedId)
+        const sourceFeeds = allFeeds.value.length > 0 ? allFeeds.value : feeds.value
+        const feed = sourceFeeds.find((f) => f.id === article.feedId)
         if (feed && feed.unreadCount && feed.unreadCount > 0) {
           feed.unreadCount--
         }
       }
 
-      // Update global favorite count when favorite changes
-      if (data.favorite !== undefined && wasFavorite !== undefined) {
-        if (data.favorite && !wasFavorite) {
-          articlesStore.setGlobalFavoriteCount(articlesStore.globalFavoriteCount + 1)
-        } else if (!data.favorite && wasFavorite) {
-          articlesStore.setGlobalFavoriteCount(Math.max(0, articlesStore.globalFavoriteCount - 1))
-        }
+      if (data.favorite !== undefined && wasFavorite !== undefined && article) {
+        article.favorite = data.favorite
       }
     }
 
@@ -358,12 +343,9 @@ export const useApiStore = defineStore('api', () => {
     })
 
     if (response.success) {
-      // Update local article store
-      const articlesStore = useArticlesStore()
       articles.value.forEach((a) => {
-        const localArticle = articlesStore.articles.find((la) => la.id === a.id)
-        if (localArticle) {
-          localArticle.read = true
+        if (!feedId || a.feedId === feedId) {
+          a.read = true
         }
       })
     }
@@ -381,7 +363,6 @@ export const useApiStore = defineStore('api', () => {
     if (response.success) {
       await fetchFeeds({ per_page: 10000 })
       await fetchCategories()
-      syncToLocalStores()
     }
 
     return response
@@ -466,40 +447,7 @@ export const useApiStore = defineStore('api', () => {
       fetchCategories(),
       fetchFeeds({ per_page: 10000 }),
       fetchArticles({ per_page: 10000 }),
-      fetchAndSyncStats(),
     ])
-  }
-
-  async function fetchAndSyncStats() {
-    const response = await fetchArticlesStats()
-    if (response.success && response.data) {
-      const articlesStore = useArticlesStore()
-      articlesStore.setGlobalFavoriteCount(response.data.favorite || 0)
-    }
-    return response
-  }
-
-  // Sync data to local stores
-  function syncToLocalStores() {
-    const feedsStore = useFeedsStore()
-    const articlesStore = useArticlesStore()
-
-    // Sync categories
-    feedsStore.categories = categories.value.map(cat => ({
-      id: cat.id,
-      name: cat.name,
-      slug: cat.slug,
-      icon: cat.icon,
-      color: cat.color,
-      description: cat.description,
-      feedCount: cat.feedCount
-    }))
-
-    // Sync feeds - use allFeeds for sidebar to ensure all feeds (including uncategorized) are shown
-    feedsStore.feeds = allFeeds.value.length > 0 ? allFeeds.value : feeds.value
-
-    // Sync articles
-    articlesStore.articles = articles.value
   }
 
   return {
@@ -528,7 +476,6 @@ export const useApiStore = defineStore('api', () => {
     importOpml,
     exportOpml,
     fetchArticlesStats,
-    fetchAndSyncStats,
     getSummaries,
     generateSummary,
     deleteSummary,
@@ -536,7 +483,6 @@ export const useApiStore = defineStore('api', () => {
     getQueueStatus,
     getQueueJob,
     initialize,
-    syncToLocalStores,
   }
 })
 

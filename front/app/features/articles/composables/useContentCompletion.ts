@@ -1,4 +1,4 @@
-﻿import { ref } from 'vue'
+import { ref } from 'vue'
 import { apiClient } from '~/api/client'
 
 export interface ContentCompletionStatus {

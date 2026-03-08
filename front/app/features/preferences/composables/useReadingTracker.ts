@@ -1,4 +1,4 @@
-import { ref, watch, onUnmounted, computed, type Ref } from 'vue'
+import { ref, watch, onUnmounted, type Ref } from 'vue'
 import { useIntervalFn, useScroll } from '@vueuse/core'
 import type { Article } from '~/types'
 import type { ReadingBehaviorEvent, ReadingEventType } from '~/types/reading_behavior'
@@ -14,11 +14,10 @@ export function useReadingTracker({ article, onTrack }: ReadingTrackerOptions) {
   const events = ref<ReadingBehaviorEvent[]>([])
   const readingStartTime = ref<Date | null>(null)
   const readingTime = ref(0)
-  
   const api = useReadingBehaviorApi()
-  
+
   let timer: ReturnType<typeof setInterval> | null = null
-  const UPLOAD_INTERVAL = 30000 // 30秒上传一次
+  const uploadInterval = 30000
 
   function generateSessionId(): string {
     return `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
@@ -27,7 +26,7 @@ export function useReadingTracker({ article, onTrack }: ReadingTrackerOptions) {
   async function trackEvent(
     eventType: ReadingEventType,
     scrollDepth = 0,
-    readingTime = 0
+    currentReadingTime = 0
   ) {
     if (!article.value) return
 
@@ -38,7 +37,7 @@ export function useReadingTracker({ article, onTrack }: ReadingTrackerOptions) {
       session_id: sessionId.value,
       event_type: eventType,
       scroll_depth: scrollDepth,
-      reading_time: readingTime,
+      reading_time: currentReadingTime,
     }
 
     events.value.push(event)
@@ -69,9 +68,7 @@ export function useReadingTracker({ article, onTrack }: ReadingTrackerOptions) {
 
     timer = setInterval(() => {
       if (readingStartTime.value) {
-        readingTime.value = Math.floor(
-          (Date.now() - readingStartTime.value.getTime()) / 1000
-        )
+        readingTime.value = Math.floor((Date.now() - readingStartTime.value.getTime()) / 1000)
       }
     }, 1000)
   }
@@ -101,12 +98,9 @@ export function useReadingTracker({ article, onTrack }: ReadingTrackerOptions) {
     { immediate: true }
   )
 
-  const { pause: pauseInterval, resume: resumeInterval } = useIntervalFn(
-    () => {
-      uploadEvents()
-    },
-    UPLOAD_INTERVAL
-  )
+  const { pause: pauseInterval } = useIntervalFn(() => {
+    uploadEvents()
+  }, uploadInterval)
 
   onUnmounted(() => {
     stopReadingTimer()
@@ -142,7 +136,6 @@ export function useScrollDepthTracker(
         const scrollTop = y.value
         const scrollHeight = container.value.scrollHeight
         const clientHeight = container.value.clientHeight
-
         const maxScroll = scrollHeight - clientHeight
         const depth = maxScroll > 0 ? Math.round((scrollTop / maxScroll) * 100) : 0
 
@@ -155,7 +148,5 @@ export function useScrollDepthTracker(
     )
   }
 
-  return {
-    scrollDepth,
-  }
+  return { scrollDepth }
 }

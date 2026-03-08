@@ -1,4 +1,4 @@
-import { useFeedsApi } from './api'
+import { useFeedsApi } from '~/api'
 
 interface RefreshTimer {
   feedId: string
@@ -11,7 +11,6 @@ export const useAutoRefresh = () => {
   const apiStore = useApiStore()
   const isRefreshing = ref(false)
 
-  // Clear existing timer for a feed
   function clearTimer(feedId: string) {
     const timerData = timers.value.get(feedId)
     if (timerData?.timer) {
@@ -20,20 +19,14 @@ export const useAutoRefresh = () => {
     }
   }
 
-  // Setup auto-refresh for a feed
   function setupAutoRefresh(feedId: string, intervalMinutes: number) {
-    // Clear existing timer first
     clearTimer(feedId)
 
-    // Don't setup if interval is 0 (manual refresh only)
     if (intervalMinutes <= 0) {
       return
     }
 
-    // Convert minutes to milliseconds
     const intervalMs = intervalMinutes * 60 * 1000
-
-    // Create new timer
     const api = useFeedsApi()
 
     const timer = setInterval(async () => {
@@ -53,9 +46,7 @@ export const useAutoRefresh = () => {
     })
   }
 
-  // Initialize auto-refresh for all feeds
   function initialize() {
-    // Clear all existing timers
     timers.value.forEach((timerData) => {
       if (timerData.timer) {
         clearInterval(timerData.timer)
@@ -63,7 +54,6 @@ export const useAutoRefresh = () => {
     })
     timers.value.clear()
 
-    // Setup timers for feeds with auto-refresh enabled
     apiStore.feeds.forEach((feed) => {
       const interval = feed.refreshInterval || 0
       if (interval > 0) {
@@ -72,17 +62,14 @@ export const useAutoRefresh = () => {
     })
   }
 
-  // Refresh a specific feed's settings
   function updateFeedRefresh(feedId: string, intervalMinutes: number) {
     setupAutoRefresh(feedId, intervalMinutes)
   }
 
-  // Remove a feed's timer
   function removeFeed(feedId: string) {
     clearTimer(feedId)
   }
 
-  // Cleanup all timers
   function cleanup() {
     timers.value.forEach((timerData) => {
       if (timerData.timer) {
@@ -92,7 +79,6 @@ export const useAutoRefresh = () => {
     timers.value.clear()
   }
 
-  // Get active timers count
   const activeCount = computed(() => timers.value.size)
 
   return {
@@ -107,7 +93,6 @@ export const useAutoRefresh = () => {
   }
 }
 
-// Global auto-refresh manager (singleton pattern)
 let globalAutoRefresh: ReturnType<typeof useAutoRefresh> | null = null
 
 export function useGlobalAutoRefresh() {
@@ -115,10 +100,8 @@ export function useGlobalAutoRefresh() {
     globalAutoRefresh = useAutoRefresh()
   }
 
-  // Initialize on first use
   onMounted(() => {
     const apiStore = useApiStore()
-    // Wait for feeds to be loaded
     watch(
       () => apiStore.feeds.length,
       (length) => {
@@ -130,7 +113,6 @@ export function useGlobalAutoRefresh() {
     )
   })
 
-  // Cleanup on unmount
   onUnmounted(() => {
     globalAutoRefresh?.cleanup()
   })

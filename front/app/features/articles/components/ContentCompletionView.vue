@@ -1,7 +1,7 @@
 ﻿<script setup lang="ts">
 import { Icon } from '@iconify/vue'
 import { marked } from 'marked'
-import { useContentCompletion, type ContentCompletionStatus } from '~/composables/useContentCompletion'
+import { useContentCompletion, type ContentCompletionStatus } from '~/features/articles/composables/useContentCompletion'
 
 interface Props {
   articleId: string

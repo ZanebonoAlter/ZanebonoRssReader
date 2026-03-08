@@ -45,6 +45,11 @@ go run cmd/server/main.go
 - 开发命令：`docs/operations/development.md`
 - 文档导航：`docs/README.md`
 
+## 前端现状
+
+- 前端已完成从 `services/ + composables/api + syncToLocalStores()` 向 `api/ + features/* + apiStore 单一数据源` 的重组
+- 旧 `components/*`、`composables/*` 还保留兼容入口，但新实现已主要落在 `front/app/features/`
+
 ## 主要能力
 
 - RSS feed 管理和自动刷新

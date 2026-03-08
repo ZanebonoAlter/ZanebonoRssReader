@@ -15,9 +15,11 @@ RSS Feed
 
 ```text
 page/component
+  -> feature component/composable
   -> app/api/*
   -> backend API
-  -> store or feature state
+  -> apiStore
+  -> feedsStore / articlesStore derived views
   -> UI render
 ```
 
@@ -26,6 +28,7 @@ page/component
 - 后端 JSON 用 snake_case
 - 前端内部状态用 camelCase
 - 转换集中在 API 映射层，不要散到组件里
+- 不再使用手工 `syncToLocalStores()` 同步副本
 
 ## 后端数据流
 

@@ -9,8 +9,10 @@
 
 - 想快速了解项目：`docs/architecture/overview.md`
 - 想看前端怎么组织：`docs/architecture/frontend.md`
+- 想看前端组件怎么分工：`docs/architecture/frontend-components.md`
 - 想看后端怎么组织：`docs/architecture/backend-go.md`
 - 想看数据怎么流动：`docs/architecture/data-flow.md`
+- 想看前端功能说明：`docs/guides/frontend-features.md`
 - 想看开发命令和日常流程：`docs/operations/development.md`
 - 想看数据库说明：`docs/operations/database.md`
 - 想看 digest 配置：`docs/guides/digest.md`

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { Icon } from '@iconify/vue'
+import ArticleCard from '~/features/articles/components/ArticleCardView.vue'
 import type { Article } from '~/types'
 
 interface Props {
@@ -207,7 +208,7 @@ function statusToneClasses(tone: string) {
   return 'border-stone-200 bg-stone-100 text-stone-700'
 }
 
-import './ArticleListPanel.css'
+import '~/components/layout/ArticleListPanel.css'
 </script>
 
 <template>

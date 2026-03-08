@@ -1,6 +1,6 @@
 ﻿<script setup lang="ts">
 import { Icon } from '@iconify/vue'
-import { useRefreshPolling } from '~/composables/useRefreshPolling'
+import { useRefreshPolling } from '~/features/feeds/composables/useRefreshPolling'
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from '~/utils/constants'
 import AppTooltip from '~/components/common/AppTooltip.vue'
 import FeedActionMenu from '~/components/feed/FeedActionMenu.vue'
@@ -111,7 +111,7 @@ async function handleMarkFeedAsRead(feedId: string) {
   }
 }
 
-import './AppSidebar.css'
+import '~/components/layout/AppSidebar.css'
 </script>
 
 <template>

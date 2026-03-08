@@ -1,4 +1,4 @@
-﻿import type { Article, RssFeed } from '~/types'
+import type { Article, RssFeed } from '~/types'
 
 type StatusTone = 'neutral' | 'info' | 'success' | 'warning' | 'danger'
 
@@ -26,11 +26,7 @@ function toPlainText(input?: string): string {
 export function getFirecrawlStatusMeta(article: Article): ProcessingStatusMeta {
   switch (article.firecrawlStatus) {
     case 'processing':
-      return {
-        label: '抓取中',
-        icon: 'mdi:loading',
-        tone: 'info',
-      }
+      return { label: '抓取中', icon: 'mdi:loading', tone: 'info' }
     case 'completed':
       return {
         label: '抓取成功',
@@ -47,22 +43,14 @@ export function getFirecrawlStatusMeta(article: Article): ProcessingStatusMeta {
       }
     case 'pending':
     default:
-      return {
-        label: '待抓取',
-        icon: 'mdi:clock-outline',
-        tone: 'warning',
-      }
+      return { label: '待抓取', icon: 'mdi:clock-outline', tone: 'warning' }
   }
 }
 
 export function getSummaryStatusMeta(article: Article): ProcessingStatusMeta {
   switch (article.contentStatus) {
     case 'pending':
-      return {
-        label: '总结中',
-        icon: 'mdi:loading',
-        tone: 'info',
-      }
+      return { label: '总结中', icon: 'mdi:loading', tone: 'info' }
     case 'complete':
       return {
         label: '已总结',
@@ -79,11 +67,7 @@ export function getSummaryStatusMeta(article: Article): ProcessingStatusMeta {
       }
     case 'incomplete':
     default:
-      return {
-        label: '待总结',
-        icon: 'mdi:text-box-search-outline',
-        tone: 'warning',
-      }
+      return { label: '待总结', icon: 'mdi:text-box-search-outline', tone: 'warning' }
   }
 }
 
@@ -95,29 +79,25 @@ export function getSummaryPreview(article: Article): string {
 }
 
 export function shouldShowFirecrawlStatus(article: Article, feed?: RssFeed | null): boolean {
-  if (feed?.firecrawlEnabled) {
-    return true
-  }
+  if (feed?.firecrawlEnabled) return true
 
   return Boolean(
     article.firecrawlCrawledAt
-    || article.firecrawlError
-    || article.firecrawlContent?.trim()
-    || (article.firecrawlStatus && article.firecrawlStatus !== 'pending'),
+      || article.firecrawlError
+      || article.firecrawlContent?.trim()
+      || (article.firecrawlStatus && article.firecrawlStatus !== 'pending')
   )
 }
 
 export function shouldShowSummaryStatus(article: Article, feed?: RssFeed | null): boolean {
-  if (feed?.contentCompletionEnabled) {
-    return true
-  }
+  if (feed?.contentCompletionEnabled) return true
 
   return Boolean(
     article.contentFetchedAt
-    || article.completionError
-    || article.aiContentSummary?.trim()
-    || article.contentStatus === 'pending'
-    || article.contentStatus === 'failed',
+      || article.completionError
+      || article.aiContentSummary?.trim()
+      || article.contentStatus === 'pending'
+      || article.contentStatus === 'failed'
   )
 }
 

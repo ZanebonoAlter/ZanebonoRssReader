@@ -8,7 +8,6 @@ const error = ref<string | null>(null)
 onMounted(async () => {
   try {
     await apiStore.initialize()
-    apiStore.syncToLocalStores()
   } catch (e) {
     error.value = e instanceof Error ? e.message : '加载数据失败'
     console.error('初始化错误:', e)

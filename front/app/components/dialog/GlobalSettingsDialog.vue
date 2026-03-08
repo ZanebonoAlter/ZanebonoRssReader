@@ -4,6 +4,7 @@ import type { RssFeed } from '~/types'
 import type { ReadingStats, UserPreference } from '~/types/reading_behavior'
 import type { SchedulerStatus } from '~/types/scheduler'
 import { useFirecrawlApi, useSchedulerApi } from '~/api'
+import { useGlobalAutoRefresh } from '~/features/feeds/composables/useAutoRefresh'
 
 interface Props {
   show: boolean

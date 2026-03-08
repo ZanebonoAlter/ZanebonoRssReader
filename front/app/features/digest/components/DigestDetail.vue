@@ -2,7 +2,7 @@
 import { Icon } from '@iconify/vue'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { marked } from 'marked'
-import ArticleContent from '~/components/article/ArticleContent.vue'
+import ArticleContentView from '~/features/articles/components/ArticleContentView.vue'
 import { useArticlesApi } from '~/api/articles'
 import type { DigestPreviewSummary } from '~/api/digest'
 import { useApiStore } from '~/stores/api'
@@ -253,7 +253,7 @@ onBeforeUnmount(() => {
         </header>
 
         <div class="digest-article-modal__body" @click.capture="handleArticleLinkClick">
-          <ArticleContent
+          <ArticleContentView
             :article="selectedArticle"
             :articles="relatedArticles"
             @favorite="handleFavorite"

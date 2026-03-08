@@ -43,16 +43,14 @@ export function useSummaryWebSocket() {
   }
 
   const connect = () => {
-    if (ws.value?.readyState === WebSocket.OPEN) {
-      return
-    }
+    if (ws.value?.readyState === WebSocket.OPEN) return
 
     status.value = 'connecting'
 
     try {
       const url = getWsUrl()
       console.log('[WebSocket] Connecting to:', url)
-      
+
       ws.value = new WebSocket(url)
 
       ws.value.onopen = () => {
@@ -103,7 +101,7 @@ export function useSummaryWebSocket() {
 
   const toBatchData = (message: WSMessage): SummaryBatch => {
     const jobs: SummaryJob[] = []
-    
+
     if (message.jobs && message.jobs.length > 0) {
       for (const job of message.jobs) {
         jobs.push({
