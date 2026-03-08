@@ -1,96 +1,143 @@
-# 前端架构
+﻿# 前端架构
 
 ## 技术栈
 
-- Nuxt 4
-- Vue 3
+- Nuxt 4.2.2
+- Vue 3.5
 - TypeScript
 - Pinia
 - Tailwind CSS v4
+- Iconify
+- Day.js
+- marked
+- motion-v
+- Vitest
 
-## 当前入口
+## 入口与路由
 
-- 应用壳：`front/app/app.vue`
-- 首页路由：`front/app/pages/index.vue`
-- Digest 路由：`front/app/pages/digest/index.vue`
-- 主布局实现：`front/app/features/shell/components/FeedLayoutShell.vue`
+- 应用壳入口：`front/app/app.vue`
+- 主阅读页：`front/app/pages/index.vue`
+- Digest 总览：`front/app/pages/digest/index.vue`
+- Digest 单视图：`front/app/pages/digest/[id].vue`
 
-## 当前结构
+`app.vue` 只做一件事：启动时调用 `apiStore.initialize()`，先拉分类、订阅源和文章，再渲染页面。
 
-- `api/` 已是前端唯一 HTTP 边界
-- `features/` 已承接主要业务实现
-- `pages/` 只做路由挂载和入口分发
-- `components/` 只保留通用组件，不再承载主业务壳层
-- `stores/api.ts` 负责后端数据拉取与边界转换
-- `stores/feeds.ts`、`stores/articles.ts` 现在直接消费 `apiStore`，不再手工同步副本
-
-## 目标结构
+## 当前目录分层
 
 ```text
-front/app/
-├── app.vue
-├── pages/
-├── api/
-├── features/
-├── stores/
-├── shared/
-└── plugins/
+front/
+├─ app/
+│  ├─ api/                 # 唯一 HTTP 边界
+│  ├─ assets/css/          # 全局主题与基础样式
+│  ├─ components/          # 通用组件与对话框
+│  ├─ composables/         # 少量跨 feature 的通用能力
+│  ├─ features/            # 业务实现主体
+│  ├─ pages/               # Nuxt 路由入口
+│  ├─ plugins/             # Nuxt 插件
+│  ├─ stores/              # Pinia store
+│  ├─ types/               # 领域类型
+│  ├─ utils/               # 常量和纯工具函数
+│  └─ app.vue
+├─ nuxt.config.ts
+└─ package.json
 ```
 
-## 目录规则
+## feature 划分
 
-- `api/` - 唯一 HTTP 边界
-- `features/` - 业务域代码与主要实现
-- `shared/` - 跨 feature 复用
-- `stores/` - 全局状态与衍生视图状态
-- `pages/` - 路由入口，只做组装
+- `features/shell`：主壳、顶部栏、侧栏、文章列表栏
+- `features/articles`：正文阅读、内容补全状态、Firecrawl 全文、AI 整理稿
+- `features/summaries`：AI 总结列表、队列进度、WebSocket 实时更新
+- `features/digest`：日报、周报、详情页、配置抽屉
+- `features/feeds`：自动刷新和刷新轮询
+- `features/preferences`：阅读行为埋点与偏好相关逻辑
 
-## 当前落地结果
+这套结构已经替代旧的“业务都堆在 `components/`”的方式。新功能优先进入 `features/*`。
 
-```text
-front/app/
-├── api/                     # 已承接真实 API 实现
-├── features/
-│   ├── articles/            # ArticleContent / ArticleCard / ContentCompletion
-│   ├── digest/              # Digest 页面实现与设置抽屉
-│   ├── feeds/               # auto refresh / refresh polling
-│   ├── preferences/         # reading tracker
-│   ├── shell/               # AppHeader / AppSidebar / ArticleListPanel / FeedLayout
-│   └── summaries/           # AI summary list/detail + websocket
-├── stores/
-│   ├── api.ts               # 数据源与 API 边界映射
-│   ├── feeds.ts             # 从 apiStore 暴露 feed/category 视图
-│   └── articles.ts          # 从 apiStore 暴露 article 视图
-├── components/              # 通用组件：dialog/common/feed/category
-├── composables/             # 仅保留通用 composable
-└── pages/
-```
+## 数据层约定
 
-## 主要业务域
+### API 层
 
-- `shell` - 应用壳、顶部栏、侧边栏、主布局
-- `categories` - 分类管理
-- `feeds` - 订阅源管理与刷新
-- `articles` - 文章列表与正文阅读
-- `summaries` - AI 总结
-- `digest` - 日报周报
-- `preferences` - 阅读偏好
+`front/app/api/*` 是唯一 HTTP 边界。
 
-## 状态流
+- `client.ts` 统一封装 `fetch`
+- 各领域模块只关心自己的接口
+- query 参数统一走 `buildQueryParams()`
+- 文件上传和下载也在这里收口
 
-- `apiStore` 是后端数据的单一来源
-- `feedsStore` 和 `articlesStore` 不再复制数组，只暴露基于 `apiStore` 的视图
-- `syncToLocalStores()` 已移除
-- snake_case 到 camelCase 的转换只放在 API 边界
+当前已落地的模块包括：
 
-## 迁移原则
+- `categories.ts`
+- `feeds.ts`
+- `articles.ts`
+- `summaries.ts`
+- `digest.ts`
+- `opml.ts`
+- `reading_behavior.ts`
+- `firecrawl.ts`
+- `scheduler.ts`
 
-- 新代码优先写进 `features/*`、`api/*`、`shared/*`
-- 业务实现统一放在 `features/*`
-- 旧兼容壳已删除，不再从 `components/*`、`composables/*` 走旧入口
-- 新功能不要再接回 `services/` 或手工同步链
+### Store 层
 
-## 配套文档
+`useApiStore()` 是前端数据主源。
 
-- 功能说明：`docs/guides/frontend-features.md`
-- 组件分工：`docs/architecture/frontend-components.md`
+- 持有 `categories`、`feeds`、`allFeeds`、`articles`
+- 负责后端返回值到前端字段的映射
+- 负责增删改后重新拉取必要数据
+- 负责文章已读、收藏、批量已读等更新
+
+`useFeedsStore()` 和 `useArticlesStore()` 现在是派生视图层。
+
+- `feedsStore` 基于 `apiStore` 暴露分类分组、未读数等计算结果
+- `articlesStore` 基于 `apiStore` 暴露筛选、排序、当前文章等视图状态
+- 不再维护本地副本
+- 不再依赖手动 `syncToLocalStores()`
+
+`usePreferencesStore()` 独立负责阅读偏好和统计。
+
+## 数据映射规则
+
+- 后端字段以 `snake_case` 为主
+- 前端 store 和组件内部统一用 `camelCase`
+- ID 在前端统一存成 `string`
+- 数字 ID 与字符串 ID 的转换只应发生在 API 边界或 store 映射层
+
+## 页面骨架
+
+主阅读页由 `FeedLayoutShell.vue` 组织为三栏：
+
+- 左栏：分类、订阅源、快捷入口
+- 中栏：文章列表或 AI 总结列表
+- 右栏：文章正文或 AI 总结详情
+
+Digest 页面走独立路由和独立视觉壳，不复用主阅读页的三栏壳。
+
+## 设计系统
+
+当前前端已经切到 editorial / magazine 风格，而不是常见 SaaS 蓝紫模板。
+
+- 主色：Ink Blue
+- 强调色：Print Red
+- 背景：Paper Warmth
+- 阴影：偏纸张和印刷感
+- 全局主题变量定义在 `front/app/assets/css/main.css`
+- 分类和订阅源可选色定义在 `front/app/utils/constants.ts`
+
+明确约束：
+
+- 不用紫色 / 靛蓝色方案
+- 不用纯平背景
+- 不用默认 shadcn / Material 风格
+- 不做对称、平均分栏的模板布局
+
+## 运行与环境
+
+- 前端开发端口：`http://localhost:3001`
+- 后端 API：`http://localhost:5000/api`
+- AI 总结 WebSocket：基于运行时 `apiBase` 推导，默认连 `ws://localhost:5000/ws`
+
+## 相关文档
+
+- `docs/architecture/frontend-components.md`
+- `docs/architecture/data-flow.md`
+- `docs/guides/frontend-features.md`
+- `docs/operations/development.md`
