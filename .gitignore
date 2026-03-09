@@ -27,3 +27,4 @@ front/.nuxt/
 front/.output/
 front/node_modules/
 .worktrees/
+.gitnexus
