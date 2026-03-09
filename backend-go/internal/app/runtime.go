@@ -6,24 +6,25 @@ import (
 	"os/signal"
 	"syscall"
 
-	"my-robot-backend/internal/digest"
-	"my-robot-backend/internal/handlers"
-	"my-robot-backend/internal/schedulers"
+	"my-robot-backend/internal/app/runtimeinfo"
+	"my-robot-backend/internal/domain/contentprocessing"
+	"my-robot-backend/internal/domain/digest"
+	"my-robot-backend/internal/jobs"
 )
 
 type Runtime struct {
-	AutoRefresh       *schedulers.AutoRefreshScheduler
-	AutoSummary       *schedulers.AutoSummaryScheduler
-	PreferenceUpdate  *schedulers.PreferenceUpdateScheduler
-	ContentCompletion *schedulers.ContentCompletionScheduler
-	Firecrawl         *schedulers.FirecrawlScheduler
+	AutoRefresh       *jobs.AutoRefreshScheduler
+	AutoSummary       *jobs.AutoSummaryScheduler
+	PreferenceUpdate  *jobs.PreferenceUpdateScheduler
+	ContentCompletion *jobs.ContentCompletionScheduler
+	Firecrawl         *jobs.FirecrawlScheduler
 	Digest            *digest.DigestScheduler
 }
 
 func StartRuntime() *Runtime {
 	runtime := &Runtime{}
 
-	runtime.AutoRefresh = schedulers.NewAutoRefreshScheduler(60)
+	runtime.AutoRefresh = jobs.NewAutoRefreshScheduler(60)
 	if err := runtime.AutoRefresh.Start(); err != nil {
 		log.Printf("Warning: Failed to start auto-refresh scheduler: %v", err)
 	} else {
@@ -31,7 +32,7 @@ func StartRuntime() *Runtime {
 	}
 
 	autoSummaryInterval := 3600
-	runtime.AutoSummary = schedulers.NewAutoSummaryScheduler(autoSummaryInterval)
+	runtime.AutoSummary = jobs.NewAutoSummaryScheduler(autoSummaryInterval)
 	if err := runtime.AutoSummary.Start(); err != nil {
 		log.Printf("Warning: Failed to start auto-summary scheduler: %v", err)
 	} else {
@@ -39,14 +40,14 @@ func StartRuntime() *Runtime {
 	}
 
 	preferenceUpdateInterval := 1800
-	runtime.PreferenceUpdate = schedulers.NewPreferenceUpdateScheduler(preferenceUpdateInterval)
+	runtime.PreferenceUpdate = jobs.NewPreferenceUpdateScheduler(preferenceUpdateInterval)
 	if err := runtime.PreferenceUpdate.Start(); err != nil {
 		log.Printf("Warning: Failed to start preference update scheduler: %v", err)
 	} else {
 		log.Println("Preference update scheduler started successfully")
 	}
 
-	runtime.Firecrawl = schedulers.NewFirecrawlScheduler()
+	runtime.Firecrawl = jobs.NewFirecrawlScheduler()
 	if err := runtime.Firecrawl.Start(); err != nil {
 		log.Printf("Warning: Failed to start firecrawl scheduler: %v", err)
 	} else {
@@ -57,10 +58,10 @@ func StartRuntime() *Runtime {
 	if crawlServiceURL == "" {
 		crawlServiceURL = "http://localhost:11235"
 	}
-	handlers.InitContentCompletionHandler(crawlServiceURL)
+	contentprocessing.InitContentCompletionHandler(crawlServiceURL)
 
-	runtime.ContentCompletion = schedulers.NewContentCompletionScheduler(
-		handlers.GetContentCompletionService(),
+	runtime.ContentCompletion = jobs.NewContentCompletionScheduler(
+		contentprocessing.GetContentCompletionService(),
 		60,
 	)
 	runtime.ContentCompletion.Start()
@@ -73,11 +74,11 @@ func StartRuntime() *Runtime {
 		log.Println("Digest scheduler started successfully")
 	}
 
-	handlers.AutoRefreshSchedulerInterface = runtime.AutoRefresh
-	handlers.AutoSummarySchedulerInterface = runtime.AutoSummary
-	handlers.AISummarySchedulerInterface = runtime.ContentCompletion
-	handlers.FirecrawlSchedulerInterface = runtime.Firecrawl
-	handlers.DigestSchedulerInterface = runtime.Digest
+	runtimeinfo.AutoRefreshSchedulerInterface = runtime.AutoRefresh
+	runtimeinfo.AutoSummarySchedulerInterface = runtime.AutoSummary
+	runtimeinfo.AISummarySchedulerInterface = runtime.ContentCompletion
+	runtimeinfo.FirecrawlSchedulerInterface = runtime.Firecrawl
+	runtimeinfo.DigestSchedulerInterface = runtime.Digest
 
 	return runtime
 }

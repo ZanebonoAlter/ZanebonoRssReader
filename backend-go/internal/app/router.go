@@ -2,8 +2,15 @@ package app
 
 import (
 	"github.com/gin-gonic/gin"
-	"my-robot-backend/internal/handlers"
-	"my-robot-backend/internal/ws"
+	articlesdomain "my-robot-backend/internal/domain/articles"
+	categoriesdomain "my-robot-backend/internal/domain/categories"
+	contentprocessingdomain "my-robot-backend/internal/domain/contentprocessing"
+	digestdomain "my-robot-backend/internal/domain/digest"
+	feedsdomain "my-robot-backend/internal/domain/feeds"
+	preferencesdomain "my-robot-backend/internal/domain/preferences"
+	summariesdomain "my-robot-backend/internal/domain/summaries"
+	"my-robot-backend/internal/jobs"
+	"my-robot-backend/internal/platform/ws"
 )
 
 func SetupRoutes(r *gin.Engine) {
@@ -49,107 +56,107 @@ func SetupRoutes(r *gin.Engine) {
 	{
 		categories := api.Group("/categories")
 		{
-			categories.GET("", handlers.GetCategories)
-			categories.POST("", handlers.CreateCategory)
-			categories.PUT("/:category_id", handlers.UpdateCategory)
-			categories.DELETE("/:category_id", handlers.DeleteCategory)
+			categories.GET("", categoriesdomain.GetCategories)
+			categories.POST("", categoriesdomain.CreateCategory)
+			categories.PUT("/:category_id", categoriesdomain.UpdateCategory)
+			categories.DELETE("/:category_id", categoriesdomain.DeleteCategory)
 		}
 
 		feeds := api.Group("/feeds")
 		{
-			feeds.GET("", handlers.GetFeeds)
-			feeds.GET("/:feed_id", handlers.GetFeed)
-			feeds.POST("", handlers.CreateFeed)
-			feeds.PUT("/:feed_id", handlers.UpdateFeed)
-			feeds.DELETE("/:feed_id", handlers.DeleteFeed)
-			feeds.POST("/:feed_id/refresh", handlers.RefreshFeed)
-			feeds.POST("/fetch", handlers.FetchFeed)
-			feeds.POST("/refresh-all", handlers.RefreshAllFeeds)
+			feeds.GET("", feedsdomain.GetFeeds)
+			feeds.GET("/:feed_id", feedsdomain.GetFeed)
+			feeds.POST("", feedsdomain.CreateFeed)
+			feeds.PUT("/:feed_id", feedsdomain.UpdateFeed)
+			feeds.DELETE("/:feed_id", feedsdomain.DeleteFeed)
+			feeds.POST("/:feed_id/refresh", feedsdomain.RefreshFeed)
+			feeds.POST("/fetch", feedsdomain.FetchFeed)
+			feeds.POST("/refresh-all", feedsdomain.RefreshAllFeeds)
 		}
 
 		articles := api.Group("/articles")
 		{
-			articles.GET("/stats", handlers.GetArticlesStats)
-			articles.GET("", handlers.GetArticles)
-			articles.GET("/:article_id", handlers.GetArticle)
-			articles.PUT("/:article_id", handlers.UpdateArticle)
-			articles.PUT("/bulk-update", handlers.BulkUpdateArticles)
+			articles.GET("/stats", articlesdomain.GetArticlesStats)
+			articles.GET("", articlesdomain.GetArticles)
+			articles.GET("/:article_id", articlesdomain.GetArticle)
+			articles.PUT("/:article_id", articlesdomain.UpdateArticle)
+			articles.PUT("/bulk-update", articlesdomain.BulkUpdateArticles)
 		}
 
 		ai := api.Group("/ai")
 		{
-			ai.POST("/summarize", handlers.SummarizeArticle)
-			ai.POST("/test", handlers.TestAIConnection)
-			ai.GET("/settings", handlers.GetAISettings)
-			ai.POST("/settings", handlers.SaveAISettings)
+			ai.POST("/summarize", summariesdomain.SummarizeArticle)
+			ai.POST("/test", summariesdomain.TestAIConnection)
+			ai.GET("/settings", summariesdomain.GetAISettings)
+			ai.POST("/settings", summariesdomain.SaveAISettings)
 		}
 
 		opml := api.Group("")
 		{
-			opml.POST("/import-opml", handlers.ImportOPML)
-			opml.GET("/export-opml", handlers.ExportOPML)
+			opml.POST("/import-opml", feedsdomain.ImportOPML)
+			opml.GET("/export-opml", feedsdomain.ExportOPML)
 		}
 
 		schedulers := api.Group("/schedulers")
 		{
-			schedulers.GET("/status", handlers.GetSchedulersStatus)
-			schedulers.GET("/:name/status", handlers.GetSchedulerStatus)
-			schedulers.POST("/:name/trigger", handlers.TriggerScheduler)
-			schedulers.POST("/:name/reset", handlers.ResetSchedulerStats)
-			schedulers.PUT("/:name/interval", handlers.UpdateSchedulerInterval)
+			schedulers.GET("/status", jobs.GetSchedulersStatus)
+			schedulers.GET("/:name/status", jobs.GetSchedulerStatus)
+			schedulers.POST("/:name/trigger", jobs.TriggerScheduler)
+			schedulers.POST("/:name/reset", jobs.ResetSchedulerStats)
+			schedulers.PUT("/:name/interval", jobs.UpdateSchedulerInterval)
 		}
 
 		summaries := api.Group("/summaries")
 		{
-			summaries.GET("", handlers.GetSummaries)
-			summaries.GET("/:summary_id", handlers.GetSummary)
-			summaries.DELETE("/:summary_id", handlers.DeleteSummary)
-			summaries.POST("/queue", handlers.SubmitQueueSummary)
-			summaries.GET("/queue/status", handlers.GetQueueStatus)
-			summaries.GET("/queue/jobs/:job_id", handlers.GetQueueJob)
+			summaries.GET("", summariesdomain.GetSummaries)
+			summaries.GET("/:summary_id", summariesdomain.GetSummary)
+			summaries.DELETE("/:summary_id", summariesdomain.DeleteSummary)
+			summaries.POST("/queue", summariesdomain.SubmitQueueSummary)
+			summaries.GET("/queue/status", summariesdomain.GetQueueStatus)
+			summaries.GET("/queue/jobs/:job_id", summariesdomain.GetQueueJob)
 		}
 
-		api.GET("/auto-summary/status", handlers.GetAutoSummaryStatus)
-		api.POST("/auto-summary/config", handlers.UpdateAutoSummaryConfig)
+		api.GET("/auto-summary/status", summariesdomain.GetAutoSummaryStatus)
+		api.POST("/auto-summary/config", summariesdomain.UpdateAutoSummaryConfig)
 
 		readingBehavior := api.Group("/reading-behavior")
 		{
-			readingBehavior.POST("/track", handlers.TrackReadingBehavior)
-			readingBehavior.POST("/track-batch", handlers.BatchTrackReadingBehavior)
-			readingBehavior.GET("/stats", handlers.GetReadingStats)
+			readingBehavior.POST("/track", preferencesdomain.TrackReadingBehavior)
+			readingBehavior.POST("/track-batch", preferencesdomain.BatchTrackReadingBehavior)
+			readingBehavior.GET("/stats", preferencesdomain.GetReadingStats)
 		}
 
 		preferences := api.Group("/user-preferences")
 		{
-			preferences.GET("", handlers.GetUserPreferences)
-			preferences.POST("/update", handlers.TriggerPreferenceUpdate)
+			preferences.GET("", preferencesdomain.GetUserPreferences)
+			preferences.POST("/update", preferencesdomain.TriggerPreferenceUpdate)
 		}
 
 		contentCompletion := api.Group("/content-completion")
 		{
-			contentCompletion.POST("/articles/:article_id/complete", handlers.CompleteArticleContent)
-			contentCompletion.POST("/feeds/:feed_id/complete-all", handlers.CompleteFeedArticles)
-			contentCompletion.GET("/articles/:article_id/status", handlers.GetCompletionStatus)
-			contentCompletion.GET("/overview", handlers.GetCompletionOverview)
+			contentCompletion.POST("/articles/:article_id/complete", contentprocessingdomain.CompleteArticleContent)
+			contentCompletion.POST("/feeds/:feed_id/complete-all", contentprocessingdomain.CompleteFeedArticles)
+			contentCompletion.GET("/articles/:article_id/status", contentprocessingdomain.GetCompletionStatus)
+			contentCompletion.GET("/overview", contentprocessingdomain.GetCompletionOverview)
 		}
 
 		firecrawl := api.Group("/firecrawl")
 		{
-			firecrawl.POST("/article/:id", handlers.CrawlArticle)
-			firecrawl.POST("/feed/:id/enable", handlers.EnableFeedFirecrawl)
-			firecrawl.GET("/status", handlers.GetFirecrawlStatus)
-			firecrawl.POST("/settings", handlers.SaveFirecrawlSettings)
+			firecrawl.POST("/article/:id", contentprocessingdomain.CrawlArticle)
+			firecrawl.POST("/feed/:id/enable", contentprocessingdomain.EnableFeedFirecrawl)
+			firecrawl.GET("/status", contentprocessingdomain.GetFirecrawlStatus)
+			firecrawl.POST("/settings", contentprocessingdomain.SaveFirecrawlSettings)
 		}
 
 		digestGroup := api.Group("/digest")
 		{
-			digestGroup.GET("/config", handlers.GetDigestConfig)
-			digestGroup.GET("/status", handlers.GetDigestStatus)
-			digestGroup.GET("/preview/:type", handlers.GetDigestPreview)
-			digestGroup.PUT("/config", handlers.UpdateDigestConfig)
-			digestGroup.POST("/run/:type", handlers.RunDigestNow)
-			digestGroup.POST("/test-feishu", handlers.TestFeishuPush)
-			digestGroup.POST("/test-obsidian", handlers.TestObsidianWrite)
+			digestGroup.GET("/config", digestdomain.GetDigestConfig)
+			digestGroup.GET("/status", digestdomain.GetDigestStatus)
+			digestGroup.GET("/preview/:type", digestdomain.GetDigestPreview)
+			digestGroup.PUT("/config", digestdomain.UpdateDigestConfig)
+			digestGroup.POST("/run/:type", digestdomain.RunDigestNow)
+			digestGroup.POST("/test-feishu", digestdomain.TestFeishuPush)
+			digestGroup.POST("/test-obsidian", digestdomain.TestObsidianWrite)
 		}
 	}
 }

@@ -3,9 +3,9 @@ package main
 import (
 	"fmt"
 	"log"
-	"my-robot-backend/internal/config"
-	"my-robot-backend/internal/digest"
-	"my-robot-backend/pkg/database"
+	"my-robot-backend/internal/domain/digest"
+	"my-robot-backend/internal/platform/config"
+	"my-robot-backend/internal/platform/database"
 )
 
 func main() {

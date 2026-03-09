@@ -7,10 +7,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 	appbootstrap "my-robot-backend/internal/app"
-	"my-robot-backend/internal/config"
-	"my-robot-backend/internal/digest"
-	"my-robot-backend/internal/middleware"
-	"my-robot-backend/pkg/database"
+	"my-robot-backend/internal/domain/digest"
+	"my-robot-backend/internal/platform/config"
+	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/middleware"
 )
 
 func main() {

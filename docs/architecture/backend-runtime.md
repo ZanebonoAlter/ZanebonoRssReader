@@ -5,8 +5,8 @@
 当前 Go 后端的真实启动顺序在 `backend-go/cmd/server/main.go`：
 
 1. 加载配置 `backend-go/internal/config/config.go`
-2. 初始化数据库 `backend-go/pkg/database/db.go`
-3. 执行 digest 迁移 `backend-go/internal/digest`
+2. 初始化数据库 `backend-go/internal/platform/database/db.go`
+3. 执行 digest 迁移 `backend-go/internal/domain/digest`
 4. 创建 Gin 实例并挂载 CORS
 5. 注册路由 `backend-go/internal/app/router.go`
 6. 启动运行时 `backend-go/internal/app/runtime.go`
@@ -17,7 +17,7 @@
 
 ## 当前运行时职责
 
-`backend-go/internal/app/runtime.go` 负责把后台任务真正拉起来，并把运行时实例注入给 handler。
+`backend-go/internal/app/runtime.go` 负责把后台任务真正拉起来，并把运行时实例写进 `backend-go/internal/app/runtimeinfo/`。
 
 当前会启动 6 类后台任务：
 
@@ -56,7 +56,7 @@
 
 ## WebSocket 位置
 
-WebSocket 逻辑在 `backend-go/internal/ws/hub.go`。
+WebSocket 逻辑在 `backend-go/internal/platform/ws/hub.go`。
 
 它现在属于一类明显的“平台能力”：
 
@@ -68,18 +68,17 @@ WebSocket 逻辑在 `backend-go/internal/ws/hub.go`。
 
 ## 后台任务现状
 
-当前后台任务代码仍散落在多个位置：
+当前后台任务代码已经基本收进两层：
 
-- `backend-go/internal/schedulers/` - 多数定时任务外壳
-- `backend-go/internal/services/` - 任务实际业务逻辑
-- `backend-go/internal/digest/` - digest 自带调度与生成逻辑
-- `backend-go/internal/handlers/scheduler.go` - 手动触发与状态查询接口
+- `backend-go/internal/jobs/` - 多数定时任务外壳和 scheduler handler
+- `backend-go/internal/domain/*` - 任务实际业务逻辑
+- `backend-go/internal/domain/digest/` - digest 自带生成器、导出器和调度器
 
-这里的主要问题不是“不能跑”，而是理解成本高：
+现在比之前顺了一些，但仍有几个过渡点：
 
-- 看一个任务要在 scheduler、service、handler 之间来回跳
-- digest 拥有半独立实现，和其他任务的风格不完全一致
-- scheduler handler 中仍有部分占位实现
+- `runtimeinfo` 还是过渡层，不是最终容器方案
+- scheduler handler 里仍有部分 placeholder 能力
+- `aisettings` 还是共享配置入口，边界不是最终形态
 
 ## 现在能看到什么状态
 
@@ -122,7 +121,7 @@ WebSocket 逻辑在 `backend-go/internal/ws/hub.go`。
 - `internal/domain/` - 按业务域收拢 handler、service、model、test
 - `internal/jobs/` - 定时任务执行外壳
 
-这个结构现在还没完全实现，但 `internal/app/` 已经是第一步。
+这套结构现在已经落地，后续重点不再是大搬家，而是继续压缩过渡层。
 
 ## 读代码建议
 
@@ -131,8 +130,6 @@ WebSocket 逻辑在 `backend-go/internal/ws/hub.go`。
 1. `backend-go/cmd/server/main.go`
 2. `backend-go/internal/app/router.go`
 3. `backend-go/internal/app/runtime.go`
-4. `backend-go/internal/handlers/*`
-5. `backend-go/internal/services/*`
-6. `backend-go/internal/models/*`
-7. `backend-go/internal/schedulers/*`
-8. `backend-go/internal/digest/*`
+4. `backend-go/internal/domain/*`
+5. `backend-go/internal/jobs/*`
+6. `backend-go/internal/platform/*`

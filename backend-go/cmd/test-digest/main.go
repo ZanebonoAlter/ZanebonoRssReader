@@ -2,9 +2,9 @@ package main
 
 import (
 	"log"
-	"my-robot-backend/internal/config"
-	"my-robot-backend/internal/models"
-	"my-robot-backend/pkg/database"
+	"my-robot-backend/internal/domain/models"
+	"my-robot-backend/internal/platform/config"
+	"my-robot-backend/internal/platform/database"
 	"time"
 )
 

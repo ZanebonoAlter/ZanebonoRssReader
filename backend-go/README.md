@@ -7,8 +7,9 @@
 - 服务入口：`backend-go/cmd/server/main.go`
 - 路由装配：`backend-go/internal/app/router.go`
 - 运行时装配：`backend-go/internal/app/runtime.go`
+- 运行时共享状态：`backend-go/internal/app/runtimeinfo/schedulers.go`
 - 配置文件：`backend-go/configs/config.yaml`
-- 数据库逻辑：`backend-go/pkg/database/db.go`
+- 数据库逻辑：`backend-go/internal/platform/database/db.go`
 
 ## 开发命令
 
@@ -32,5 +33,5 @@ go run cmd/test-digest/main.go
 
 - `docs/` 里的文档现在是正式维护入口
 - `backend-go/ARCHITECTURE.md` 和 `backend-go/DATABASE.md` 适合当历史参考，不再当作现状真相
-- 后端目录会继续从横向分层，逐步迁向按职责和领域组织
-- 当前方向见 `docs/architecture/backend-go.md`
+- 后端当前已经落到 `app / platform / domain / jobs` 四层
+- 当前目录说明见 `docs/architecture/backend-go.md`
