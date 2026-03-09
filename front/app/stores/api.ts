@@ -1,5 +1,9 @@
-import { api } from '~/composables/useApi'
 import type { Category, RssFeed, Article } from '~/types'
+import { useCategoriesApi } from '~/api/categories'
+import { useFeedsApi } from '~/api/feeds'
+import { useArticlesApi } from '~/api/articles'
+import { useOpmlApi } from '~/api/opml'
+import { useSummariesApi } from '~/api/summaries'
 
 export const useApiStore = defineStore('api', () => {
   const loading = ref(false)
@@ -12,7 +16,8 @@ export const useApiStore = defineStore('api', () => {
     loading.value = true
     error.value = null
 
-    const response = await api.getCategories()
+    const categoriesApi = useCategoriesApi()
+    const response = await categoriesApi.getCategories()
 
     if (response.success && response.data) {
       // Transform backend data to frontend format
@@ -40,12 +45,12 @@ export const useApiStore = defineStore('api', () => {
     description?: string
   }) {
     loading.value = true
-    const response = await api.createCategory(data)
+    const categoriesApi = useCategoriesApi()
+    const response = await categoriesApi.createCategory(data)
     loading.value = false
 
     if (response.success) {
       await fetchCategories()
-      syncToLocalStores()
     }
 
     return response
@@ -61,12 +66,12 @@ export const useApiStore = defineStore('api', () => {
     }
   ) {
     loading.value = true
-    const response = await api.updateCategory(Number(id), data)
+    const categoriesApi = useCategoriesApi()
+    const response = await categoriesApi.updateCategory(Number(id), data)
     loading.value = false
 
     if (response.success) {
       await fetchCategories()
-      syncToLocalStores()
     }
 
     return response
@@ -74,12 +79,12 @@ export const useApiStore = defineStore('api', () => {
 
   async function deleteCategory(id: string) {
     loading.value = true
-    const response = await api.deleteCategory(Number(id))
+    const categoriesApi = useCategoriesApi()
+    const response = await categoriesApi.deleteCategory(Number(id))
     loading.value = false
 
     if (response.success) {
       await fetchCategories()
-      syncToLocalStores()
     }
 
     return response
@@ -93,7 +98,8 @@ export const useApiStore = defineStore('api', () => {
     loading.value = true
     error.value = null
 
-    const response = await api.getFeeds(params)
+    const feedsApi = useFeedsApi()
+    const response = await feedsApi.getFeeds(params)
 
     if (response.success && response.data) {
       const data = response.data as any
@@ -115,6 +121,11 @@ export const useApiStore = defineStore('api', () => {
         refreshStatus: feed.refresh_status || 'idle',
         refreshError: feed.refresh_error,
         lastRefreshAt: feed.last_refresh_at,
+        aiSummaryEnabled: feed.ai_summary_enabled !== undefined ? feed.ai_summary_enabled : true, // Default to true if not set
+        contentCompletionEnabled: feed.content_completion_enabled,
+        completionOnRefresh: feed.completion_on_refresh,
+        maxCompletionRetries: feed.max_completion_retries,
+        firecrawlEnabled: feed.firecrawl_enabled,
       }))
 
       feeds.value = mappedFeeds
@@ -141,13 +152,13 @@ export const useApiStore = defineStore('api', () => {
     color?: string
   }) {
     loading.value = true
-    const response = await api.createFeed(data)
+    const feedsApi = useFeedsApi()
+    const response = await feedsApi.createFeed(data)
     loading.value = false
 
     if (response.success) {
       await fetchFeeds({ per_page: 10000 })
       await fetchArticles({ per_page: 10000 })
-      syncToLocalStores()
     }
 
     return response
@@ -155,13 +166,13 @@ export const useApiStore = defineStore('api', () => {
 
   async function deleteFeed(id: string) {
     loading.value = true
-    const response = await api.deleteFeed(Number(id))
+    const feedsApi = useFeedsApi()
+    const response = await feedsApi.deleteFeed(Number(id))
     loading.value = false
 
     if (response.success) {
       await fetchFeeds({ per_page: 10000 })
       await fetchArticles({ per_page: 10000 })
-      syncToLocalStores()
     }
 
     return response
@@ -176,16 +187,23 @@ export const useApiStore = defineStore('api', () => {
       category_id?: number
       icon?: string
       color?: string
+      max_articles?: number
+      refresh_interval?: number
+      ai_summary_enabled?: boolean
+      content_completion_enabled?: boolean
+      completion_on_refresh?: boolean
+      max_completion_retries?: number
+      firecrawl_enabled?: boolean
     }
   ) {
     loading.value = true
-    const response = await api.updateFeed(Number(id), data)
+    const feedsApi = useFeedsApi()
+    const response = await feedsApi.updateFeed(Number(id), data)
     loading.value = false
 
     if (response.success) {
       await fetchFeeds({ per_page: 10000 })
       await fetchArticles({ per_page: 10000 })
-      syncToLocalStores()
     }
 
     return response
@@ -193,14 +211,16 @@ export const useApiStore = defineStore('api', () => {
 
   async function refreshFeed(id: string) {
     loading.value = true
-    const response = await api.refreshFeed(Number(id))
+    const feedsApi = useFeedsApi()
+    const response = await feedsApi.refreshFeed(Number(id))
     loading.value = false
     return response
   }
 
   async function refreshAllFeeds() {
     loading.value = true
-    const response = await api.refreshAllFeeds()
+    const feedsApi = useFeedsApi()
+    const response = await feedsApi.refreshAllFeeds()
     loading.value = false
     return response
   }
@@ -218,6 +238,8 @@ export const useApiStore = defineStore('api', () => {
     read?: boolean
     favorite?: boolean
     search?: string
+    start_date?: string
+    end_date?: string
   } = {}) {
     loading.value = true
     error.value = null
@@ -225,7 +247,8 @@ export const useApiStore = defineStore('api', () => {
     // Set a high default per_page to get all articles
     const params = { per_page: 10000, ...filters }
 
-    const response = await api.getArticles(params)
+    const articlesApi = useArticlesApi()
+    const response = await articlesApi.getArticles(params)
 
     if (response.success && response.data) {
       const data = response.data as any
@@ -240,9 +263,19 @@ export const useApiStore = defineStore('api', () => {
         link: article.link,
         pubDate: article.pub_date || article.created_at,
         author: article.author,
-        category: String(article.feed_id), // Will be mapped from feed
+        category: article.category_id ? String(article.category_id) : '',
         read: article.read || false,
         favorite: article.favorite || false,
+        contentStatus: article.content_status,
+        fullContent: article.full_content,
+        contentFetchedAt: article.content_fetched_at,
+        completionAttempts: article.completion_attempts,
+        completionError: article.completion_error,
+        aiContentSummary: article.ai_content_summary,
+        firecrawlStatus: article.firecrawl_status,
+        firecrawlError: article.firecrawl_error,
+        firecrawlContent: article.firecrawl_content,
+        firecrawlCrawledAt: article.firecrawl_crawled_at,
         imageUrl: article.image_url,
       }))
 
@@ -259,23 +292,27 @@ export const useApiStore = defineStore('api', () => {
     id: string,
     data: { read?: boolean; favorite?: boolean }
   ) {
-    const response = await api.updateArticle(Number(id), data)
+    const articlesApi = useArticlesApi()
+    const article = articles.value.find((a) => a.id === id)
+    const wasFavorite = article?.favorite
+
+    const response = await articlesApi.updateArticle(Number(id), data)
 
     if (response.success) {
-      // Update local article store
-      const articlesStore = useArticlesStore()
-      const article = articlesStore.articles.find((a) => a.id === id)
       if (article) {
         Object.assign(article, data)
       }
 
-      // Update feed unread count when marking as read
       if (data.read === true && article) {
-        const feedsStore = useFeedsStore()
-        const feed = feedsStore.feeds.find((f) => f.id === article.feedId)
+        const sourceFeeds = allFeeds.value.length > 0 ? allFeeds.value : feeds.value
+        const feed = sourceFeeds.find((f) => f.id === article.feedId)
         if (feed && feed.unreadCount && feed.unreadCount > 0) {
           feed.unreadCount--
         }
+      }
+
+      if (data.favorite !== undefined && wasFavorite !== undefined && article) {
+        article.favorite = data.favorite
       }
     }
 
@@ -299,18 +336,16 @@ export const useApiStore = defineStore('api', () => {
       ? articles.value.filter((a) => a.feedId === feedId).map((a) => Number(a.id))
       : articles.value.map((a) => Number(a.id))
 
-    const response = await api.bulkUpdateArticles({
+    const articlesApi = useArticlesApi()
+    const response = await articlesApi.bulkUpdateArticles({
       ids,
       read: true,
     })
 
     if (response.success) {
-      // Update local article store
-      const articlesStore = useArticlesStore()
       articles.value.forEach((a) => {
-        const localArticle = articlesStore.articles.find((la) => la.id === a.id)
-        if (localArticle) {
-          localArticle.read = true
+        if (!feedId || a.feedId === feedId) {
+          a.read = true
         }
       })
     }
@@ -321,24 +356,26 @@ export const useApiStore = defineStore('api', () => {
   // OPML
   async function importOpml(file: File) {
     loading.value = true
-    const response = await api.importOpml(file)
+    const opmlApi = useOpmlApi()
+    const response = await opmlApi.importOpml(file)
     loading.value = false
 
     if (response.success) {
       await fetchFeeds({ per_page: 10000 })
       await fetchCategories()
-      syncToLocalStores()
     }
 
     return response
   }
 
   async function exportOpml() {
-    return api.exportOpml()
+    const opmlApi = useOpmlApi()
+    return opmlApi.exportOpml()
   }
 
   async function fetchArticlesStats() {
-    const response = await api.getArticlesStats()
+    const articlesApi = useArticlesApi()
+    const response = await articlesApi.getArticlesStats()
     return response
   }
 
@@ -346,7 +383,8 @@ export const useApiStore = defineStore('api', () => {
   async function getSummaries(params: { category_id?: number; page?: number; per_page?: number } = {}) {
     loading.value = true
     error.value = null
-    const response = await api.getSummaries(params)
+    const summariesApi = useSummariesApi()
+    const response = await summariesApi.getSummaries(params)
     loading.value = false
     return response
   }
@@ -360,7 +398,8 @@ export const useApiStore = defineStore('api', () => {
   }) {
     loading.value = true
     error.value = null
-    const response = await api.generateSummary(data)
+    const summariesApi = useSummariesApi()
+    const response = await summariesApi.generateSummary(data)
     loading.value = false
     return response
   }
@@ -368,8 +407,37 @@ export const useApiStore = defineStore('api', () => {
   async function deleteSummary(id: number) {
     loading.value = true
     error.value = null
-    const response = await api.deleteSummary(id)
+    const summariesApi = useSummariesApi()
+    const response = await summariesApi.deleteSummary(id)
     loading.value = false
+    return response
+  }
+
+  // Queue Summary
+  async function submitQueueSummary(data: {
+    category_ids: number[]
+    time_range?: number
+    base_url: string
+    api_key: string
+    model: string
+  }) {
+    loading.value = true
+    error.value = null
+    const summariesApi = useSummariesApi()
+    const response = await summariesApi.submitQueueSummary(data)
+    loading.value = false
+    return response
+  }
+
+  async function getQueueStatus() {
+    const summariesApi = useSummariesApi()
+    const response = await summariesApi.getQueueStatus()
+    return response
+  }
+
+  async function getQueueJob(jobId: string) {
+    const summariesApi = useSummariesApi()
+    const response = await summariesApi.getQueueJob(jobId)
     return response
   }
 
@@ -377,32 +445,9 @@ export const useApiStore = defineStore('api', () => {
   async function initialize() {
     await Promise.all([
       fetchCategories(),
-      fetchFeeds({ per_page: 10000 }), // Get all feeds
-      fetchArticles({ per_page: 10000 }), // Get all articles
+      fetchFeeds({ per_page: 10000 }),
+      fetchArticles({ per_page: 10000 }),
     ])
-  }
-
-  // Sync data to local stores
-  function syncToLocalStores() {
-    const feedsStore = useFeedsStore()
-    const articlesStore = useArticlesStore()
-
-    // Sync categories
-    feedsStore.categories = categories.value.map(cat => ({
-      id: cat.id,
-      name: cat.name,
-      slug: cat.slug,
-      icon: cat.icon,
-      color: cat.color,
-      description: cat.description,
-      feedCount: cat.feedCount
-    }))
-
-    // Sync feeds - use allFeeds for sidebar to ensure all feeds (including uncategorized) are shown
-    feedsStore.feeds = allFeeds.value.length > 0 ? allFeeds.value : feeds.value
-
-    // Sync articles
-    articlesStore.articles = articles.value
   }
 
   return {
@@ -410,6 +455,7 @@ export const useApiStore = defineStore('api', () => {
     error,
     categories,
     feeds,
+    allFeeds,
     articles,
     totalArticles,
     fetchCategories,
@@ -433,7 +479,12 @@ export const useApiStore = defineStore('api', () => {
     getSummaries,
     generateSummary,
     deleteSummary,
+    submitQueueSummary,
+    getQueueStatus,
+    getQueueJob,
     initialize,
-    syncToLocalStores,
   }
 })
+
+
+

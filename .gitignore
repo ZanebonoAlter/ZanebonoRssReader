@@ -5,6 +5,26 @@ build/
 dist/
 wheels/
 *.egg-info
+.claude/
 
 # Virtual environments
 .venv
+testsworkflow/.venv/
+backend-go/main.exe
+backend-go/*.exe
+backend-go/rss_reader.db
+backend-go/rss-server
+backend-go/rss-server.exe
+backend-go/server.exe
+backend-go/bin/fresh.exe
+backend-go/bin/server.exe
+backend-go/bin/server.exe~
+backend-go/bin/test.exe
+backend-go/cmd/server/rss_reader.db
+backend-go/rss_reader_backup.db
+.pytest_cache/
+front/.nuxt/
+front/.output/
+front/node_modules/
+.worktrees/
+.gitnexus

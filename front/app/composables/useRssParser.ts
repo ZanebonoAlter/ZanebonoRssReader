@@ -1,4 +1,5 @@
 import type { RssFeed, Article, FeedResponse } from '~/types'
+import { cleanHtml, extractFirstImage, getCategoryColor } from '~/utils/text'
 
 export function useRssParser() {
   const config = useRuntimeConfig()
@@ -41,7 +42,7 @@ export function useRssParser() {
       id: `${feedId}-${index}`,
       feedId,
       title: item.title,
-      description: cleanDescription(item.description || ''),
+      description: cleanHtml(item.description || ''),
       content: item.content || item.description || '',
       link: item.link,
       pubDate: item.pubDate,
@@ -49,7 +50,7 @@ export function useRssParser() {
       category: feedId, // Will be updated by the caller
       read: false,
       favorite: false,
-      imageUrl: item.thumbnail || item.enclosure?.link || extractFirstImage(item.content || '')
+      imageUrl: item.thumbnail || item.enclosure?.link || extractFirstImage(item.content || ''),
     }))
   }
 
@@ -68,7 +69,7 @@ export function useRssParser() {
       category: categoryId,
       icon: 'mdi:rss',
       color: getCategoryColor(categoryId),
-      lastUpdated: new Date().toISOString()
+      lastUpdated: new Date().toISOString(),
     }
   }
 
@@ -77,47 +78,7 @@ export function useRssParser() {
     error: readonly(error),
     fetchFeed,
     convertToArticles,
-    createFeedFromResponse
+    createFeedFromResponse,
   }
 }
 
-/**
- * Helper function to clean HTML from descriptions
- */
-function cleanDescription(html: string): string {
-  if (!html) return ''
-
-  // Remove HTML tags
-  const text = html.replace(/<[^>]*>/g, '')
-
-  // Decode HTML entities
-  const textarea = document.createElement('textarea')
-  textarea.innerHTML = text
-  return textarea.value.substring(0, 200) // Limit to 200 characters
-}
-
-/**
- * Helper function to extract first image from HTML content
- */
-function extractFirstImage(html: string): string | undefined {
-  if (!html) return undefined
-
-  const imgMatch = html.match(/<img[^>]+src="([^">]+)"/i)
-  return imgMatch?.[1] || undefined
-}
-
-/**
- * Helper function to get color for category
- */
-function getCategoryColor(categoryId: string): string {
-  const colors: Record<string, string> = {
-    tech: '#3b82f6',
-    news: '#ef4444',
-    design: '#8b5cf6',
-    blog: '#10b981',
-    ai: '#f59e0b',
-    product: '#ec4899'
-  }
-
-  return colors[categoryId] || '#6b7280'
-}

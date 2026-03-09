@@ -1,0 +1,34 @@
+package contentprocessing
+
+import (
+	"my-robot-backend/internal/domain/models"
+	"my-robot-backend/internal/platform/database"
+)
+
+func (s *ContentCompletionService) AutoCompleteCompletePendingArticles(limit int) ([]uint, []error) {
+	var articles []models.Article
+
+	err := database.DB.
+		Joins("Feed").
+		Where("articles.content_status = ? AND feeds.content_completion_enabled = ?", "incomplete", true).
+		Where("articles.completion_attempts < feeds.max_completion_retries").
+		Limit(limit).
+		Find(&articles).Error
+
+	if err != nil {
+		return nil, []error{err}
+	}
+
+	var completedIDs []uint
+	var errors []error
+
+	for _, article := range articles {
+		if err := s.CompleteArticle(article.ID); err != nil {
+			errors = append(errors, err)
+		} else {
+			completedIDs = append(completedIDs, article.ID)
+		}
+	}
+
+	return completedIDs, errors
+}

@@ -1,0 +1,162 @@
+package app
+
+import (
+	"github.com/gin-gonic/gin"
+	articlesdomain "my-robot-backend/internal/domain/articles"
+	categoriesdomain "my-robot-backend/internal/domain/categories"
+	contentprocessingdomain "my-robot-backend/internal/domain/contentprocessing"
+	digestdomain "my-robot-backend/internal/domain/digest"
+	feedsdomain "my-robot-backend/internal/domain/feeds"
+	preferencesdomain "my-robot-backend/internal/domain/preferences"
+	summariesdomain "my-robot-backend/internal/domain/summaries"
+	"my-robot-backend/internal/jobs"
+	"my-robot-backend/internal/platform/ws"
+)
+
+func SetupRoutes(r *gin.Engine) {
+	r.GET("/", func(c *gin.Context) {
+		c.JSON(200, gin.H{
+			"name":    "RSS Reader API (Go)",
+			"version": "1.0.0",
+			"endpoints": gin.H{
+				"categories": "/api/categories",
+				"feeds":      "/api/feeds",
+				"articles":   "/api/articles",
+				"ai":         "/api/ai",
+				"opml": gin.H{
+					"import": "POST /api/import-opml",
+					"export": "GET /api/export-opml",
+				},
+				"schedulers": "/api/schedulers",
+			},
+		})
+	})
+
+	r.GET("/health", func(c *gin.Context) {
+		c.JSON(200, gin.H{
+			"status":   "healthy",
+			"database": "connected",
+		})
+	})
+
+	r.GET("/api/tasks/status", func(c *gin.Context) {
+		c.JSON(200, gin.H{
+			"success": true,
+			"data": gin.H{
+				"queue_size":   0,
+				"active_tasks": 0,
+				"tasks":        []string{},
+			},
+		})
+	})
+
+	r.GET("/ws", ws.HandleWebSocket)
+
+	api := r.Group("/api")
+	{
+		categories := api.Group("/categories")
+		{
+			categories.GET("", categoriesdomain.GetCategories)
+			categories.POST("", categoriesdomain.CreateCategory)
+			categories.PUT("/:category_id", categoriesdomain.UpdateCategory)
+			categories.DELETE("/:category_id", categoriesdomain.DeleteCategory)
+		}
+
+		feeds := api.Group("/feeds")
+		{
+			feeds.GET("", feedsdomain.GetFeeds)
+			feeds.GET("/:feed_id", feedsdomain.GetFeed)
+			feeds.POST("", feedsdomain.CreateFeed)
+			feeds.PUT("/:feed_id", feedsdomain.UpdateFeed)
+			feeds.DELETE("/:feed_id", feedsdomain.DeleteFeed)
+			feeds.POST("/:feed_id/refresh", feedsdomain.RefreshFeed)
+			feeds.POST("/fetch", feedsdomain.FetchFeed)
+			feeds.POST("/refresh-all", feedsdomain.RefreshAllFeeds)
+		}
+
+		articles := api.Group("/articles")
+		{
+			articles.GET("/stats", articlesdomain.GetArticlesStats)
+			articles.GET("", articlesdomain.GetArticles)
+			articles.GET("/:article_id", articlesdomain.GetArticle)
+			articles.PUT("/:article_id", articlesdomain.UpdateArticle)
+			articles.PUT("/bulk-update", articlesdomain.BulkUpdateArticles)
+		}
+
+		ai := api.Group("/ai")
+		{
+			ai.POST("/summarize", summariesdomain.SummarizeArticle)
+			ai.POST("/test", summariesdomain.TestAIConnection)
+			ai.GET("/settings", summariesdomain.GetAISettings)
+			ai.POST("/settings", summariesdomain.SaveAISettings)
+		}
+
+		opml := api.Group("")
+		{
+			opml.POST("/import-opml", feedsdomain.ImportOPML)
+			opml.GET("/export-opml", feedsdomain.ExportOPML)
+		}
+
+		schedulers := api.Group("/schedulers")
+		{
+			schedulers.GET("/status", jobs.GetSchedulersStatus)
+			schedulers.GET("/:name/status", jobs.GetSchedulerStatus)
+			schedulers.POST("/:name/trigger", jobs.TriggerScheduler)
+			schedulers.POST("/:name/reset", jobs.ResetSchedulerStats)
+			schedulers.PUT("/:name/interval", jobs.UpdateSchedulerInterval)
+		}
+
+		summaries := api.Group("/summaries")
+		{
+			summaries.GET("", summariesdomain.GetSummaries)
+			summaries.GET("/:summary_id", summariesdomain.GetSummary)
+			summaries.DELETE("/:summary_id", summariesdomain.DeleteSummary)
+			summaries.POST("/queue", summariesdomain.SubmitQueueSummary)
+			summaries.GET("/queue/status", summariesdomain.GetQueueStatus)
+			summaries.GET("/queue/jobs/:job_id", summariesdomain.GetQueueJob)
+		}
+
+		api.GET("/auto-summary/status", summariesdomain.GetAutoSummaryStatus)
+		api.POST("/auto-summary/config", summariesdomain.UpdateAutoSummaryConfig)
+
+		readingBehavior := api.Group("/reading-behavior")
+		{
+			readingBehavior.POST("/track", preferencesdomain.TrackReadingBehavior)
+			readingBehavior.POST("/track-batch", preferencesdomain.BatchTrackReadingBehavior)
+			readingBehavior.GET("/stats", preferencesdomain.GetReadingStats)
+		}
+
+		preferences := api.Group("/user-preferences")
+		{
+			preferences.GET("", preferencesdomain.GetUserPreferences)
+			preferences.POST("/update", preferencesdomain.TriggerPreferenceUpdate)
+		}
+
+		contentCompletion := api.Group("/content-completion")
+		{
+			contentCompletion.POST("/articles/:article_id/complete", contentprocessingdomain.CompleteArticleContent)
+			contentCompletion.POST("/feeds/:feed_id/complete-all", contentprocessingdomain.CompleteFeedArticles)
+			contentCompletion.GET("/articles/:article_id/status", contentprocessingdomain.GetCompletionStatus)
+			contentCompletion.GET("/overview", contentprocessingdomain.GetCompletionOverview)
+		}
+
+		firecrawl := api.Group("/firecrawl")
+		{
+			firecrawl.POST("/article/:id", contentprocessingdomain.CrawlArticle)
+			firecrawl.POST("/feed/:id/enable", contentprocessingdomain.EnableFeedFirecrawl)
+			firecrawl.GET("/status", contentprocessingdomain.GetFirecrawlStatus)
+			firecrawl.POST("/settings", contentprocessingdomain.SaveFirecrawlSettings)
+		}
+
+		digestGroup := api.Group("/digest")
+		{
+			digestGroup.GET("/config", digestdomain.GetDigestConfig)
+			digestGroup.GET("/status", digestdomain.GetDigestStatus)
+			digestGroup.GET("/preview/:type", digestdomain.GetDigestPreview)
+			digestGroup.PUT("/config", digestdomain.UpdateDigestConfig)
+			digestGroup.POST("/run/:type", digestdomain.RunDigestNow)
+			digestGroup.POST("/test-feishu", digestdomain.TestFeishuPush)
+			digestGroup.POST("/test-obsidian", digestdomain.TestObsidianWrite)
+		}
+	}
+}

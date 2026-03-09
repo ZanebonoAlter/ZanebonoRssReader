@@ -1,75 +1,38 @@
-# Nuxt Minimal Starter
+# Frontend
 
-Look at the [Nuxt documentation](https://nuxt.com/docs/getting-started/introduction) to learn more.
+前端基于 Nuxt 4、Vue 3、TypeScript 和 Pinia。
 
-## Setup
-
-Make sure to install dependencies:
+## 开发命令
 
 ```bash
-# npm
-npm install
-
-# pnpm
 pnpm install
-
-# yarn
-yarn install
-
-# bun
-bun install
-```
-
-## Development Server
-
-Start the development server on `http://localhost:3000`:
-
-```bash
-# npm
-npm run dev
-
-# pnpm
 pnpm dev
-
-# yarn
-yarn dev
-
-# bun
-bun run dev
-```
-
-## Production
-
-Build the application for production:
-
-```bash
-# npm
-npm run build
-
-# pnpm
 pnpm build
-
-# yarn
-yarn build
-
-# bun
-bun run build
+pnpm exec nuxi typecheck
 ```
 
-Locally preview production build:
+## 当前入口
 
-```bash
-# npm
-npm run preview
+- 应用壳：`front/app/app.vue`
+- 首页：`front/app/pages/index.vue`
+- Digest 页面：`front/app/pages/digest/index.vue`
+- 主布局实现：`front/app/features/shell/components/FeedLayoutShell.vue`
 
-# pnpm
-pnpm preview
+## 架构文档
 
-# yarn
-yarn preview
+- 前端架构：`docs/architecture/frontend.md`
+- 组件分工：`docs/architecture/frontend-components.md`
+- 功能说明：`docs/guides/frontend-features.md`
+- 数据流：`docs/architecture/data-flow.md`
+- 开发流程：`docs/operations/development.md`
 
-# bun
-bun run preview
-```
+## 当前目录原则
 
-Check out the [deployment documentation](https://nuxt.com/docs/getting-started/deployment) for more information.
+前端现在以 feature 组织为主，核心规则是：
+
+- `api/` 成为唯一接口边界
+- `features/` 收拢业务代码
+- `stores/api.ts` 作为后端数据源
+- `stores/feeds.ts`、`stores/articles.ts` 只暴露衍生视图，不再手工同步副本
+- `components/` 只放通用组件和弹窗
+- 业务实现统一从 `features/` 进入，不再兼容旧入口
