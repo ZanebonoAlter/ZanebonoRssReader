@@ -193,6 +193,32 @@ func (s *DigestScheduler) exportToObsidian(isDaily bool, date time.Time, digests
 	return exporter.ExportWeeklyDigest(date, digests)
 }
 
+func (s *DigestScheduler) autoSendToOpenNotebook(kind string, date time.Time, digests []CategoryDigest) bool {
+	config, _, err := loadOpenNotebookConfigRecord()
+	if err != nil {
+		log.Printf("Failed to load Open Notebook config for %s digest: %v", kind, err)
+		return false
+	}
+	if !shouldAutoSendOpenNotebook(kind, config) {
+		return false
+	}
+
+	preview := &digestPreviewResponse{
+		Type:       kind,
+		Title:      digestTitle(kind),
+		AnchorDate: date.In(time.FixedZone("CST", 8*3600)).Format("2006-01-02"),
+		Markdown:   buildDigestMarkdown(kind, date, digests),
+	}
+
+	if _, err := sendDigestPreviewToOpenNotebook(kind, preview, config); err != nil {
+		log.Printf("Failed to auto-send %s digest to Open Notebook: %v", kind, err)
+		return false
+	}
+
+	log.Printf("%s digest sent to Open Notebook successfully", kind)
+	return true
+}
+
 func (s *DigestScheduler) generateSummaryMessage(digests []CategoryDigest) string {
 	var message string
 	message += "日报周报概览\n\n"
@@ -260,6 +286,8 @@ func (s *DigestScheduler) generateDailyDigest() {
 			log.Println("Daily digest exported to Obsidian successfully")
 		}
 	}
+
+	s.autoSendToOpenNotebook("daily", time.Now(), digests)
 }
 
 func (s *DigestScheduler) generateWeeklyDigest() {
@@ -295,6 +323,8 @@ func (s *DigestScheduler) generateWeeklyDigest() {
 			log.Println("Weekly digest exported to Obsidian successfully")
 		}
 	}
+
+	s.autoSendToOpenNotebook("weekly", time.Now(), digests)
 }
 
 func (s *DigestScheduler) GetStatus() map[string]interface{} {

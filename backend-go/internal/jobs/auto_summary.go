@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -275,23 +276,7 @@ func (s *AutoSummaryScheduler) generateSummaryForFeed(feed *models.Feed) (bool, 
 			break
 		}
 
-		text := "Title: " + article.Title + "\n"
-		if article.Description != "" {
-			maxDesc := 1200
-			if len(article.Description) < maxDesc {
-				maxDesc = len(article.Description)
-			}
-			text += "Description: " + article.Description[:maxDesc] + "\n"
-		}
-		if article.Content != "" {
-			maxContent := 2400
-			if len(article.Content) < maxContent {
-				maxContent = len(article.Content)
-			}
-			text += "Content: " + article.Content[:maxContent] + "\n"
-		}
-		text += "Link: " + article.Link + "\n"
-		articleTexts = append(articleTexts, text)
+		articleTexts = append(articleTexts, buildAutoSummaryArticleText(article))
 	}
 
 	feedName := feed.Title
@@ -355,6 +340,32 @@ func (s *AutoSummaryScheduler) generateSummaryForFeed(feed *models.Feed) (bool, 
 
 	log.Printf("Successfully generated and saved summary for feed %d (ID: %d)", feed.ID, aiSummary.ID)
 	return true, nil
+}
+
+func buildAutoSummaryArticleText(article models.Article) string {
+	text := "Title: " + article.Title + "\n"
+
+	if article.Description != "" {
+		text += "Description: " + truncateAutoSummaryText(article.Description, 1200) + "\n"
+	}
+
+	content := strings.TrimSpace(article.FirecrawlContent)
+	if content == "" {
+		content = strings.TrimSpace(article.Content)
+	}
+	if content != "" {
+		text += "Content: " + truncateAutoSummaryText(content, 2400) + "\n"
+	}
+
+	text += "Link: " + article.Link + "\n"
+	return text
+}
+
+func truncateAutoSummaryText(text string, limit int) string {
+	if len(text) <= limit {
+		return text
+	}
+	return text[:limit]
 }
 
 func buildFeedSummaryPrompt(feedName string, categoryName string, articleCount int, articlesText string) string {

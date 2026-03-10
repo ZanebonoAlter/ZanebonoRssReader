@@ -1,7 +1,7 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { Icon } from '@iconify/vue'
 import { onMounted, ref } from 'vue'
-import { useDigestApi, type DigestConfig } from '~/api/digest'
+import { useDigestApi, type DigestConfig, type OpenNotebookConfig } from '~/api/digest'
 
 const emit = defineEmits<{
   saved: []
@@ -42,6 +42,18 @@ const config = ref<DigestConfig>({
   obsidian_weekly_digest: true,
 })
 
+const openNotebookConfig = ref<OpenNotebookConfig>({
+  enabled: false,
+  base_url: 'http://192.168.5.27:5055',
+  api_key: '',
+  model: '',
+  target_notebook: '',
+  prompt_mode: 'digest_summary',
+  auto_send_daily: false,
+  auto_send_weekly: false,
+  export_back_to_obsidian: false,
+})
+
 function setNotice(type: 'success' | 'error' | 'info', text: string) {
   notice.value = { type, text }
 }
@@ -49,11 +61,22 @@ function setNotice(type: 'success' | 'error' | 'info', text: string) {
 async function loadConfig() {
   loading.value = true
   try {
-    const response = await digestApi.getConfig()
-    if (response.success && response.data) {
-      config.value = response.data
+    const [digestResponse, openNotebookResponse] = await Promise.all([
+      digestApi.getConfig(),
+      digestApi.getOpenNotebookConfig(),
+    ])
+
+    if (digestResponse.success && digestResponse.data) {
+      config.value = digestResponse.data
     } else {
-      setNotice('error', response.error || '配置没读出来')
+      setNotice('error', digestResponse.error || 'digest 配置没读出来')
+      return
+    }
+
+    if (openNotebookResponse.success && openNotebookResponse.data) {
+      openNotebookConfig.value = openNotebookResponse.data
+    } else {
+      setNotice('error', openNotebookResponse.error || 'Open Notebook 配置没读出来')
     }
   } catch (error) {
     console.error('Failed to load digest config:', error)
@@ -66,14 +89,25 @@ async function loadConfig() {
 async function saveConfig() {
   saving.value = true
   try {
-    const response = await digestApi.updateConfig(config.value)
-    if (response.success && response.data) {
-      config.value = response.data
-      setNotice('success', response.message || '配置已保存')
-      emit('saved')
+    const [digestResponse, openNotebookResponse] = await Promise.all([
+      digestApi.updateConfig(config.value),
+      digestApi.updateOpenNotebookConfig(openNotebookConfig.value),
+    ])
+
+    if (!digestResponse.success || !digestResponse.data) {
+      setNotice('error', digestResponse.error || 'digest 配置保存失败')
       return
     }
-    setNotice('error', response.error || '保存失败')
+
+    if (!openNotebookResponse.success || !openNotebookResponse.data) {
+      setNotice('error', openNotebookResponse.error || 'Open Notebook 配置保存失败')
+      return
+    }
+
+    config.value = digestResponse.data
+    openNotebookConfig.value = openNotebookResponse.data
+    setNotice('success', openNotebookResponse.message || digestResponse.message || '配置已保存')
+    emit('saved')
   } catch (error) {
     console.error('Failed to save digest config:', error)
     setNotice('error', '保存失败')
@@ -267,6 +301,61 @@ onMounted(loadConfig)
             <button class="btn-secondary min-h-11 px-4" type="button" :disabled="testingObsidian" @click="testObsidian">
               {{ testingObsidian ? '写入测试中...' : '测试 Obsidian' }}
             </button>
+          </div>
+        </article>
+      </section>
+
+      <section class="digest-settings-group">
+        <div class="digest-settings-group__head">
+          <p class="text-xs uppercase tracking-[0.26em] text-ink-light">Open Notebook</p>
+          <h4 class="mt-2 text-lg font-black text-ink-dark">二次总结</h4>
+        </div>
+
+        <article class="digest-settings-card space-y-4">
+          <div class="flex items-center justify-between gap-3">
+            <div>
+              <h5 class="text-base font-bold text-ink-dark">接到外部笔记</h5>
+              <p class="mt-1 text-sm text-ink-medium">先手动试。稳了再自动。</p>
+            </div>
+            <input v-model="openNotebookConfig.enabled" type="checkbox" class="h-5 w-5 accent-[var(--color-ink-600)]">
+          </div>
+
+          <div v-if="openNotebookConfig.enabled" class="space-y-4">
+            <div>
+              <label class="mb-2 block text-sm font-medium text-ink-medium">服务地址</label>
+              <input v-model="openNotebookConfig.base_url" type="text" class="input w-full" placeholder="http://192.168.5.27:5055">
+            </div>
+
+            <div>
+              <label class="mb-2 block text-sm font-medium text-ink-medium">API Key</label>
+              <input v-model="openNotebookConfig.api_key" type="password" class="input w-full" placeholder="填密钥，别手抖">
+            </div>
+
+            <div class="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label class="mb-2 block text-sm font-medium text-ink-medium">模型</label>
+                <input v-model="openNotebookConfig.model" type="text" class="input w-full" placeholder="gpt-4.1-mini">
+              </div>
+              <div>
+                <label class="mb-2 block text-sm font-medium text-ink-medium">目标笔记本</label>
+                <input v-model="openNotebookConfig.target_notebook" type="text" class="input w-full" placeholder="digest-lab">
+              </div>
+            </div>
+
+            <div class="grid gap-3 sm:grid-cols-3">
+              <label class="digest-toggle-row">
+                <span>日报自动发</span>
+                <input v-model="openNotebookConfig.auto_send_daily" type="checkbox" class="h-4 w-4 accent-[var(--color-ink-600)]">
+              </label>
+              <label class="digest-toggle-row">
+                <span>周报自动发</span>
+                <input v-model="openNotebookConfig.auto_send_weekly" type="checkbox" class="h-4 w-4 accent-[var(--color-ink-600)]">
+              </label>
+              <label class="digest-toggle-row">
+                <span>回写 Obsidian</span>
+                <input v-model="openNotebookConfig.export_back_to_obsidian" type="checkbox" class="h-4 w-4 accent-[var(--color-ink-600)]">
+              </label>
+            </div>
           </div>
         </article>
       </section>

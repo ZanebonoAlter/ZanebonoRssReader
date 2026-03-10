@@ -151,6 +151,9 @@ func SetupRoutes(r *gin.Engine) {
 		digestGroup := api.Group("/digest")
 		{
 			digestGroup.GET("/config", digestdomain.GetDigestConfig)
+			digestGroup.GET("/open-notebook/config", digestdomain.GetOpenNotebookConfig)
+			digestGroup.PUT("/open-notebook/config", digestdomain.UpdateOpenNotebookConfig)
+			digestGroup.POST("/open-notebook/:type", digestdomain.SendDigestToOpenNotebook)
 			digestGroup.GET("/status", digestdomain.GetDigestStatus)
 			digestGroup.GET("/preview/:type", digestdomain.GetDigestPreview)
 			digestGroup.PUT("/config", digestdomain.UpdateDigestConfig)

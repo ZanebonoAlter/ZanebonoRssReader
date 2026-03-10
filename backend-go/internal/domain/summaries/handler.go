@@ -270,7 +270,7 @@ func SubmitQueueSummary(c *gin.Context) {
 		TimeRange: req.TimeRange,
 	}
 
-	batch := queue.SubmitBatch(req.CategoryIDs, config)
+	batch := queue.SubmitBatch(req.CategoryIDs, req.FeedIDs, config)
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"success": true,

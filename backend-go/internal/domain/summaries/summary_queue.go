@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -82,7 +83,7 @@ type AIConfig struct {
 	TimeRange int
 }
 
-func (q *SummaryQueue) SubmitBatch(categoryIDs []uint, config AIConfig) *SummaryBatch {
+func (q *SummaryQueue) SubmitBatch(categoryIDs []uint, feedIDs []uint, config AIConfig) *SummaryBatch {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -92,7 +93,11 @@ func (q *SummaryQueue) SubmitBatch(categoryIDs []uint, config AIConfig) *Summary
 	}
 
 	var feeds []models.Feed
-	if len(categoryIDs) > 0 {
+	if len(feedIDs) > 0 {
+		database.DB.Where("id IN ? AND ai_summary_enabled = ?", feedIDs, true).
+			Preload("Category").
+			Find(&feeds)
+	} else if len(categoryIDs) > 0 {
 		database.DB.Where("category_id IN ? AND ai_summary_enabled = ?", categoryIDs, true).
 			Preload("Category").
 			Find(&feeds)
@@ -183,6 +188,8 @@ func (q *SummaryQueue) broadcastProgress(currentJob *SummaryJob) {
 			ID:           job.ID,
 			FeedID:       job.FeedID,
 			FeedName:     job.FeedName,
+			FeedIcon:     job.FeedIcon,
+			FeedColor:    job.FeedColor,
 			CategoryID:   job.CategoryID,
 			CategoryName: job.CategoryName,
 			Status:       string(job.Status),
@@ -207,6 +214,8 @@ func (q *SummaryQueue) broadcastProgress(currentJob *SummaryJob) {
 			ID:           currentJob.ID,
 			FeedID:       currentJob.FeedID,
 			FeedName:     currentJob.FeedName,
+			FeedIcon:     currentJob.FeedIcon,
+			FeedColor:    currentJob.FeedColor,
 			CategoryID:   currentJob.CategoryID,
 			CategoryName: currentJob.CategoryName,
 			Status:       string(currentJob.Status),
@@ -305,23 +314,7 @@ func (q *SummaryQueue) generateSummaryForFeed(feedID *uint, categoryID *uint, fe
 			break
 		}
 
-		text := "标题: " + article.Title + "\n"
-		if article.Description != "" {
-			maxDesc := 1200
-			if len(article.Description) < maxDesc {
-				maxDesc = len(article.Description)
-			}
-			text += "描述: " + article.Description[:maxDesc] + "\n"
-		}
-		if article.Content != "" {
-			maxContent := 2400
-			if len(article.Content) < maxContent {
-				maxContent = len(article.Content)
-			}
-			text += "内容: " + article.Content[:maxContent] + "\n"
-		}
-		text += "链接: " + article.Link + "\n"
-		articleTexts = append(articleTexts, text)
+		articleTexts = append(articleTexts, buildQueueArticleText(article))
 	}
 
 	displayName := feedName
@@ -435,6 +428,31 @@ func (q *SummaryQueue) generateSummaryForFeed(feedID *uint, categoryID *uint, fe
 	}
 
 	return &aiSummary, nil
+}
+
+func buildQueueArticleText(article models.Article) string {
+	text := "标题: " + article.Title + "\n"
+	if article.Description != "" {
+		text += "描述: " + truncateQueueArticleText(article.Description, 1200) + "\n"
+	}
+
+	content := strings.TrimSpace(article.FirecrawlContent)
+	if content == "" {
+		content = strings.TrimSpace(article.Content)
+	}
+	if content != "" {
+		text += "内容: " + truncateQueueArticleText(content, 2400) + "\n"
+	}
+
+	text += "链接: " + article.Link + "\n"
+	return text
+}
+
+func truncateQueueArticleText(text string, limit int) string {
+	if len(text) <= limit {
+		return text
+	}
+	return text[:limit]
 }
 
 type SummaryError struct {

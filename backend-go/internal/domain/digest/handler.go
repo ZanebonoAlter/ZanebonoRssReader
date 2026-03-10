@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"sort"
 	"strings"
@@ -12,7 +13,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"my-robot-backend/internal/app/runtimeinfo"
 	"my-robot-backend/internal/domain/models"
+	"my-robot-backend/internal/platform/aisettings"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/opennotebook"
 )
 
 type UpdateDigestConfigRequest struct {
@@ -37,6 +40,101 @@ type TestFeishuRequest struct {
 
 type TestObsidianRequest struct {
 	VaultPath string `json:"vault_path"`
+}
+
+type openNotebookConfig struct {
+	Enabled              bool   `json:"enabled"`
+	BaseURL              string `json:"base_url"`
+	APIKey               string `json:"api_key"`
+	Model                string `json:"model"`
+	TargetNotebook       string `json:"target_notebook"`
+	PromptMode           string `json:"prompt_mode"`
+	AutoSendDaily        bool   `json:"auto_send_daily"`
+	AutoSendWeekly       bool   `json:"auto_send_weekly"`
+	ExportBackToObsidian bool   `json:"export_back_to_obsidian"`
+}
+
+type openNotebookSendRequest struct {
+	Title          string
+	Content        string
+	TargetNotebook string
+	PromptMode     string
+}
+
+type openNotebookRunResponse struct {
+	SummaryMarkdown string `json:"summary_markdown"`
+	RemoteID        string `json:"remote_id,omitempty"`
+	RemoteURL       string `json:"remote_url,omitempty"`
+}
+
+type openNotebookRunResult struct {
+	DigestType      string `json:"digest_type"`
+	AnchorDate      string `json:"anchor_date"`
+	SourceMarkdown  string `json:"source_markdown"`
+	SummaryMarkdown string `json:"summary_markdown"`
+	RemoteID        string `json:"remote_id,omitempty"`
+	RemoteURL       string `json:"remote_url,omitempty"`
+}
+
+type openNotebookClient interface {
+	SummarizeDigest(req openNotebookSendRequest) (*openNotebookRunResponse, error)
+}
+
+type openNotebookHTTPClient struct {
+	client *opennotebook.Client
+}
+
+func (c *openNotebookHTTPClient) SummarizeDigest(req openNotebookSendRequest) (*openNotebookRunResponse, error) {
+	resp, err := c.client.SummarizeDigest(opennotebook.SummarizeDigestRequest{
+		Title:          req.Title,
+		Content:        req.Content,
+		TargetNotebook: req.TargetNotebook,
+		PromptMode:     req.PromptMode,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &openNotebookRunResponse{
+		SummaryMarkdown: resp.SummaryMarkdown,
+		RemoteID:        resp.RemoteID,
+		RemoteURL:       resp.RemoteURL,
+	}, nil
+}
+
+var digestPreviewBuilder = buildPreview
+
+var openNotebookClientFactory = func(config openNotebookConfig) openNotebookClient {
+	return &openNotebookHTTPClient{client: opennotebook.NewClient(config.BaseURL, config.APIKey, config.Model)}
+}
+
+func shouldAutoSendOpenNotebook(kind string, config openNotebookConfig) bool {
+	if !config.Enabled || strings.TrimSpace(config.BaseURL) == "" {
+		return false
+	}
+
+	switch kind {
+	case "daily":
+		return config.AutoSendDaily
+	case "weekly":
+		return config.AutoSendWeekly
+	default:
+		return false
+	}
+}
+
+func sendDigestPreviewToOpenNotebook(kind string, preview *digestPreviewResponse, config openNotebookConfig) (*openNotebookRunResponse, error) {
+	if preview == nil {
+		return nil, fmt.Errorf("digest preview is required")
+	}
+
+	client := openNotebookClientFactory(config)
+	return client.SummarizeDigest(openNotebookSendRequest{
+		Title:          preview.Title,
+		Content:        preview.Markdown,
+		TargetNotebook: config.TargetNotebook,
+		PromptMode:     config.PromptMode,
+	})
 }
 
 type digestPreviewSummary struct {
@@ -130,6 +228,66 @@ func defaultDigestConfig() DigestConfig {
 		ObsidianDailyDigest:  true,
 		ObsidianWeeklyDigest: true,
 	}
+}
+
+func defaultOpenNotebookConfig() openNotebookConfig {
+	return openNotebookConfig{
+		Enabled:              false,
+		BaseURL:              "http://192.168.5.27:5055",
+		APIKey:               "",
+		Model:                "",
+		TargetNotebook:       "",
+		PromptMode:           "digest_summary",
+		AutoSendDaily:        false,
+		AutoSendWeekly:       false,
+		ExportBackToObsidian: false,
+	}
+}
+
+func loadOpenNotebookConfigRecord() (openNotebookConfig, *models.AISettings, error) {
+	configMap, settings, err := aisettings.LoadOpenNotebookConfig()
+	if err != nil {
+		return openNotebookConfig{}, nil, err
+	}
+
+	config := defaultOpenNotebookConfig()
+	if len(configMap) == 0 {
+		return config, settings, nil
+	}
+
+	data, err := json.Marshal(configMap)
+	if err != nil {
+		return openNotebookConfig{}, nil, err
+	}
+	if err := json.Unmarshal(data, &config); err != nil {
+		return openNotebookConfig{}, nil, err
+	}
+
+	if strings.TrimSpace(config.PromptMode) == "" {
+		config.PromptMode = "digest_summary"
+	}
+
+	return config, settings, nil
+}
+
+func saveOpenNotebookConfigRecord(config openNotebookConfig) error {
+	if strings.TrimSpace(config.PromptMode) == "" {
+		config.PromptMode = "digest_summary"
+	}
+
+	configMap := map[string]interface{}{
+		"enabled":                 config.Enabled,
+		"base_url":                config.BaseURL,
+		"api_key":                 config.APIKey,
+		"model":                   config.Model,
+		"target_notebook":         config.TargetNotebook,
+		"prompt_mode":             config.PromptMode,
+		"auto_send_daily":         config.AutoSendDaily,
+		"auto_send_weekly":        config.AutoSendWeekly,
+		"export_back_to_obsidian": config.ExportBackToObsidian,
+	}
+
+	return aisettings.SaveOpenNotebookConfig(configMap, "Open Notebook digest integration configuration")
 }
 
 func ensureDigestConfig() (*DigestConfig, error) {
@@ -431,7 +589,7 @@ func GetDigestPreview(c *gin.Context) {
 		return
 	}
 
-	preview, _, _, err := buildPreview(kind, anchorDate)
+	preview, _, _, err := digestPreviewBuilder(kind, anchorDate)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
@@ -443,6 +601,80 @@ func GetDigestPreview(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data":    preview,
+	})
+}
+
+func GetOpenNotebookConfig(c *gin.Context) {
+	config, _, err := loadOpenNotebookConfigRecord()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": config})
+}
+
+func UpdateOpenNotebookConfig(c *gin.Context) {
+	config := defaultOpenNotebookConfig()
+	if err := c.ShouldBindJSON(&config); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Invalid request body"})
+		return
+	}
+
+	if err := saveOpenNotebookConfigRecord(config); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	storedConfig, _, err := loadOpenNotebookConfigRecord()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Open Notebook 配置已保存", "data": storedConfig})
+}
+
+func SendDigestToOpenNotebook(c *gin.Context) {
+	kind := c.Param("type")
+	anchorDate, err := parseDigestAnchorDate(c.Query("date"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	config, _, err := loadOpenNotebookConfigRecord()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+	if strings.TrimSpace(config.BaseURL) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "请先配置 Open Notebook 地址"})
+		return
+	}
+
+	preview, _, _, err := digestPreviewBuilder(kind, anchorDate)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	result, err := sendDigestPreviewToOpenNotebook(kind, preview, config)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": openNotebookRunResult{
+			DigestType:      kind,
+			AnchorDate:      preview.AnchorDate,
+			SourceMarkdown:  preview.Markdown,
+			SummaryMarkdown: result.SummaryMarkdown,
+			RemoteID:        result.RemoteID,
+			RemoteURL:       result.RemoteURL,
+		},
 	})
 }
 
@@ -603,7 +835,7 @@ func RunDigestNow(c *gin.Context) {
 		return
 	}
 
-	preview, config, digests, err := buildPreview(kind, anchorDate)
+	preview, config, digests, err := digestPreviewBuilder(kind, anchorDate)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
 		return
@@ -611,6 +843,7 @@ func RunDigestNow(c *gin.Context) {
 
 	sentToFeishu := false
 	exportedToObsidian := false
+	sentToOpenNotebook := false
 
 	if config.FeishuEnabled && strings.TrimSpace(config.FeishuWebhookURL) != "" {
 		notifier := NewFeishuNotifier(config.FeishuWebhookURL)
@@ -650,13 +883,27 @@ func RunDigestNow(c *gin.Context) {
 		}
 	}
 
+	openNotebookConfig, _, err := loadOpenNotebookConfigRecord()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+	if shouldAutoSendOpenNotebook(kind, openNotebookConfig) {
+		if _, err := sendDigestPreviewToOpenNotebook(kind, preview, openNotebookConfig); err != nil {
+			log.Printf("Failed to auto-send %s digest to Open Notebook: %v", kind, err)
+		} else {
+			sentToOpenNotebook = true
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "已执行当前 digest 流程",
 		"data": gin.H{
-			"preview":              preview,
-			"sent_to_feishu":       sentToFeishu,
-			"exported_to_obsidian": exportedToObsidian,
+			"preview":               preview,
+			"sent_to_feishu":        sentToFeishu,
+			"exported_to_obsidian":  exportedToObsidian,
+			"sent_to_open_notebook": sentToOpenNotebook,
 		},
 	})
 }
