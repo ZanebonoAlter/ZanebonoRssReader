@@ -6,19 +6,20 @@ import (
 )
 
 type AISummary struct {
-	ID           uint      `gorm:"primaryKey" json:"id"`
-	FeedID       *uint     `gorm:"index" json:"feed_id"`
-	CategoryID   *uint     `gorm:"index" json:"category_id"`
-	Title        string    `gorm:"size:200;not null" json:"title"`
-	Summary      string    `gorm:"type:text;not null" json:"summary"`
-	KeyPoints    string    `gorm:"type:text" json:"key_points"`
-	Articles     string    `gorm:"type:text" json:"articles"`
-	ArticleCount int       `gorm:"default:0" json:"article_count"`
-	TimeRange    int       `gorm:"default:180" json:"time_range"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
-	Feed         *Feed     `gorm:"foreignKey:FeedID" json:"feed,omitempty"`
-	Category     *Category `gorm:"foreignKey:CategoryID" json:"category,omitempty"`
+	ID            uint             `gorm:"primaryKey" json:"id"`
+	FeedID        *uint            `gorm:"index" json:"feed_id"`
+	CategoryID    *uint            `gorm:"index" json:"category_id"`
+	Title         string           `gorm:"size:200;not null" json:"title"`
+	Summary       string           `gorm:"type:text;not null" json:"summary"`
+	KeyPoints     string           `gorm:"type:text" json:"key_points"`
+	Articles      string           `gorm:"type:text" json:"articles"`
+	ArticleCount  int              `gorm:"default:0" json:"article_count"`
+	TimeRange     int              `gorm:"default:180" json:"time_range"`
+	CreatedAt     time.Time        `json:"created_at"`
+	UpdatedAt     time.Time        `json:"updated_at"`
+	Feed          *Feed            `gorm:"foreignKey:FeedID" json:"feed,omitempty"`
+	Category      *Category        `gorm:"foreignKey:CategoryID" json:"category,omitempty"`
+	SummaryTopics []AISummaryTopic `gorm:"foreignKey:SummaryID" json:"summary_topics,omitempty"`
 }
 
 type AISummaryFeed struct {

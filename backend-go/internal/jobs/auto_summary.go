@@ -16,6 +16,7 @@ import (
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/domain/preferences"
 	"my-robot-backend/internal/domain/summaries"
+	"my-robot-backend/internal/domain/topicgraph"
 	"my-robot-backend/internal/platform/aisettings"
 	"my-robot-backend/internal/platform/database"
 )
@@ -336,6 +337,10 @@ func (s *AutoSummaryScheduler) generateSummaryForFeed(feed *models.Feed) (bool, 
 
 	if err := database.DB.Create(&aiSummary).Error; err != nil {
 		return false, fmt.Errorf("failed to save summary: %w", err)
+	}
+
+	if err := topicgraph.TagSummary(&aiSummary); err != nil {
+		log.Printf("[WARN] Failed to tag auto summary %d: %v", aiSummary.ID, err)
 	}
 
 	log.Printf("Successfully generated and saved summary for feed %d (ID: %d)", feed.ID, aiSummary.ID)

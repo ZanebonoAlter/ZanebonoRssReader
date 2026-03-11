@@ -415,7 +415,8 @@ export const useApiStore = defineStore('api', () => {
 
   // Queue Summary
   async function submitQueueSummary(data: {
-    category_ids: number[]
+    category_ids?: number[]
+    feed_ids?: number[]
     time_range?: number
     base_url: string
     api_key: string

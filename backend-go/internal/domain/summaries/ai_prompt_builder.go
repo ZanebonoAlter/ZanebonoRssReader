@@ -2,6 +2,7 @@ package summaries
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"gorm.io/gorm"
@@ -88,7 +89,7 @@ func (b *AISummaryPromptBuilder) BuildPersonalizedPrompt(
 
 	type Stats struct {
 		PreferenceCount int
-		AvgReadingTime  int
+		AvgReadingTime  float64
 		AvgScrollDepth  float64
 	}
 
@@ -101,6 +102,7 @@ func (b *AISummaryPromptBuilder) BuildPersonalizedPrompt(
 		FROM user_preferences
 	`).Scan(&stats).Error; err == nil && stats.PreferenceCount > 0 {
 		context.Personalized = true
+		avgReadingTime := int(math.Round(stats.AvgReadingTime))
 		if language == "zh" {
 			userContext.WriteString("### 阅读习惯\n")
 			readingStyle := "中等深度"
@@ -109,7 +111,7 @@ func (b *AISummaryPromptBuilder) BuildPersonalizedPrompt(
 			} else if stats.AvgReadingTime < 60 {
 				readingStyle = "偏向快读"
 			}
-			userContext.WriteString(fmt.Sprintf("- 平均阅读时长: %d 秒（%s）\n", stats.AvgReadingTime, readingStyle))
+			userContext.WriteString(fmt.Sprintf("- 平均阅读时长: %d 秒（%s）\n", avgReadingTime, readingStyle))
 
 			attentionLevel := "中等"
 			if stats.AvgScrollDepth > 80 {
@@ -126,7 +128,7 @@ func (b *AISummaryPromptBuilder) BuildPersonalizedPrompt(
 			} else if stats.AvgReadingTime < 60 {
 				readingStyle = "quick scan"
 			}
-			userContext.WriteString(fmt.Sprintf("- Average reading time: %d seconds (%s)\n", stats.AvgReadingTime, readingStyle))
+			userContext.WriteString(fmt.Sprintf("- Average reading time: %d seconds (%s)\n", avgReadingTime, readingStyle))
 
 			attentionLevel := "moderate"
 			if stats.AvgScrollDepth > 80 {

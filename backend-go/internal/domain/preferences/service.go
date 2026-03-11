@@ -307,10 +307,11 @@ func (s *PreferenceService) GetTopPreferredFeeds(limit int) ([]uint, error) {
 
 	var results []FeedIDScore
 	err := s.db.Model(&models.UserPreference{}).
-		Select("feed_id, preference_score as score").
+		Select("feed_id, MAX(preference_score) as score").
 		Joins("JOIN feeds ON feeds.id = user_preferences.feed_id").
 		Where("user_preferences.feed_id IS NOT NULL").
-		Order("preference_score DESC").
+		Group("feed_id").
+		Order("score DESC").
 		Limit(limit).
 		Scan(&results).Error
 	if err != nil {
@@ -333,10 +334,11 @@ func (s *PreferenceService) GetTopPreferredCategories(limit int) ([]uint, error)
 
 	var results []CategoryIDScore
 	err := s.db.Model(&models.UserPreference{}).
-		Select("category_id, preference_score as score").
+		Select("category_id, MAX(preference_score) as score").
 		Joins("JOIN categories ON categories.id = user_preferences.category_id").
 		Where("user_preferences.category_id IS NOT NULL").
-		Order("preference_score DESC").
+		Group("category_id").
+		Order("score DESC").
 		Limit(limit).
 		Scan(&results).Error
 	if err != nil {

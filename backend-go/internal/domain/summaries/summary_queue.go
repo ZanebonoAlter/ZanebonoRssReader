@@ -13,6 +13,7 @@ import (
 
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/domain/preferences"
+	"my-robot-backend/internal/domain/topicgraph"
 	"my-robot-backend/internal/platform/database"
 	"my-robot-backend/internal/platform/ws"
 )
@@ -425,6 +426,10 @@ func (q *SummaryQueue) generateSummaryForFeed(feedID *uint, categoryID *uint, fe
 
 	if err := database.DB.Create(&aiSummary).Error; err != nil {
 		return nil, &SummaryError{Code: "DB_ERROR", Message: "保存总结失败: " + err.Error()}
+	}
+
+	if err := topicgraph.TagSummary(&aiSummary); err != nil {
+		log.Printf("[WARN] Failed to tag summary %d: %v", aiSummary.ID, err)
 	}
 
 	return &aiSummary, nil

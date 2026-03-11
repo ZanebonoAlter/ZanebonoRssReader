@@ -57,6 +57,8 @@ func Migrate() error {
 		&models.Feed{},
 		&models.Article{},
 		&models.AISummary{},
+		&models.TopicTag{},
+		&models.AISummaryTopic{},
 		&models.AISummaryFeed{},
 		&models.SchedulerTask{},
 		&models.AISettings{},
@@ -141,6 +143,28 @@ func EnsureTables() error {
 				updated_at DATETIME,
 				FOREIGN KEY(feed_id) REFERENCES feeds(id) ON DELETE CASCADE,
 				FOREIGN KEY(category_id) REFERENCES categories(id)
+			)`,
+		"topic_tags": `
+			CREATE TABLE IF NOT EXISTS topic_tags (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				slug VARCHAR(120) NOT NULL UNIQUE,
+				label VARCHAR(160) NOT NULL,
+				kind VARCHAR(20) DEFAULT 'topic',
+				aliases TEXT,
+				source VARCHAR(20) DEFAULT 'heuristic',
+				created_at DATETIME,
+				updated_at DATETIME
+			)`,
+		"ai_summary_topics": `
+			CREATE TABLE IF NOT EXISTS ai_summary_topics (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				summary_id INTEGER NOT NULL,
+				topic_tag_id INTEGER NOT NULL,
+				score REAL DEFAULT 0,
+				source VARCHAR(20) DEFAULT 'heuristic',
+				created_at DATETIME,
+				FOREIGN KEY(summary_id) REFERENCES ai_summaries(id) ON DELETE CASCADE,
+				FOREIGN KEY(topic_tag_id) REFERENCES topic_tags(id) ON DELETE CASCADE
 			)`,
 		"scheduler_tasks": `
 			CREATE TABLE IF NOT EXISTS scheduler_tasks (

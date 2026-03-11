@@ -9,6 +9,7 @@ import (
 	feedsdomain "my-robot-backend/internal/domain/feeds"
 	preferencesdomain "my-robot-backend/internal/domain/preferences"
 	summariesdomain "my-robot-backend/internal/domain/summaries"
+	topicgraphdomain "my-robot-backend/internal/domain/topicgraph"
 	"my-robot-backend/internal/jobs"
 	"my-robot-backend/internal/platform/ws"
 )
@@ -146,6 +147,12 @@ func SetupRoutes(r *gin.Engine) {
 			firecrawl.POST("/feed/:id/enable", contentprocessingdomain.EnableFeedFirecrawl)
 			firecrawl.GET("/status", contentprocessingdomain.GetFirecrawlStatus)
 			firecrawl.POST("/settings", contentprocessingdomain.SaveFirecrawlSettings)
+		}
+
+		topicGraph := api.Group("/topic-graph")
+		{
+			topicGraph.GET("/:type", topicgraphdomain.GetTopicGraph)
+			topicGraph.GET("/topic/:slug", topicgraphdomain.GetTopicDetail)
 		}
 
 		digestGroup := api.Group("/digest")

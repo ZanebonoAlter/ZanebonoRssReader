@@ -29,6 +29,7 @@ const emit = defineEmits<{
   favoritesClick: []
   aiSummariesClick: []
   digestClick: []
+  topicGraphClick: []
   allArticlesClick: []
   editCategory: [categoryId: string]
   editFeed: [feedId: string]
@@ -96,6 +97,11 @@ function handleDigestClick() {
   emit('digestClick')
 }
 
+function handleTopicGraphClick() {
+  updateSelection('topic-graph', null)
+  emit('topicGraphClick')
+}
+
 function handleAllArticlesClick() {
   updateSelection(null, null)
   emit('allArticlesClick')
@@ -139,6 +145,11 @@ import '~/components/layout/AppSidebar.css'
       <button class="sidebar-item" :class="{ active: selectedCategory === 'digest' }" @click="handleDigestClick">
         <Icon icon="mdi:newspaper-variant-multiple" width="20" height="20" class="text-ink-600" />
         <span v-if="!sidebarCollapsed" class="flex-1 text-left font-medium">日报周报</span>
+      </button>
+
+      <button class="sidebar-item" :class="{ active: selectedCategory === 'topic-graph' }" @click="handleTopicGraphClick">
+        <Icon icon="mdi:graph-3d-variant" width="20" height="20" class="text-ink-600" />
+        <span v-if="!sidebarCollapsed" class="flex-1 text-left font-medium">主题图谱</span>
       </button>
 
       <div v-if="!sidebarCollapsed" class="divider" />
