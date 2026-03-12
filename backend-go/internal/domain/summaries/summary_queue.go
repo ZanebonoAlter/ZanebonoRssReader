@@ -2,6 +2,7 @@ package summaries
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log"
@@ -14,6 +15,7 @@ import (
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/domain/preferences"
 	"my-robot-backend/internal/domain/topicgraph"
+	"my-robot-backend/internal/platform/airouter"
 	"my-robot-backend/internal/platform/database"
 	"my-robot-backend/internal/platform/ws"
 )
@@ -82,6 +84,25 @@ type AIConfig struct {
 	APIKey    string
 	Model     string
 	TimeRange int
+}
+
+var requestQueueSummaryChat = func(prompt string, metadata map[string]any) (string, error) {
+	maxTokens := 16000
+	temperature := 0.7
+	result, err := airouter.NewRouter().Chat(context.Background(), airouter.ChatRequest{
+		Capability: airouter.CapabilitySummary,
+		Messages: []airouter.Message{
+			{Role: "system", Content: "你是一名专业的新闻分析助手，擅长总结并比较多篇文章。"},
+			{Role: "user", Content: prompt},
+		},
+		Temperature: &temperature,
+		MaxTokens:   &maxTokens,
+		Metadata:    metadata,
+	})
+	if err != nil {
+		return "", err
+	}
+	return result.Content, nil
 }
 
 func (q *SummaryQueue) SubmitBatch(categoryIDs []uint, feedIDs []uint, config AIConfig) *SummaryBatch {
@@ -341,72 +362,14 @@ func (q *SummaryQueue) generateSummaryForFeed(feedID *uint, categoryID *uint, fe
 		promptContext.CategoryCount,
 	)
 
-	type openAIMessage struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
-	}
-
-	type openAIRequest struct {
-		Model       string          `json:"model"`
-		Messages    []openAIMessage `json:"messages"`
-		Temperature float64         `json:"temperature"`
-		MaxTokens   int             `json:"max_tokens"`
-	}
-
-	type openAIResponse struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-		Error *struct {
-			Message string `json:"message"`
-			Type    string `json:"type"`
-		} `json:"error,omitempty"`
-	}
-
-	reqBody := openAIRequest{
-		Model: config.Model,
-		Messages: []openAIMessage{
-			{Role: "system", Content: "你是一名专业的新闻分析助手，擅长总结并比较多篇文章。"},
-			{Role: "user", Content: summaryPrompt},
-		},
-		Temperature: 0.7,
-		MaxTokens:   16000,
-	}
-
-	body, _ := json.Marshal(reqBody)
-	httpReq, err := http.NewRequest("POST", config.BaseURL+"/chat/completions", bytes.NewReader(body))
+	summaryText, err := callQueueSummaryModel(config, summaryPrompt, map[string]any{
+		"feed_name":     displayName,
+		"category_name": categoryName,
+		"article_count": len(articles),
+	})
 	if err != nil {
-		return nil, &SummaryError{Code: "REQUEST_FAILED", Message: "创建请求失败: " + err.Error()}
+		return nil, err
 	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+config.APIKey)
-
-	client := &http.Client{Timeout: 120 * time.Second}
-	resp, err := client.Do(httpReq)
-	if err != nil {
-		return nil, &SummaryError{Code: "API_ERROR", Message: "AI API 调用失败: " + err.Error()}
-	}
-	defer resp.Body.Close()
-
-	respBody, _ := io.ReadAll(resp.Body)
-
-	var openAIResp openAIResponse
-	if err := json.Unmarshal(respBody, &openAIResp); err != nil {
-		return nil, &SummaryError{Code: "PARSE_ERROR", Message: "解析 AI 响应失败: " + err.Error()}
-	}
-
-	if openAIResp.Error != nil {
-		return nil, &SummaryError{Code: "AI_ERROR", Message: "AI API 错误: " + openAIResp.Error.Message}
-	}
-
-	if len(openAIResp.Choices) == 0 {
-		return nil, &SummaryError{Code: "NO_RESPONSE", Message: "AI 未返回内容"}
-	}
-
-	summaryText := openAIResp.Choices[0].Message.Content
 
 	articleIDs := make([]uint, len(articles))
 	for i, article := range articles {
@@ -485,6 +448,84 @@ func joinStrings(strs []string, sep string) string {
 		result += sep + strs[i]
 	}
 	return result
+}
+
+func callQueueSummaryModel(config AIConfig, prompt string, metadata map[string]any) (string, error) {
+	if strings.TrimSpace(config.BaseURL) != "" && strings.TrimSpace(config.APIKey) != "" && strings.TrimSpace(config.Model) != "" {
+		return callDirectSummaryModel(config, prompt)
+	}
+	result, err := requestQueueSummaryChat(prompt, metadata)
+	if err != nil {
+		return "", &SummaryError{Code: "AI_ERROR", Message: "AI 路由调用失败: " + err.Error()}
+	}
+	if strings.TrimSpace(result) == "" {
+		return "", &SummaryError{Code: "NO_RESPONSE", Message: "AI 未返回内容"}
+	}
+	return result, nil
+}
+
+func callDirectSummaryModel(config AIConfig, prompt string) (string, error) {
+	type openAIMessage struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}
+
+	type openAIRequest struct {
+		Model       string          `json:"model"`
+		Messages    []openAIMessage `json:"messages"`
+		Temperature float64         `json:"temperature"`
+		MaxTokens   int             `json:"max_tokens"`
+	}
+
+	type openAIResponse struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+		Error *struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+		} `json:"error,omitempty"`
+	}
+
+	reqBody := openAIRequest{
+		Model: config.Model,
+		Messages: []openAIMessage{
+			{Role: "system", Content: "你是一名专业的新闻分析助手，擅长总结并比较多篇文章。"},
+			{Role: "user", Content: prompt},
+		},
+		Temperature: 0.7,
+		MaxTokens:   16000,
+	}
+
+	body, _ := json.Marshal(reqBody)
+	httpReq, err := http.NewRequest("POST", strings.TrimRight(config.BaseURL, "/")+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return "", &SummaryError{Code: "REQUEST_FAILED", Message: "创建请求失败: " + err.Error()}
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+config.APIKey)
+
+	client := &http.Client{Timeout: 120 * time.Second}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return "", &SummaryError{Code: "API_ERROR", Message: "AI API 调用失败: " + err.Error()}
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	var openAIResp openAIResponse
+	if err := json.Unmarshal(respBody, &openAIResp); err != nil {
+		return "", &SummaryError{Code: "PARSE_ERROR", Message: "解析 AI 响应失败: " + err.Error()}
+	}
+	if openAIResp.Error != nil {
+		return "", &SummaryError{Code: "AI_ERROR", Message: "AI API 错误: " + openAIResp.Error.Message}
+	}
+	if len(openAIResp.Choices) == 0 {
+		return "", &SummaryError{Code: "NO_RESPONSE", Message: "AI 未返回内容"}
+	}
+	return openAIResp.Choices[0].Message.Content, nil
 }
 
 func generateBatchID() string {

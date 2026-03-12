@@ -192,7 +192,7 @@ func SaveFirecrawlSettings(c *gin.Context) {
 		req.MaxContentLength = 50000
 	}
 
-	configJSON, _, err := aisettings.LoadSummaryConfig()
+	configJSON, _, err := aisettings.LoadFirecrawlConfig()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
@@ -202,11 +202,11 @@ func SaveFirecrawlSettings(c *gin.Context) {
 	}
 
 	apiKey := req.APIKey
-	if existing, ok := configJSON["firecrawl"].(map[string]interface{}); ok && apiKey == "" {
-		apiKey = GetFirecrawlAPIKey(existing)
+	if apiKey == "" {
+		apiKey = GetFirecrawlAPIKey(configJSON)
 	}
 
-	configJSON["firecrawl"] = map[string]interface{}{
+	configJSON = map[string]interface{}{
 		"enabled":            req.Enabled,
 		"api_url":            req.APIUrl,
 		"api_key":            apiKey,
@@ -215,7 +215,7 @@ func SaveFirecrawlSettings(c *gin.Context) {
 		"max_content_length": req.MaxContentLength,
 	}
 
-	if err := aisettings.SaveSummaryConfig(configJSON, "AI summary and Firecrawl configuration"); err != nil {
+	if err := aisettings.SaveFirecrawlConfig(configJSON, "Firecrawl configuration"); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
 			"error":   err.Error(),

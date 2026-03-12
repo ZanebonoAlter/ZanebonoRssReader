@@ -11,6 +11,8 @@ import (
 
 const summaryConfigKey = "summary_config"
 const openNotebookConfigKey = "open_notebook_config"
+const autoSummaryConfigKey = "auto_summary_config"
+const firecrawlConfigKey = "firecrawl_config"
 
 func loadConfigByKey(key string) (map[string]interface{}, *models.AISettings, error) {
 	var settings models.AISettings
@@ -70,6 +72,22 @@ func LoadSummaryConfig() (map[string]interface{}, *models.AISettings, error) {
 
 func SaveSummaryConfig(config map[string]interface{}, description string) error {
 	return saveConfigByKey(summaryConfigKey, config, description)
+}
+
+func LoadAutoSummaryConfig() (map[string]interface{}, *models.AISettings, error) {
+	return loadConfigByKey(autoSummaryConfigKey)
+}
+
+func SaveAutoSummaryConfig(config map[string]interface{}, description string) error {
+	return saveConfigByKey(autoSummaryConfigKey, config, description)
+}
+
+func LoadFirecrawlConfig() (map[string]interface{}, *models.AISettings, error) {
+	return loadConfigByKey(firecrawlConfigKey)
+}
+
+func SaveFirecrawlConfig(config map[string]interface{}, description string) error {
+	return saveConfigByKey(firecrawlConfigKey, config, description)
 }
 
 func LoadOpenNotebookConfig() (map[string]interface{}, *models.AISettings, error) {

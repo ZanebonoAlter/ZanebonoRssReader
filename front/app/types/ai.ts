@@ -27,9 +27,6 @@ export interface AISummary {
  * AI 总结请求数据
  */
 export interface AISummaryRequest {
-  base_url: string
-  api_key: string
-  model: string
   title: string
   content: string
   language?: string
@@ -53,9 +50,6 @@ export interface GenerateSummaryData {
   category_id?: number | null
   category_ids?: number[]
   time_range?: number
-  base_url: string
-  api_key: string
-  model: string
 }
 
 /**
@@ -105,17 +99,65 @@ export interface QueueSummaryRequest {
   category_ids?: number[]
   feed_ids?: number[]
   time_range?: number
-  base_url: string
-  api_key: string
-  model: string
 }
 
 /**
  * AI 设置数据
  */
 export interface AISettings {
-  baseURL: string
-  apiKey: string
-  model: string
+  baseURL?: string
+  apiKey?: string
+  model?: string
   summaryEnabled?: boolean
+  providerId?: number
+  providerName?: string
+  routeName?: string
+  timeRange?: number
+  apiKeyConfigured?: boolean
+}
+
+export interface AIProvider {
+  id: number
+  name: string
+  provider_type: string
+  base_url: string
+  model: string
+  enabled: boolean
+  timeout_seconds: number
+  max_tokens?: number | null
+  temperature?: number | null
+  metadata?: string
+  api_key_configured: boolean
+}
+
+export interface AIRouteProviderLink {
+  id: number
+  route_id: number
+  provider_id: number
+  priority: number
+  enabled: boolean
+  provider: AIProvider
+}
+
+export interface AIRoute {
+  id: number
+  name: string
+  capability: string
+  enabled: boolean
+  strategy: string
+  description: string
+  route_providers: AIRouteProviderLink[]
+}
+
+export interface AIProviderUpsertRequest {
+  name: string
+  provider_type?: string
+  base_url: string
+  api_key?: string
+  model: string
+  enabled?: boolean
+  timeout_seconds?: number
+  max_tokens?: number | null
+  temperature?: number | null
+  metadata?: string
 }

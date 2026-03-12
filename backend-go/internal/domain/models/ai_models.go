@@ -124,6 +124,75 @@ type AISettings struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
+type AIProvider struct {
+	ID             uint      `gorm:"primaryKey" json:"id"`
+	Name           string    `gorm:"size:100;unique;not null;index" json:"name"`
+	ProviderType   string    `gorm:"size:50;not null;default:openai_compatible;index" json:"provider_type"`
+	BaseURL        string    `gorm:"size:500;not null" json:"base_url"`
+	APIKey         string    `gorm:"type:text;not null" json:"api_key"`
+	Model          string    `gorm:"size:100;not null" json:"model"`
+	Enabled        bool      `gorm:"not null;default:true;index" json:"enabled"`
+	TimeoutSeconds int       `gorm:"not null;default:120" json:"timeout_seconds"`
+	MaxTokens      *int      `json:"max_tokens,omitempty"`
+	Temperature    *float64  `json:"temperature,omitempty"`
+	Metadata       string    `gorm:"type:text" json:"metadata"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+func (AIProvider) TableName() string {
+	return "ai_providers"
+}
+
+type AIRoute struct {
+	ID             uint              `gorm:"primaryKey" json:"id"`
+	Name           string            `gorm:"size:100;not null;index:idx_ai_routes_capability_name,unique" json:"name"`
+	Capability     string            `gorm:"size:50;not null;index:idx_ai_routes_capability_name,unique;index" json:"capability"`
+	Enabled        bool              `gorm:"not null;default:true;index" json:"enabled"`
+	Strategy       string            `gorm:"size:50;not null;default:ordered_failover" json:"strategy"`
+	Description    string            `gorm:"size:255" json:"description"`
+	RouteProviders []AIRouteProvider `gorm:"foreignKey:RouteID" json:"route_providers,omitempty"`
+	CreatedAt      time.Time         `json:"created_at"`
+	UpdatedAt      time.Time         `json:"updated_at"`
+}
+
+func (AIRoute) TableName() string {
+	return "ai_routes"
+}
+
+type AIRouteProvider struct {
+	ID         uint       `gorm:"primaryKey" json:"id"`
+	RouteID    uint       `gorm:"not null;index:idx_ai_route_provider_link,unique" json:"route_id"`
+	ProviderID uint       `gorm:"not null;index:idx_ai_route_provider_link,unique" json:"provider_id"`
+	Priority   int        `gorm:"not null;default:100;index" json:"priority"`
+	Enabled    bool       `gorm:"not null;default:true;index" json:"enabled"`
+	Provider   AIProvider `gorm:"foreignKey:ProviderID" json:"provider"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+}
+
+func (AIRouteProvider) TableName() string {
+	return "ai_route_providers"
+}
+
+type AICallLog struct {
+	ID           uint      `gorm:"primaryKey" json:"id"`
+	Capability   string    `gorm:"size:50;not null;index" json:"capability"`
+	RouteName    string    `gorm:"size:100;not null" json:"route_name"`
+	ProviderName string    `gorm:"size:100;not null" json:"provider_name"`
+	Success      bool      `gorm:"not null;index" json:"success"`
+	IsFallback   bool      `gorm:"not null;default:false" json:"is_fallback"`
+	LatencyMs    int       `json:"latency_ms"`
+	ErrorCode    string    `gorm:"size:100" json:"error_code"`
+	ErrorMessage string    `gorm:"type:text" json:"error_message"`
+	RequestMeta  string    `gorm:"type:text" json:"request_meta"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+func (AICallLog) TableName() string {
+	return "ai_call_logs"
+}
+
 func (a *AISettings) ToDict() map[string]interface{} {
 	var valueJSON interface{}
 	if a.Value != "" {

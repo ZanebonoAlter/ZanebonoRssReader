@@ -2,6 +2,7 @@ package app
 
 import (
 	"github.com/gin-gonic/gin"
+	aiadmindomain "my-robot-backend/internal/domain/aiadmin"
 	articlesdomain "my-robot-backend/internal/domain/articles"
 	categoriesdomain "my-robot-backend/internal/domain/categories"
 	contentprocessingdomain "my-robot-backend/internal/domain/contentprocessing"
@@ -90,6 +91,12 @@ func SetupRoutes(r *gin.Engine) {
 			ai.POST("/test", summariesdomain.TestAIConnection)
 			ai.GET("/settings", summariesdomain.GetAISettings)
 			ai.POST("/settings", summariesdomain.SaveAISettings)
+			ai.GET("/providers", aiadmindomain.ListProviders)
+			ai.POST("/providers", aiadmindomain.UpsertProvider)
+			ai.PUT("/providers/:provider_id", aiadmindomain.UpdateProvider)
+			ai.DELETE("/providers/:provider_id", aiadmindomain.DeleteProvider)
+			ai.GET("/routes", aiadmindomain.ListRoutes)
+			ai.PUT("/routes/:capability", aiadmindomain.UpdateRoute)
 		}
 
 		opml := api.Group("")

@@ -68,8 +68,8 @@ func NewAIService(baseURL, apiKey, model string) *AIService {
 }
 
 func (s *AIService) SummarizeArticle(title, content, language string) (*AISummaryResponse, error) {
-	systemPrompt := s.getSystemPrompt(language)
-	userContent := s.prepareArticleContent(title, content)
+	systemPrompt := s.GetSystemPrompt(language)
+	userContent := s.PrepareArticleContent(title, content)
 
 	req := openAIRequest{
 		Model: s.Model,
@@ -93,12 +93,12 @@ func (s *AIService) SummarizeArticle(title, content, language string) (*AISummar
 	}
 
 	summaryText := cleanSummaryMarkdown(resp.Choices[0].Message.Content)
-	summary := s.parseSummaryResponse(summaryText)
+	summary := ParseSummaryMarkdown(summaryText)
 	summary.Markdown = summaryText
 	return summary, nil
 }
 
-func (s *AIService) getSystemPrompt(language string) string {
+func (s *AIService) GetSystemPrompt(language string) string {
 	if language == "zh" {
 		return `你是一名中文编辑，负责把抓取到的网页正文整理成适合 RSS 阅读器展示的 Markdown 成稿。
 
@@ -139,7 +139,7 @@ Rules:
 7. Do not mention the prompt. Do not wrap the output in code fences.`
 }
 
-func (s *AIService) prepareArticleContent(title, content string) string {
+func (s *AIService) PrepareArticleContent(title, content string) string {
 	maxContentLength := 80000
 	if len(content) > maxContentLength {
 		content = content[:maxContentLength] + "..."
@@ -149,6 +149,10 @@ func (s *AIService) prepareArticleContent(title, content string) string {
 }
 
 func (s *AIService) parseSummaryResponse(responseText string) *AISummaryResponse {
+	return ParseSummaryMarkdown(responseText)
+}
+
+func ParseSummaryMarkdown(responseText string) *AISummaryResponse {
 	summary := &AISummaryResponse{
 		KeyPoints: make([]string, 0),
 		Takeaways: make([]string, 0),

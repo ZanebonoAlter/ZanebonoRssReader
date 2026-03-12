@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 	appbootstrap "my-robot-backend/internal/app"
 	"my-robot-backend/internal/domain/digest"
+	"my-robot-backend/internal/platform/airouter"
 	"my-robot-backend/internal/platform/config"
 	"my-robot-backend/internal/platform/database"
 	"my-robot-backend/internal/platform/middleware"
@@ -24,6 +25,10 @@ func main() {
 
 	if err := digest.Migrate(); err != nil {
 		log.Fatalf("Failed to run digest migrations: %v", err)
+	}
+
+	if err := airouter.EnsureLegacySummaryConfigMigrated(); err != nil {
+		log.Printf("Warning: Failed to migrate legacy AI summary config: %v", err)
 	}
 
 	if config.AppConfig != nil && config.AppConfig.Server.Mode == "release" {

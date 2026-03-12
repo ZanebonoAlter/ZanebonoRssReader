@@ -1,6 +1,7 @@
 package contentprocessing
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -8,12 +9,14 @@ import (
 	"gorm.io/gorm"
 	"my-robot-backend/internal/domain/models"
 	platformai "my-robot-backend/internal/platform/ai"
+	"my-robot-backend/internal/platform/airouter"
 	"my-robot-backend/internal/platform/database"
 )
 
 type ContentCompletionService struct {
 	crawlClient *Crawl4AIClient
 	aiService   *platformai.AIService
+	router      *airouter.Router
 }
 
 type ContentCompletionArticleRef struct {
@@ -47,6 +50,7 @@ func NewContentCompletionService(crawlBaseURL string) *ContentCompletionService 
 	return &ContentCompletionService{
 		crawlClient: NewCrawl4AIClient(crawlBaseURL),
 		aiService:   platformai.NewAIService("", "", ""),
+		router:      airouter.NewRouter(),
 	}
 }
 
@@ -123,10 +127,12 @@ func (s *ContentCompletionService) CompleteArticleWithForce(articleID uint, forc
 	database.DB.Save(&article)
 
 	if s.aiService == nil || s.aiService.BaseURL == "" || s.aiService.APIKey == "" {
-		article.ContentStatus = "failed"
-		article.CompletionError = "AI service not configured"
-		database.DB.Save(&article)
-		return fmt.Errorf("AI service not configured")
+		if !s.hasRouteConfig() {
+			article.ContentStatus = "failed"
+			article.CompletionError = "AI service not configured"
+			database.DB.Save(&article)
+			return fmt.Errorf("AI service not configured")
+		}
 	}
 
 	contentToSummarize := article.FirecrawlContent
@@ -137,7 +143,7 @@ func (s *ContentCompletionService) CompleteArticleWithForce(articleID uint, forc
 		return fmt.Errorf("no firecrawl content available")
 	}
 
-	summary, err := s.aiService.SummarizeArticle(article.Title, contentToSummarize, "zh")
+	summary, err := s.summarizeContent(article.Title, contentToSummarize)
 	if err != nil {
 		article.ContentStatus = "failed"
 		article.CompletionError = err.Error()
@@ -211,7 +217,7 @@ func (s *ContentCompletionService) CheckAndMarkIncompleteArticles(feedID uint) (
 
 func (s *ContentCompletionService) GetOverview() (*ContentCompletionOverview, error) {
 	overview := &ContentCompletionOverview{}
-	overview.AIConfigured = s.aiService != nil && s.aiService.BaseURL != "" && s.aiService.APIKey != ""
+	overview.AIConfigured = (s.aiService != nil && s.aiService.BaseURL != "" && s.aiService.APIKey != "") || s.hasRouteConfig()
 
 	countQuery := []struct {
 		assign func(int64)
@@ -325,6 +331,39 @@ func (s *ContentCompletionService) GetOverview() (*ContentCompletionOverview, er
 	}
 
 	return overview, nil
+}
+
+func (s *ContentCompletionService) hasRouteConfig() bool {
+	if s.router == nil {
+		return false
+	}
+	provider, _, err := s.router.ResolvePrimaryProvider(airouter.CapabilityArticleCompletion)
+	return err == nil && provider != nil && strings.TrimSpace(provider.APIKey) != ""
+}
+
+func (s *ContentCompletionService) summarizeContent(title, content string) (*platformai.AISummaryResponse, error) {
+	if s.router != nil {
+		maxTokens := 16000
+		result, err := s.router.Chat(context.Background(), airouter.ChatRequest{
+			Capability: airouter.CapabilityArticleCompletion,
+			Messages: []airouter.Message{
+				{Role: "system", Content: s.aiService.GetSystemPrompt("zh")},
+				{Role: "user", Content: s.aiService.PrepareArticleContent(title, content)},
+			},
+			MaxTokens: &maxTokens,
+			Metadata: map[string]any{
+				"title": title,
+			},
+		})
+		if err == nil {
+			return platformai.ParseSummaryMarkdown(result.Content), nil
+		}
+		if s.aiService == nil || s.aiService.BaseURL == "" || s.aiService.APIKey == "" {
+			return nil, err
+		}
+	}
+
+	return s.aiService.SummarizeArticle(title, content, "zh")
 }
 
 func ToArticleRef(article models.Article) *ContentCompletionArticleRef {

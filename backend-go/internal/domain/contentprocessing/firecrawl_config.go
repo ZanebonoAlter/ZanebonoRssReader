@@ -3,14 +3,22 @@ package contentprocessing
 import "my-robot-backend/internal/platform/aisettings"
 
 func GetFirecrawlConfig() (*FirecrawlConfig, error) {
-	settingsData, _, err := aisettings.LoadSummaryConfig()
+	settingsData, _, err := aisettings.LoadFirecrawlConfig()
 	if err != nil {
 		return nil, err
 	}
 
-	firecrawlData, ok := settingsData["firecrawl"].(map[string]interface{})
-	if !ok {
-		return nil, ErrFirecrawlConfigMissing
+	firecrawlData := settingsData
+	if len(firecrawlData) == 0 {
+		legacy, _, legacyErr := aisettings.LoadSummaryConfig()
+		if legacyErr != nil {
+			return nil, legacyErr
+		}
+		if nested, ok := legacy["firecrawl"].(map[string]interface{}); ok {
+			firecrawlData = nested
+		} else {
+			return nil, ErrFirecrawlConfigMissing
+		}
 	}
 
 	config := &FirecrawlConfig{

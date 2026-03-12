@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { Icon } from "@iconify/vue";
+import AIRouterSettingsPanel from '~/features/ai/components/AIRouterSettingsPanel.vue'
 import type { RssFeed } from '~/types'
 import type { ReadingStats, UserPreference } from '~/types/reading_behavior'
 import type { SchedulerStatus, SchedulerTriggerResult } from '~/types/scheduler'
@@ -156,31 +157,16 @@ async function refreshFeed(feedId: string) {
 }
 
 function close() {
-  // Reset to actual saved values to avoid confusion
-  loadAISettings()
   emit('update:show', false)
 }
 
-// Load settings from localStorage
 function loadAISettings() {
-  const aiSettings = localStorage.getItem('aiSettings')
-  if (aiSettings) {
-    const settings = JSON.parse(aiSettings)
-    aiSummaryEnabled.value = settings.summaryEnabled || false
-    aiBaseURL.value = settings.baseURL || ''
-    aiAPIKey.value = settings.apiKey || ''
-    aiModel.value = settings.model || ''
-    aiPodcastEnabled.value = settings.podcastEnabled || false
-    autoSummaryEnabled.value = settings.autoSummaryEnabled || false
-  } else {
-    // Reset to defaults if no settings exist
-    aiSummaryEnabled.value = false
-    aiBaseURL.value = ''
-    aiAPIKey.value = ''
-    aiModel.value = ''
-    aiPodcastEnabled.value = false
-    autoSummaryEnabled.value = false
-  }
+  aiSummaryEnabled.value = false
+  aiBaseURL.value = ''
+  aiAPIKey.value = ''
+  aiModel.value = ''
+  aiPodcastEnabled.value = false
+  autoSummaryEnabled.value = false
 }
 
 // Load firecrawl settings
@@ -208,18 +194,19 @@ async function saveFirecrawlSettings() {
   firecrawlLoading.value = true
   error.value = null
   try {
-    // Save to aiSettings with firecrawl config
-    const aiSettings = localStorage.getItem('aiSettings')
-    const settings = aiSettings ? JSON.parse(aiSettings) : {}
-    settings.firecrawl = {
+    const { saveSettings } = useFirecrawlApi()
+    const response = await saveSettings({
       enabled: firecrawlEnabled.value,
       api_url: firecrawlApiUrl.value,
       api_key: firecrawlApiKey.value,
       mode: firecrawlMode.value,
       timeout: firecrawlTimeout.value,
       max_content_length: firecrawlMaxContentLength.value,
+    })
+
+    if (!response.success) {
+      throw new Error(response.error || '保存失败')
     }
-    localStorage.setItem('aiSettings', JSON.stringify(settings))
     
     success.value = 'Firecrawl 设置已保存'
     setTimeout(() => {
@@ -299,34 +286,7 @@ function getScoreColor(score: number): string {
 
 // Save AI summary settings
 async function saveAISummarySettings() {
-  const settings = {
-    summaryEnabled: aiSummaryEnabled.value,
-    baseURL: aiBaseURL.value,
-    apiKey: aiAPIKey.value,
-    model: aiModel.value,
-    podcastEnabled: aiPodcastEnabled.value,
-    autoSummaryEnabled: autoSummaryEnabled.value,
-  }
-  localStorage.setItem('aiSettings', JSON.stringify(settings))
-
-// Update auto-summary scheduler config on backend
-  if (autoSummaryEnabled.value && aiAPIKey.value) {
-    try {
-      await fetch('/api/auto-summary/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          base_url: aiBaseURL.value || 'https://api.openai.com/v1',
-          api_key: aiAPIKey.value,
-          model: aiModel.value || 'gpt-4o-mini'
-        })
-      })
-    } catch (e) {
-      console.error('Failed to update auto-summary config:', e)
-    }
-  }
-
-  success.value = 'AI 设置已保存'
+  success.value = 'AI 配置已迁移到 AI Router 面板，请在该模块里保存主模型和备用链。'
   setTimeout(() => {
     success.value = null
   }, 2000)
@@ -334,26 +294,7 @@ async function saveAISummarySettings() {
 
 // Test AI connection
 async function testAIConnection() {
-  loading.value = true
-  error.value = null
-
-  try {
-    const { testConnection } = useAI()
-    const result = await testConnection()
-
-    if (result.success) {
-      success.value = result.message || '连接测试成功'
-      setTimeout(() => {
-        success.value = null
-      }, 2000)
-    } else {
-      error.value = result.error || '连接测试失败'
-    }
-  } catch (e) {
-    error.value = '连接测试失败，请检查配置'
-  } finally {
-    loading.value = false
-  }
+  error.value = '连接测试已迁移到 AI Router 面板，请在那里直接测试主模型。'
 }
 
 async function loadSchedulersStatus() {
@@ -997,120 +938,7 @@ function formatNextRun(nextRun: string | null | undefined): string {
 
         <!-- General Settings Tab -->
         <div v-if="activeTab === 'general'" class="space-y-6">
-          <!-- AI Summary Settings -->
-          <div class="bg-gradient-to-br from-ink-50 to-paper-cream rounded-xl p-6 border border-ink-100">
-            <div class="flex items-start justify-between mb-4">
-              <div class="flex items-center gap-3">
-                <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-ink-500 to-ink-700 flex items-center justify-center">
-                  <Icon icon="mdi:brain" width="20" height="20" class="text-white" />
-                </div>
-                <div>
-                  <h3 class="font-semibold text-gray-900">AI 总结分析</h3>
-                  <p class="text-xs text-gray-500">使用 AI 模型对文章进行智能总结和分析</p>
-                </div>
-              </div>
-              <button
-                class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors"
-                :class="aiSummaryEnabled ? 'bg-blue-600' : 'bg-gray-300'"
-                @click="aiSummaryEnabled = !aiSummaryEnabled"
-              >
-                <span
-                  class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform"
-                  :class="aiSummaryEnabled ? 'translate-x-6' : 'translate-x-1'"
-                />
-              </button>
-            </div>
-
-            <div v-if="aiSummaryEnabled" class="space-y-4 mt-4">
-              <!-- Base URL -->
-              <div>
-                <label class="block text-sm font-medium text-gray-700 mb-1.5">
-                  Base URL
-                </label>
-                <input
-                  v-model="aiBaseURL"
-                  type="text"
-                  placeholder="https://api.openai.com/v1"
-                  class="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-              </div>
-
-              <!-- API Key -->
-              <div>
-                <label class="block text-sm font-medium text-gray-700 mb-1.5">
-                  API Key
-                </label>
-                <div class="relative">
-                  <input
-                    v-model="aiAPIKey"
-                    :type="showApiKey ? 'text' : 'password'"
-                    placeholder="sk-..."
-                    class="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent pr-20"
-                  />
-                  <div class="absolute right-2 top-1/2 -translate-y-1/2 flex gap-1">
-                    <button
-                      class="p-1 hover:bg-gray-100 rounded text-gray-400 hover:text-gray-600"
-                      @click="showApiKey = !showApiKey"
-                    >
-                      <Icon :icon="showApiKey ? 'mdi:eye-off' : 'mdi:eye'" width="16" height="16" />
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Model -->
-              <div>
-                <label class="block text-sm font-medium text-gray-700 mb-1.5">
-                  模型
-                </label>
-                <input
-                  v-model="aiModel"
-                  type="text"
-                  placeholder="gpt-4o-mini"
-                  class="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-              </div>
-
-              <!-- Actions -->
-              <div class="flex gap-2 pt-2">
-                <button
-                  class="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
-                  :disabled="loading"
-                  @click="saveAISummarySettings"
-                >
-                  保存配置
-                </button>
-                <button
-                  class="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
-                  :disabled="loading"
-                  @click="testAIConnection"
-                >
-                  <Icon v-if="loading" icon="mdi:loading" width="14" height="14" class="animate-spin inline-block mr-1" />
-                  测试连接
-                </button>
-              </div>
-
-              <!-- Auto Summary Toggle -->
-              <div class="pt-4 border-t border-ink-200/50 mt-4">
-                <div class="flex items-center justify-between">
-                  <div>
-                    <h4 class="text-sm font-medium text-gray-900">自动生成总结</h4>
-                    <p class="text-xs text-gray-500 mt-0.5">每小时自动为每个分类生成 AI 总结</p>
-                  </div>
-                  <button
-                    class="relative inline-flex h-5 w-9 items-center rounded-full transition-colors"
-                    :class="autoSummaryEnabled ? 'bg-ink-600' : 'bg-gray-300'"
-                    @click="autoSummaryEnabled = !autoSummaryEnabled"
-                  >
-                    <span
-                      class="inline-block h-3 w-3 transform rounded-full bg-white transition-transform"
-                      :class="autoSummaryEnabled ? 'translate-x-5' : 'translate-x-1'"
-                    />
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
+          <AIRouterSettingsPanel />
 
           <!-- AI Podcast Settings -->
           <div class="bg-gradient-to-br from-green-50 to-teal-50 rounded-xl p-6 border border-green-100">

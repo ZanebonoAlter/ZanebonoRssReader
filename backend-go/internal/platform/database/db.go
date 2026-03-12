@@ -62,6 +62,10 @@ func Migrate() error {
 		&models.AISummaryFeed{},
 		&models.SchedulerTask{},
 		&models.AISettings{},
+		&models.AIProvider{},
+		&models.AIRoute{},
+		&models.AIRouteProvider{},
+		&models.AICallLog{},
 		&models.ReadingBehavior{},
 		&models.UserPreference{},
 	)
@@ -195,6 +199,61 @@ func EnsureTables() error {
 				created_at DATETIME,
 				updated_at DATETIME
 			)`,
+		"ai_providers": `
+			CREATE TABLE IF NOT EXISTS ai_providers (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				name VARCHAR(100) NOT NULL UNIQUE,
+				provider_type VARCHAR(50) NOT NULL DEFAULT 'openai_compatible',
+				base_url VARCHAR(500) NOT NULL,
+				api_key TEXT NOT NULL,
+				model VARCHAR(100) NOT NULL,
+				enabled BOOLEAN NOT NULL DEFAULT 1,
+				timeout_seconds INTEGER NOT NULL DEFAULT 120,
+				max_tokens INTEGER,
+				temperature REAL,
+				metadata TEXT,
+				created_at DATETIME,
+				updated_at DATETIME
+			)`,
+		"ai_routes": `
+			CREATE TABLE IF NOT EXISTS ai_routes (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				name VARCHAR(100) NOT NULL,
+				capability VARCHAR(50) NOT NULL,
+				enabled BOOLEAN NOT NULL DEFAULT 1,
+				strategy VARCHAR(50) NOT NULL DEFAULT 'ordered_failover',
+				description VARCHAR(255),
+				created_at DATETIME,
+				updated_at DATETIME,
+				UNIQUE(capability, name)
+			)`,
+		"ai_route_providers": `
+			CREATE TABLE IF NOT EXISTS ai_route_providers (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				route_id INTEGER NOT NULL,
+				provider_id INTEGER NOT NULL,
+				priority INTEGER NOT NULL DEFAULT 100,
+				enabled BOOLEAN NOT NULL DEFAULT 1,
+				created_at DATETIME,
+				updated_at DATETIME,
+				FOREIGN KEY(route_id) REFERENCES ai_routes(id) ON DELETE CASCADE,
+				FOREIGN KEY(provider_id) REFERENCES ai_providers(id) ON DELETE CASCADE,
+				UNIQUE(route_id, provider_id)
+			)`,
+		"ai_call_logs": `
+			CREATE TABLE IF NOT EXISTS ai_call_logs (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				capability VARCHAR(50) NOT NULL,
+				route_name VARCHAR(100) NOT NULL,
+				provider_name VARCHAR(100) NOT NULL,
+				success BOOLEAN NOT NULL,
+				is_fallback BOOLEAN NOT NULL DEFAULT 0,
+				latency_ms INTEGER,
+				error_code VARCHAR(100),
+				error_message TEXT,
+				request_meta TEXT,
+				created_at DATETIME
+			)`,
 		"reading_behaviors": `
 			CREATE TABLE IF NOT EXISTS reading_behaviors (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -267,6 +326,23 @@ func EnsureTables() error {
 		},
 		"ai_settings": {
 			"CREATE INDEX IF NOT EXISTS idx_ai_settings_key ON ai_settings(key)",
+		},
+		"ai_providers": {
+			"CREATE INDEX IF NOT EXISTS idx_ai_providers_enabled ON ai_providers(enabled)",
+			"CREATE INDEX IF NOT EXISTS idx_ai_providers_provider_type ON ai_providers(provider_type)",
+		},
+		"ai_routes": {
+			"CREATE INDEX IF NOT EXISTS idx_ai_routes_capability ON ai_routes(capability)",
+			"CREATE INDEX IF NOT EXISTS idx_ai_routes_enabled ON ai_routes(enabled)",
+		},
+		"ai_route_providers": {
+			"CREATE INDEX IF NOT EXISTS idx_ai_route_providers_route_id ON ai_route_providers(route_id)",
+			"CREATE INDEX IF NOT EXISTS idx_ai_route_providers_provider_id ON ai_route_providers(provider_id)",
+			"CREATE INDEX IF NOT EXISTS idx_ai_route_providers_priority ON ai_route_providers(priority)",
+		},
+		"ai_call_logs": {
+			"CREATE INDEX IF NOT EXISTS idx_ai_call_logs_capability ON ai_call_logs(capability)",
+			"CREATE INDEX IF NOT EXISTS idx_ai_call_logs_success ON ai_call_logs(success)",
 		},
 		"reading_behaviors": {
 			"CREATE INDEX IF NOT EXISTS idx_reading_behaviors_category_id ON reading_behaviors(category_id)",

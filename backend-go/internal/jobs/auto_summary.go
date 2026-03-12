@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,6 +18,7 @@ import (
 	"my-robot-backend/internal/domain/preferences"
 	"my-robot-backend/internal/domain/summaries"
 	"my-robot-backend/internal/domain/topicgraph"
+	"my-robot-backend/internal/platform/airouter"
 	"my-robot-backend/internal/platform/aisettings"
 	"my-robot-backend/internal/platform/database"
 )
@@ -35,6 +37,25 @@ type AIConfig struct {
 	APIKey    string `json:"api_key"`
 	Model     string `json:"model"`
 	TimeRange int    `json:"time_range"`
+}
+
+var requestAutoSummaryChat = func(prompt string, metadata map[string]any) (string, error) {
+	maxTokens := 16000
+	temperature := 0.7
+	result, err := airouter.NewRouter().Chat(context.Background(), airouter.ChatRequest{
+		Capability: airouter.CapabilitySummary,
+		Messages: []airouter.Message{
+			{Role: "system", Content: "You are a professional news analysis assistant who summarizes and compares multiple articles."},
+			{Role: "user", Content: prompt},
+		},
+		Temperature: &temperature,
+		MaxTokens:   &maxTokens,
+		Metadata:    metadata,
+	})
+	if err != nil {
+		return "", err
+	}
+	return result.Content, nil
 }
 
 type AutoSummaryRunSummary struct {
@@ -103,6 +124,11 @@ func (s *AutoSummaryScheduler) SetAIConfig(baseURL, apiKey, model string, timeRa
 
 	s.aiConfig = config
 
+	store := airouter.NewStore(database.DB)
+	if _, err := store.EnsureLegacyProviderAndRoutes(baseURL, apiKey, model); err != nil {
+		return fmt.Errorf("failed to save AI route config: %w", err)
+	}
+
 	settingsJSON, _, err := aisettings.LoadSummaryConfig()
 	if err != nil {
 		return fmt.Errorf("failed to load AI config: %w", err)
@@ -117,11 +143,37 @@ func (s *AutoSummaryScheduler) SetAIConfig(baseURL, apiKey, model string, timeRa
 		return fmt.Errorf("failed to save AI config: %w", err)
 	}
 
+	if err := aisettings.SaveAutoSummaryConfig(map[string]interface{}{"time_range": config.TimeRange}, "Auto summary configuration"); err != nil {
+		return fmt.Errorf("failed to save auto summary config: %w", err)
+	}
+
 	log.Println("AI configuration updated and saved to database")
 	return nil
 }
 
 func (s *AutoSummaryScheduler) loadAIConfig() error {
+	store := airouter.NewStore(database.DB)
+	provider, _, routeErr := store.ResolvePrimaryProvider(airouter.CapabilitySummary)
+	autoSummaryConfig, _, autoErr := aisettings.LoadAutoSummaryConfig()
+	if autoErr == nil {
+		if timeRange, ok := autoSummaryConfig["time_range"].(float64); ok {
+			s.aiConfig = &AIConfig{TimeRange: int(timeRange)}
+		}
+	}
+	if routeErr == nil && provider != nil {
+		if s.aiConfig == nil {
+			s.aiConfig = &AIConfig{}
+		}
+		s.aiConfig.BaseURL = provider.BaseURL
+		s.aiConfig.APIKey = provider.APIKey
+		s.aiConfig.Model = provider.Model
+		if s.aiConfig.TimeRange <= 0 {
+			s.aiConfig.TimeRange = 180
+		}
+		log.Println("AI route configuration loaded from database")
+		return nil
+	}
+
 	var settings models.AISettings
 	err := database.DB.Where("key = ?", "summary_config").First(&settings).Error
 	if err != nil {
@@ -418,6 +470,14 @@ Important:
 }
 
 func (s *AutoSummaryScheduler) callAI(prompt string) (string, error) {
+	if _, _, err := airouter.NewStore(database.DB).ResolvePrimaryProvider(airouter.CapabilitySummary); err == nil {
+		result, routeErr := requestAutoSummaryChat(prompt, map[string]any{"source": "auto_summary"})
+		if routeErr == nil {
+			return result, nil
+		}
+		log.Printf("[WARN] auto-summary route call failed, falling back to direct provider: %v", routeErr)
+	}
+
 	type openAIMessage struct {
 		Role    string `json:"role"`
 		Content string `json:"content"`

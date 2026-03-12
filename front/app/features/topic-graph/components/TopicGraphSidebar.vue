@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { marked } from 'marked'
 import type { TopicGraphDetailPayload } from '~/api/topicGraph'
 
 interface Props {
@@ -30,15 +29,11 @@ const featuredArticles = computed(() => {
     })),
   )
 
-  return Array.from(new Map(items.map(item => [item.link, item])).values()).slice(0, 8)
+  return Array.from(new Map(items.map(item => [item.link, item])).values())
 })
 
-function renderMarkdown(content?: string | null) {
-  if (!content) return ''
-  return marked.parse(content) as string
-}
+const shouldScrollFeaturedArticles = computed(() => featuredArticles.value.length > 8)
 
-import '~/components/article/ArticleContent.css'
 </script>
 
 <template>
@@ -46,7 +41,7 @@ import '~/components/article/ArticleContent.css'
     <div v-if="props.loading" class="topic-sidebar__empty">正在展开话题脉络...</div>
     <div v-else-if="props.error" class="topic-sidebar__empty">{{ props.error }}</div>
     <div v-else-if="!props.detail" class="topic-sidebar__empty">点一个节点，右侧就会展开这类题材的近期总结、历史轨迹和外部入口。</div>
-    <div v-else class="space-y-6">
+    <div v-else class="topic-sidebar__content">
       <section class="space-y-3">
         <p class="topic-sidebar__eyebrow">当前焦点</p>
         <div class="flex flex-wrap items-center gap-3">
@@ -60,18 +55,24 @@ import '~/components/article/ArticleContent.css'
           <p class="topic-sidebar__eyebrow">相关新闻</p>
           <span class="topic-summary__count">{{ featuredArticles.length }} 条</span>
         </div>
-        <div v-if="featuredArticles.length" class="mt-4 grid gap-3">
-          <button
-            v-for="article in featuredArticles"
-            :key="article.link"
-            class="topic-related-card"
-            type="button"
-            @click="emit('openArticle', article.id)"
-          >
-            <p class="topic-related-card__meta">{{ article.feedName }} · {{ article.categoryName }}</p>
-            <h3 class="topic-related-card__title">{{ article.title }}</h3>
-            <p class="topic-related-card__context">来自：{{ article.summaryTitle }}</p>
-          </button>
+        <div
+          v-if="featuredArticles.length"
+          class="topic-sidebar__news-scroll mt-4"
+          :class="{ 'topic-sidebar__news-scroll--bounded': shouldScrollFeaturedArticles }"
+        >
+          <div class="grid gap-3">
+            <button
+              v-for="article in featuredArticles"
+              :key="article.link"
+              class="topic-related-card"
+              type="button"
+              @click="emit('openArticle', article.id)"
+            >
+              <p class="topic-related-card__meta">{{ article.feedName }} · {{ article.categoryName }}</p>
+              <h3 class="topic-related-card__title">{{ article.title }}</h3>
+              <p class="topic-related-card__context">来自：{{ article.summaryTitle }}</p>
+            </button>
+          </div>
         </div>
         <div v-else class="topic-sidebar__empty topic-sidebar__empty--soft">这一话题当前还没有挂上文章链接。</div>
       </section>
@@ -82,46 +83,30 @@ import '~/components/article/ArticleContent.css'
           <span v-for="item in props.detail.related_topics" :key="item.slug" class="topic-pill">{{ item.label }}</span>
         </div>
       </section>
-
-      <section class="space-y-3">
-        <p class="topic-sidebar__eyebrow">摘要纵览</p>
-        <article v-for="summary in props.detail.summaries" :key="summary.id" class="topic-summary rounded-[26px] p-4">
-          <div class="flex items-center justify-between gap-3">
-            <div>
-              <h3 class="text-base font-semibold text-[var(--topic-ink-strong)]">{{ summary.title }}</h3>
-              <p class="mt-1 text-xs uppercase tracking-[0.18em] text-[var(--topic-ink-soft)]">{{ summary.feed_name }} · {{ summary.category_name }}</p>
-            </div>
-            <span class="topic-summary__count">{{ summary.article_count }} 篇</span>
-          </div>
-          <div class="topic-summary__markdown markdown-body markdown-summary mt-4" v-html="renderMarkdown(summary.summary)" />
-          <div class="mt-3 flex flex-wrap gap-2">
-            <span v-for="topic in summary.topics" :key="topic.slug" class="topic-pill topic-pill--muted">{{ topic.label }}</span>
-          </div>
-          <div v-if="summary.articles?.length" class="mt-4 grid gap-2">
-            <button
-              v-for="article in summary.articles"
-              :key="article.id"
-              class="topic-article-link"
-              type="button"
-              @click="emit('openArticle', article.id)"
-            >
-              {{ article.title }}
-            </button>
-          </div>
-        </article>
-      </section>
     </div>
   </aside>
 </template>
 
 <style scoped>
 .topic-sidebar {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
   --topic-ink-strong: #14212c;
   --topic-ink-medium: #455563;
   --topic-ink-soft: #778792;
   background: linear-gradient(180deg, rgba(247, 243, 235, 0.96), rgba(239, 235, 226, 0.98));
   border: 1px solid rgba(133, 105, 78, 0.16);
   box-shadow: 0 22px 68px rgba(23, 30, 36, 0.12);
+}
+
+.topic-sidebar__content {
+  display: grid;
+  min-height: 0;
+  flex: 1;
+  gap: 1.5rem;
+  grid-template-rows: auto minmax(0, 1fr) auto;
 }
 
 .topic-sidebar__empty--soft {
@@ -143,14 +128,28 @@ import '~/components/article/ArticleContent.css'
   color: var(--topic-ink-medium);
 }
 
-.topic-panel,
-.topic-summary {
+.topic-panel {
   background: rgba(255, 255, 255, 0.64);
   border: 1px solid rgba(133, 105, 78, 0.1);
 }
 
 .topic-panel--featured {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
   background: linear-gradient(180deg, rgba(255,255,255,0.82), rgba(247, 240, 230, 0.92));
+}
+
+.topic-sidebar__news-scroll {
+  min-height: 0;
+  flex: 1;
+  padding-right: 0.25rem;
+}
+
+.topic-sidebar__news-scroll--bounded {
+  overflow-y: auto;
+  max-height: 75vh;
 }
 
 .topic-pill {
@@ -160,21 +159,6 @@ import '~/components/article/ArticleContent.css'
   font-size: 0.78rem;
   font-weight: 600;
   color: #7a4724;
-}
-
-.topic-pill--muted {
-  background: rgba(20, 33, 44, 0.08);
-  color: var(--topic-ink-medium);
-}
-
-.topic-article-link {
-  display: block;
-  border-radius: 1rem;
-  background: rgba(20, 33, 44, 0.05);
-  padding: 0.7rem 0.9rem;
-  color: var(--topic-ink-strong);
-  font-size: 0.86rem;
-  text-decoration: none;
 }
 
 .topic-related-card {
@@ -209,22 +193,22 @@ import '~/components/article/ArticleContent.css'
   margin-top: 0.65rem;
 }
 
-.topic-summary__markdown {
-  padding: 0;
-  color: var(--topic-ink-medium);
-  font-size: 0.98rem;
-  line-height: 1.85;
-}
-
-.topic-related-card,
-.topic-article-link {
+.topic-related-card {
   cursor: pointer;
 }
 
-:deep(.topic-summary__markdown h1),
-:deep(.topic-summary__markdown h2),
-:deep(.topic-summary__markdown h3) {
-  font-size: 1.06rem;
+@media (max-width: 1279px) {
+  .topic-sidebar__content {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .topic-panel--featured,
+  .topic-sidebar__news-scroll {
+    min-height: auto;
+    flex: none;
+    overflow: visible;
+  }
 }
 
 .topic-summary__count {

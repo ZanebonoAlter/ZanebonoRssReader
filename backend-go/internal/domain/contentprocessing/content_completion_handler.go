@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"my-robot-backend/internal/app/runtimeinfo"
 	"my-robot-backend/internal/domain/models"
+	"my-robot-backend/internal/platform/airouter"
 	"my-robot-backend/internal/platform/database"
 )
 
@@ -20,6 +21,12 @@ func InitContentCompletionHandler(crawlBaseURL string) {
 
 func loadCompletionAISettings() {
 	if completionService == nil {
+		return
+	}
+
+	provider, _, err := airouter.NewRouter().ResolvePrimaryProvider(airouter.CapabilityArticleCompletion)
+	if err == nil && provider != nil && provider.BaseURL != "" && provider.APIKey != "" && provider.Model != "" {
+		completionService.SetAICredentials(provider.BaseURL, provider.APIKey, provider.Model)
 		return
 	}
 

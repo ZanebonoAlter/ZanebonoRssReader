@@ -200,12 +200,7 @@ const errorCodeMap: Record<string, string> = {
   'UNKNOWN': '未知错误'
 }
 
-// Load settings from localStorage
-const aiSettings = ref({
-  baseURL: '',
-  apiKey: '',
-  model: ''
-})
+const { aiSettings, loadSettings: loadAISettings } = useAI()
 
 // Time range options
 const timeRangeOptions = [
@@ -267,18 +262,6 @@ watch(() => props.categoryId, () => {
 watch([startDate, endDate], () => {
   currentPage.value = 1
 })
-
-function loadAISettings() {
-  const settings = localStorage.getItem('aiSettings')
-  if (settings) {
-    const parsed = JSON.parse(settings)
-    aiSettings.value = {
-      baseURL: parsed.baseURL || 'https://api.openai.com/v1',
-      apiKey: parsed.apiKey || '',
-      model: parsed.model || 'gpt-4o-mini'
-    }
-  }
-}
 
 async function fetchSummaries(resetPage = false) {
   if (resetPage) {
@@ -378,9 +361,6 @@ async function generateSummaryWithTimeout(
     apiStore.generateSummary({
       category_id: categoryId,
       time_range: selectedTimeRange.value,
-      base_url: aiSettings.value.baseURL,
-      api_key: aiSettings.value.apiKey,
-      model: aiSettings.value.model
     }).then(response => ({
       success: response.success,
       error: response.error,
@@ -398,7 +378,7 @@ async function generateSummaryWithTimeout(
 
 // 打开分类选择对话框
 function openCategorySelect() {
-  if (!aiSettings.value.apiKey) {
+  if (!aiSettings.value.apiKeyConfigured) {
     error.value = '请先在设置中配置 AI'
     setTimeout(() => error.value = null, 3000)
     return
@@ -439,9 +419,6 @@ async function submitQueueSummary(selectedCategoryIds: string[]) {
     const response = await apiStore.submitQueueSummary({
       category_ids: categoryIds,
       time_range: selectedTimeRange.value,
-      base_url: aiSettings.value.baseURL,
-      api_key: aiSettings.value.apiKey,
-      model: aiSettings.value.model
     })
 
     if (response.success && response.data) {
@@ -476,9 +453,6 @@ async function retryFailedJobs() {
         .map(job => job.feed_id)
         .filter((feedId): feedId is number => typeof feedId === 'number'),
       time_range: selectedTimeRange.value,
-      base_url: aiSettings.value.baseURL,
-      api_key: aiSettings.value.apiKey,
-      model: aiSettings.value.model
     })
 
     if (response.success && response.data) {
@@ -540,7 +514,7 @@ function getErrorMessage(job: SummaryJob): string {
 
 // 旧版生成函数（保留兼容）
 async function generateSummary() {
-  if (!aiSettings.value.apiKey) {
+  if (!aiSettings.value.apiKeyConfigured) {
     error.value = '请先在设置中配置 AI'
     setTimeout(() => error.value = null, 3000)
     return
@@ -658,7 +632,7 @@ defineExpose({
           </select>
           <button
             class="px-3 py-1.5 text-xs font-medium bg-ink-600 text-white rounded-lg hover:bg-ink-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
-            :disabled="generating || !aiSettings.apiKey"
+            :disabled="generating || !aiSettings.apiKeyConfigured"
             @click="generateSummary"
           >
             <Icon
@@ -980,7 +954,7 @@ defineExpose({
 
     <!-- AI Key warning -->
     <div
-      v-if="!aiSettings.apiKey"
+      v-if="!aiSettings.apiKeyConfigured"
       class="mx-4 mt-3 p-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-600 flex-shrink-0"
     >
       请先在设置中配置 AI API 密钥

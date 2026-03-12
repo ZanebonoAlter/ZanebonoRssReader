@@ -392,9 +392,6 @@ export const useApiStore = defineStore('api', () => {
   async function generateSummary(data: {
     category_id?: number | null
     time_range?: number
-    base_url: string
-    api_key: string
-    model: string
   }) {
     loading.value = true
     error.value = null
@@ -418,9 +415,6 @@ export const useApiStore = defineStore('api', () => {
     category_ids?: number[]
     feed_ids?: number[]
     time_range?: number
-    base_url: string
-    api_key: string
-    model: string
   }) {
     loading.value = true
     error.value = null
