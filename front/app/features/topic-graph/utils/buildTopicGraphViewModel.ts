@@ -26,6 +26,16 @@ export interface TopicGraphViewModel {
     feedCount: string
   }
   topTopics: TopicTag[]
+  /** Primary trunk node (active/focused topic) */
+  trunkNode: TopicGraphSceneNode | null
+  /** Direct connections to trunk for branch-level styling */
+  branchNodeIds: string[]
+  /** Nodes not directly connected to trunk for peripheral styling */
+  peripheralNodeIds: string[]
+  /** Edges sorted by weight for chronology/lineage presentation */
+  edgeChronology: TopicGraphSceneEdge[]
+  /** Emphasis levels for visual hierarchy: trunk > branch > peripheral */
+  emphasisLevels: Record<string, 'trunk' | 'branch' | 'peripheral'>
 }
 
 const TOPIC_COLOR = '#f08a4b'
@@ -53,6 +63,44 @@ export function buildTopicGraphViewModel(payload: TopicGraphPayload): TopicGraph
 
   const hero = topTopics[0]
 
+  // Derive trunk and chronology metadata
+  const trunkNode = hero
+    ? nodes.find(n => n.label === hero.label || n.slug === hero.slug) || null
+    : null
+
+  // Build adjacency set for trunk-connected nodes
+  const trunkAdjacency = new Set<string>()
+  if (trunkNode) {
+    edges.forEach(edge => {
+      if (edge.source === trunkNode.id) {
+        trunkAdjacency.add(edge.target)
+      }
+      if (edge.target === trunkNode.id) {
+        trunkAdjacency.add(edge.source)
+      }
+    })
+  }
+
+  // Classify nodes: trunk > direct connections > peripheral
+  const branchNodeIds: string[] = []
+  const peripheralNodeIds: string[] = []
+  const emphasisLevels: Record<string, 'trunk' | 'branch' | 'peripheral'> = {}
+
+  nodes.forEach(node => {
+    if (trunkNode && node.id === trunkNode.id) {
+      emphasisLevels[node.id] = 'trunk'
+    } else if (trunkAdjacency.has(node.id)) {
+      branchNodeIds.push(node.id)
+      emphasisLevels[node.id] = 'branch'
+    } else {
+      peripheralNodeIds.push(node.id)
+      emphasisLevels[node.id] = 'peripheral'
+    }
+  })
+
+  // Sort edges by weight descending for chronology/lineage presentation
+  const edgeChronology = [...edges].sort((left, right) => right.weight - left.weight)
+
   return {
     graph: {
       nodes,
@@ -71,6 +119,11 @@ export function buildTopicGraphViewModel(payload: TopicGraphPayload): TopicGraph
       feedCount: String(payload.feed_count ?? 0),
     },
     topTopics,
+    trunkNode,
+    branchNodeIds,
+    peripheralNodeIds,
+    edgeChronology,
+    emphasisLevels,
   }
 }
 

@@ -4,6 +4,7 @@ Agent guide for coding assistants working in `D:\project\my-robot`.
 
 ## Rule Sources
 - Primary source of truth: this file, `README.md`, and docs under `docs/`.
+- Subdirectory guides: `front/AGENTS.md`, `backend-go/AGENTS.md` for domain-specific conventions.
 - Checked for Cursor rules: no `.cursorrules` and no `.cursor/rules/` directory found.
 - Checked for Copilot rules: no `.github/copilot-instructions.md` found.
 - If new rule files appear later, merge their guidance here before making broad changes.
@@ -161,7 +162,7 @@ pytest test_*.py -v
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **my-robot** (1648 symbols, 3569 relationships, 128 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **my-robot** (1781 symbols, 3904 relationships, 139 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
