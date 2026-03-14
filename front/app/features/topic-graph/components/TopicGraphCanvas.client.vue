@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { shallowRef, onMounted, onBeforeUnmount, ref, watch } from 'vue'
+import { shallowRef, onMounted, onBeforeUnmount, ref, watch, computed } from 'vue'
 import type { TopicGraphSceneEdge, TopicGraphSceneNode } from '~/features/topic-graph/utils/buildTopicGraphViewModel'
 
 interface Props {
@@ -23,6 +23,28 @@ const graphInstance = shallowRef<any>(null)
 const resizeObserver = shallowRef<ResizeObserver | null>(null)
 const spriteTextCtor = shallowRef<any>(null)
 const threeLib = shallowRef<any>(null)
+const graphReady = ref(false)
+
+// We compute the adjacency set for the active node to distinguish branch vs peripheral
+const activeAdjacency = computed(() => {
+  const set = new Set<string>()
+  if (!props.activeNodeId) return set
+  
+  props.edges.forEach(edge => {
+    const sourceId = resolveLinkNodeId(edge.source)
+    const targetId = resolveLinkNodeId(edge.target)
+    if (sourceId === props.activeNodeId) set.add(targetId)
+    if (targetId === props.activeNodeId) set.add(sourceId)
+  })
+  return set
+})
+
+function getNodeEmphasis(nodeId: string): 'trunk' | 'branch' | 'peripheral' {
+  if (!props.activeNodeId) return 'branch' // Default state when nothing is selected
+  if (nodeId === props.activeNodeId) return 'trunk'
+  if (activeAdjacency.value.has(nodeId)) return 'branch'
+  return 'peripheral'
+}
 
 async function setupGraph() {
   if (!containerRef.value) return
@@ -52,6 +74,7 @@ async function setupGraph() {
   graph.d3Force('link').distance((link: TopicGraphSceneEdge) => link.kind === 'topic_topic' ? 132 : 184)
   graph.cameraPosition({ z: 260 })
   graphInstance.value = graph
+  graphReady.value = true
   applyGraphData()
 
   resizeObserver.value = new ResizeObserver(() => {
@@ -77,42 +100,76 @@ function buildNodeObject(node: TopicGraphSceneNode) {
   const THREE = threeLib.value
   const SpriteText = spriteTextCtor.value
   const group = new THREE.Group()
-  const isActive = node.id === props.activeNodeId
-  const isFeatured = isActive || props.featuredNodeIds.includes(node.id)
-  const radius = node.kind === 'feed'
+  
+  const emphasis = getNodeEmphasis(node.id)
+  const isTrunk = emphasis === 'trunk'
+  const isBranch = emphasis === 'branch'
+  const isPeripheral = emphasis === 'peripheral'
+  
+  const isFeatured = isTrunk || props.featuredNodeIds.includes(node.id)
+  
+  // Base radius calculation
+  let radius = node.kind === 'feed'
     ? Math.max(2.4, node.size * 0.12)
-    : Math.max(isActive ? 4.5 : 3.2, node.size * (isActive ? 0.18 : 0.14))
+    : Math.max(3.2, node.size * 0.14)
+    
+  // Apply emphasis scaling
+  if (isTrunk) {
+    radius *= 1.8 // Trunk is significantly larger
+  } else if (isPeripheral) {
+    radius *= 0.6 // Peripheral nodes shrink
+  }
+
+  // Opacity based on emphasis
+  let opacity = 0.72
+  if (isTrunk) opacity = 0.98
+  else if (isBranch) opacity = 0.85
+  else if (isPeripheral) opacity = 0.25
 
   const sphere = new THREE.Mesh(
-    new THREE.SphereGeometry(radius, 20, 20),
+    new THREE.SphereGeometry(radius, 24, 24),
     new THREE.MeshBasicMaterial({
       color: node.accent,
       transparent: true,
-      opacity: isActive ? 0.96 : isFeatured ? 0.88 : 0.72,
+      opacity,
     }),
   )
   group.add(sphere)
 
-  if (isActive) {
+  // Trunk gets a strong, pulsing-like halo
+  if (isTrunk) {
     const halo = new THREE.Mesh(
-      new THREE.SphereGeometry(radius * 1.85, 20, 20),
+      new THREE.SphereGeometry(radius * 2.2, 24, 24),
       new THREE.MeshBasicMaterial({
         color: node.accent,
         transparent: true,
-        opacity: 0.08,
+        opacity: 0.15,
       }),
     )
     group.add(halo)
+    
+    const innerHalo = new THREE.Mesh(
+      new THREE.SphereGeometry(radius * 1.4, 24, 24),
+      new THREE.MeshBasicMaterial({
+        color: '#ffffff',
+        transparent: true,
+        opacity: 0.2,
+      }),
+    )
+    group.add(innerHalo)
   }
 
-  if (isFeatured) {
-    const label = new SpriteText(compactLabel(node.label, isActive ? 34 : 16))
-    label.color = '#f8f4ec'
-    label.textHeight = isActive ? 8 : 4.8
-    label.backgroundColor = isActive ? 'rgba(15,24,33,0.68)' : 'rgba(15,24,33,0.34)'
-    label.padding = isActive ? 3 : 2
+  // Labels: Always show for trunk and branch, or if featured (when no active node)
+  const showLabel = isTrunk || (props.activeNodeId && isBranch) || (!props.activeNodeId && isFeatured)
+  
+  if (showLabel) {
+    const label = new SpriteText(compactLabel(node.label, isTrunk ? 40 : 20))
+    label.color = isTrunk ? '#ffffff' : (isBranch ? '#f8f4ec' : 'rgba(248,244,236,0.6)')
+    label.textHeight = isTrunk ? 10 : (isBranch ? 5.5 : 4.8)
+    label.backgroundColor = isTrunk ? 'rgba(15,24,33,0.85)' : 'rgba(15,24,33,0.45)'
+    label.padding = isTrunk ? 4 : 2
     label.borderRadius = 10
-    label.position.set(0, radius + (isActive ? 10 : 7), 0)
+    label.position.set(0, radius + (isTrunk ? 12 : 8), 0)
     group.add(label)
   }
 
@@ -125,8 +182,8 @@ function buildLinkWidth(link: TopicGraphSceneEdge) {
   }
 
   return isFocusedEdge(link)
-    ? Math.max(1.25, link.weight * 0.62)
-    : 0.18
+    ? Math.max(1.8, link.weight * 0.8) // Stronger focused edges
+    : 0.1 // Thinner unfocused edges
 }
 
 function buildLinkColor(link: TopicGraphSceneEdge) {
@@ -134,7 +191,7 @@ function buildLinkColor(link: TopicGraphSceneEdge) {
     return link.kind === 'topic_topic' ? 'rgba(240,138,75,0.34)' : 'rgba(126,151,173,0.16)'
   }
 
-  return isFocusedEdge(link) ? 'rgba(240,138,75,0.88)' : 'rgba(255,255,255,0.06)'
+  return isFocusedEdge(link) ? 'rgba(240,138,75,0.95)' : 'rgba(255,255,255,0.03)'
 }
 
 function isFocusedEdge(link: TopicGraphSceneEdge) {
@@ -187,7 +244,12 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="containerRef" class="topic-canvas w-full rounded-[34px]" />
+  <div
+    ref="containerRef"
+    class="topic-canvas w-full rounded-[34px]"
+    data-testid="topic-graph-canvas"
+    :data-state="graphReady ? 'ready' : 'initializing'"
+  />
 </template>
 
 <style scoped>
