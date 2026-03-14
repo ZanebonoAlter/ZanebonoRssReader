@@ -7,11 +7,17 @@ interface Props {
   edges: TopicGraphSceneEdge[]
   activeNodeId?: string | null
   featuredNodeIds?: string[]
+  selectedCategory?: 'event' | 'person' | 'keyword' | null
+  highlightedNodeIds?: string[]
+  relatedEdgeIds?: string[]
 }
 
 const props = withDefaults(defineProps<Props>(), {
   activeNodeId: null,
   featuredNodeIds: () => [],
+  selectedCategory: null,
+  highlightedNodeIds: () => [],
+  relatedEdgeIds: () => [],
 })
 
 const emit = defineEmits<{
@@ -24,6 +30,25 @@ const resizeObserver = shallowRef<ResizeObserver | null>(null)
 const spriteTextCtor = shallowRef<any>(null)
 const threeLib = shallowRef<any>(null)
 const graphReady = ref(false)
+
+// 连线显示模式
+const linkDisplayMode = ref<'hidden' | 'selected' | 'all'>('hidden')
+
+// 当前选中的题材（用于连线动画）
+const selectedTopicForLinks = ref<{
+  id: string
+  category: 'event' | 'person' | 'keyword'
+} | null>(null)
+
+// 需要高亮的连线ID列表
+const highlightedLinkIds = ref<Set<string>>(new Set())
+
+// 动画状态
+const isAnimatingLinks = ref(false)
+
+const highlightedNodeSet = computed(() => new Set(props.highlightedNodeIds || []))
+const highlightedEdgeSet = computed(() => new Set(props.relatedEdgeIds || []))
+const focusHighlightActive = computed(() => highlightedNodeSet.value.size > 0)
 
 // We compute the adjacency set for the active node to distinguish branch vs peripheral
 const activeAdjacency = computed(() => {
@@ -40,8 +65,13 @@ const activeAdjacency = computed(() => {
 })
 
 function getNodeEmphasis(nodeId: string): 'trunk' | 'branch' | 'peripheral' {
-  if (!props.activeNodeId) return 'branch' // Default state when nothing is selected
   if (nodeId === props.activeNodeId) return 'trunk'
+
+  if (focusHighlightActive.value) {
+    return highlightedNodeSet.value.has(nodeId) ? 'branch' : 'peripheral'
+  }
+
+  if (!props.activeNodeId) return 'branch'
   if (activeAdjacency.value.has(nodeId)) return 'branch'
   return 'peripheral'
 }
@@ -61,9 +91,13 @@ async function setupGraph() {
   const graph = (ForceGraph3D as any)()(containerRef.value)
     .backgroundColor('rgba(0,0,0,0)')
     .nodeRelSize(4)
-    .linkOpacity(0.08)
+    .linkOpacity(0) // 默认隐藏所有连线
     .linkWidth((link: TopicGraphSceneEdge) => buildLinkWidth(link))
     .linkColor((link: TopicGraphSceneEdge) => buildLinkColor(link))
+    .linkDirectionalParticles((link: TopicGraphSceneEdge) => buildLinkParticles(link))
+    .linkDirectionalParticleWidth((link: TopicGraphSceneEdge) => buildLinkParticleWidth(link))
+    .linkDirectionalParticleColor((link: TopicGraphSceneEdge) => buildLinkParticleColor(link))
+    .linkDirectionalParticleSpeed((link: TopicGraphSceneEdge) => buildLinkParticleSpeed(link))
     .nodeThreeObject((node: TopicGraphSceneNode) => buildNodeObject(node))
     .nodeLabel((node: TopicGraphSceneNode) => `${node.label} · ${node.kind}`)
     .onNodeClick((node: TopicGraphSceneNode) => emit('nodeClick', node))
@@ -75,6 +109,7 @@ async function setupGraph() {
   graph.cameraPosition({ z: 260 })
   graphInstance.value = graph
   graphReady.value = true
+  applyHighlightStyles()
   applyGraphData()
 
   resizeObserver.value = new ResizeObserver(() => {
@@ -88,10 +123,129 @@ async function setupGraph() {
 function applyGraphData() {
   if (!graphInstance.value || !spriteTextCtor.value || !threeLib.value) return
 
+  applyHighlightStyles()
+
   graphInstance.value.graphData({
     nodes: props.nodes,
     links: props.edges,
   })
+}
+
+function applyHighlightStyles() {
+  if (!graphInstance.value) return
+
+  const graph = graphInstance.value
+  const hasFocusSelection = focusHighlightActive.value
+
+  graph
+    .nodeOpacity((node: TopicGraphSceneNode) => {
+      if (!hasFocusSelection) {
+        if (!props.activeNodeId) return 0.9
+        return getNodeEmphasis(node.id) === 'peripheral' ? 0.18 : 0.92
+      }
+
+      const emphasis = getNodeEmphasis(node.id)
+      if (emphasis === 'trunk') return 0.98
+      if (emphasis === 'branch') return 0.74
+      return 0.16
+    })
+    .linkOpacity((link: TopicGraphSceneEdge) => {
+      // 默认隐藏所有连线
+      if (linkDisplayMode.value === 'hidden') {
+        return 0
+      }
+
+      // 显示所有连线
+      if (linkDisplayMode.value === 'all') {
+        return 0.08
+      }
+
+      // 只显示高亮的连线
+      if (linkDisplayMode.value === 'selected') {
+        const linkId = link.id
+        if (highlightedLinkIds.value.has(linkId)) {
+          return 0.85
+        }
+        return 0
+      }
+
+return 0
+    })
+}
+
+/**
+ * 计算与指定题材相关的所有连线
+ */
+function calculateRelatedLinks(
+  topicId: string,
+  allLinks: TopicGraphSceneEdge[],
+): TopicGraphSceneEdge[] {
+  return allLinks.filter(link => {
+    const sourceId = resolveLinkNodeId(link.source)
+    const targetId = resolveLinkNodeId(link.target)
+    return sourceId === topicId || targetId === topicId
+  })
+}
+
+/**
+ * 混合两个颜色（简化版渐变）
+ */
+function blendColors(color1: string, color2: string): string {
+  // 简化实现：返回橙色系渐变
+  return 'rgba(240,138,75,0.85)'
+}
+
+/**
+ * 动态绘制连线（带动画效果）
+ */
+async function drawLinksAnimated(links: TopicGraphSceneEdge[]) {
+  if (!graphInstance.value || isAnimatingLinks.value) return
+
+  isAnimatingLinks.value = true
+
+  // 先将所有连线设为不可见
+  const newHighlightedIds = new Set<string>()
+
+  // 逐个显示连线，产生生长效果
+  for (let i = 0; i < links.length; i++) {
+    const link = links[i]!
+    newHighlightedIds.add(link.id)
+
+    // 更新高亮连线集合
+    highlightedLinkIds.value = new Set(newHighlightedIds)
+
+    // 触发重绘
+    applyHighlightStyles()
+
+    // 等待一小段时间再显示下一条
+    await new Promise(resolve => setTimeout(resolve, 80))
+  }
+
+  isAnimatingLinks.value = false
+}
+
+/**
+ * 隐藏所有连线
+ */
+function hideAllLinks() {
+  highlightedLinkIds.value = new Set()
+  linkDisplayMode.value = 'hidden'
+  applyHighlightStyles()
+}
+
+/**
+ * 显示选中题材的相关连线
+ */
+async function showLinksForTopic(topicId: string) {
+  const relatedLinks = calculateRelatedLinks(topicId, props.edges)
+
+  if (relatedLinks.length === 0) {
+    hideAllLinks()
+    return
+  }
+
+  linkDisplayMode.value = 'selected'
+  await drawLinksAnimated(relatedLinks)
 }
 
 function buildNodeObject(node: TopicGraphSceneNode) {
@@ -105,7 +259,8 @@ function buildNodeObject(node: TopicGraphSceneNode) {
   const isTrunk = emphasis === 'trunk'
   const isBranch = emphasis === 'branch'
   const isPeripheral = emphasis === 'peripheral'
-  
+  const isNeighborHighlighted = focusHighlightActive.value && highlightedNodeSet.value.has(node.id) && !isTrunk
+
   const isFeatured = isTrunk || props.featuredNodeIds.includes(node.id)
   
   // Base radius calculation
@@ -116,6 +271,8 @@ function buildNodeObject(node: TopicGraphSceneNode) {
   // Apply emphasis scaling
   if (isTrunk) {
     radius *= 1.8 // Trunk is significantly larger
+  } else if (isNeighborHighlighted) {
+    radius *= 1.18
   } else if (isPeripheral) {
     radius *= 0.6 // Peripheral nodes shrink
   }
@@ -123,8 +280,9 @@ function buildNodeObject(node: TopicGraphSceneNode) {
   // Opacity based on emphasis
   let opacity = 0.72
   if (isTrunk) opacity = 0.98
-  else if (isBranch) opacity = 0.85
-  else if (isPeripheral) opacity = 0.25
+  else if (isNeighborHighlighted) opacity = 0.72
+  else if (isBranch) opacity = 0.62
+  else if (isPeripheral) opacity = 0.14
 
   const sphere = new THREE.Mesh(
     new THREE.SphereGeometry(radius, 24, 24),
@@ -137,36 +295,51 @@ function buildNodeObject(node: TopicGraphSceneNode) {
   group.add(sphere)
 
   // Trunk gets a strong, pulsing-like halo
-  if (isTrunk) {
+  if (isTrunk || isNeighborHighlighted) {
     const halo = new THREE.Mesh(
-      new THREE.SphereGeometry(radius * 2.2, 24, 24),
+      new THREE.SphereGeometry(radius * (isTrunk ? 1.9 : 1.45), 24, 24),
       new THREE.MeshBasicMaterial({
-        color: node.accent,
+        color: isTrunk ? '#f0a24b' : node.accent,
         transparent: true,
-        opacity: 0.15,
+        opacity: isTrunk ? 0.13 : 0.08,
       }),
     )
     group.add(halo)
-    
-    const innerHalo = new THREE.Mesh(
-      new THREE.SphereGeometry(radius * 1.4, 24, 24),
-      new THREE.MeshBasicMaterial({
-        color: '#ffffff',
-        transparent: true,
-        opacity: 0.2,
-      }),
-    )
-    group.add(innerHalo)
+
+    if (isTrunk) {
+      const focusRing = new THREE.Mesh(
+        new THREE.SphereGeometry(radius * 2.55, 32, 32),
+        new THREE.MeshBasicMaterial({
+          color: '#f0a24b',
+          transparent: true,
+          opacity: 0.08,
+        }),
+      )
+      group.add(focusRing)
+
+      const innerHalo = new THREE.Mesh(
+        new THREE.SphereGeometry(radius * 1.4, 24, 24),
+        new THREE.MeshBasicMaterial({
+          color: '#ffffff',
+          transparent: true,
+          opacity: 0.2,
+        }),
+      )
+      group.add(innerHalo)
+    }
   }
 
   // Labels: Always show for trunk and branch, or if featured (when no active node)
-  const showLabel = isTrunk || (props.activeNodeId && isBranch) || (!props.activeNodeId && isFeatured)
+  const showLabel = isTrunk
+    || isNeighborHighlighted
+    || (props.activeNodeId && isBranch)
+    || (!props.activeNodeId && isFeatured)
   
   if (showLabel) {
     const label = new SpriteText(compactLabel(node.label, isTrunk ? 40 : 20))
-    label.color = isTrunk ? '#ffffff' : (isBranch ? '#f8f4ec' : 'rgba(248,244,236,0.6)')
-    label.textHeight = isTrunk ? 10 : (isBranch ? 5.5 : 4.8)
-    label.backgroundColor = isTrunk ? 'rgba(15,24,33,0.85)' : 'rgba(15,24,33,0.45)'
+    label.color = isTrunk ? '#ffffff' : (isBranch ? '#f3efe7' : 'rgba(248,244,236,0.58)')
+    label.textHeight = isTrunk ? 9 : (isBranch ? 5.1 : 4.6)
+    label.backgroundColor = isTrunk ? 'rgba(15,24,33,0.78)' : 'rgba(15,24,33,0.34)'
     label.padding = isTrunk ? 4 : 2
     label.borderRadius = 10
     label.position.set(0, radius + (isTrunk ? 12 : 8), 0)
@@ -177,6 +350,12 @@ function buildNodeObject(node: TopicGraphSceneNode) {
 }
 
 function buildLinkWidth(link: TopicGraphSceneEdge) {
+  if (focusHighlightActive.value) {
+    return isHighlightedEdge(link, highlightedNodeSet.value, highlightedEdgeSet.value)
+      ? Math.max(1.1, link.weight * 0.58)
+      : 0.12
+  }
+
   if (!props.activeNodeId) {
     return link.kind === 'topic_topic' ? Math.max(0.5, link.weight * 0.34) : Math.max(0.35, link.weight * 0.18)
   }
@@ -187,15 +366,66 @@ function buildLinkWidth(link: TopicGraphSceneEdge) {
 }
 
 function buildLinkColor(link: TopicGraphSceneEdge) {
-  if (!props.activeNodeId) {
-    return link.kind === 'topic_topic' ? 'rgba(240,138,75,0.34)' : 'rgba(126,151,173,0.16)'
+  if (focusHighlightActive.value) {
+    return isHighlightedEdge(link, highlightedNodeSet.value, highlightedEdgeSet.value)
+      ? 'rgba(240,138,75,0.72)'
+      : 'rgba(169,188,208,0.05)'
   }
 
-  return isFocusedEdge(link) ? 'rgba(240,138,75,0.95)' : 'rgba(255,255,255,0.03)'
+  if (!props.activeNodeId) {
+    return link.kind === 'topic_topic' ? 'rgba(188,206,224,0.08)' : 'rgba(126,151,173,0.08)'
+  }
+
+  return isFocusedEdge(link) ? 'rgba(240,138,75,0.82)' : 'rgba(169,188,208,0.03)'
+}
+
+function buildLinkParticles(link: TopicGraphSceneEdge) {
+  if (focusHighlightActive.value) {
+    return isHighlightedEdge(link, highlightedNodeSet.value, highlightedEdgeSet.value) ? 2 : 0
+  }
+
+  if (!props.activeNodeId) return 0
+  return isFocusedEdge(link) ? 2 : 0
+}
+
+function buildLinkParticleWidth(link: TopicGraphSceneEdge) {
+  if (focusHighlightActive.value && isHighlightedEdge(link, highlightedNodeSet.value, highlightedEdgeSet.value)) {
+    return 2.2
+  }
+
+  return isFocusedEdge(link) ? 2 : 0
+}
+
+function buildLinkParticleColor(link: TopicGraphSceneEdge) {
+  if (focusHighlightActive.value && isHighlightedEdge(link, highlightedNodeSet.value, highlightedEdgeSet.value)) {
+    return '#f0a24b'
+  }
+
+  return isFocusedEdge(link) ? '#f0a24b' : 'rgba(0,0,0,0)'
+}
+
+function buildLinkParticleSpeed(link: TopicGraphSceneEdge) {
+  if (focusHighlightActive.value && isHighlightedEdge(link, highlightedNodeSet.value, highlightedEdgeSet.value)) {
+    return 0.008
+  }
+
+  return isFocusedEdge(link) ? 0.007 : 0
 }
 
 function isFocusedEdge(link: TopicGraphSceneEdge) {
   return resolveLinkNodeId(link.source) === props.activeNodeId || resolveLinkNodeId(link.target) === props.activeNodeId
+}
+
+function isHighlightedEdge(
+  link: TopicGraphSceneEdge,
+  highlightedNodes: Set<string>,
+  highlightedEdges: Set<string>,
+) {
+  if (highlightedEdges.has(link.id)) return true
+
+  const sourceId = resolveLinkNodeId(link.source)
+  const targetId = resolveLinkNodeId(link.target)
+  return highlightedNodes.has(sourceId) && highlightedNodes.has(targetId)
 }
 
 function resolveLinkNodeId(node: string | TopicGraphSceneNode) {
@@ -228,10 +458,21 @@ function focusActiveNode() {
   )
 }
 
-watch(() => [props.nodes, props.edges, props.featuredNodeIds], applyGraphData, { deep: true })
-watch(() => props.activeNodeId, () => {
+watch(() => [props.nodes, props.edges, props.featuredNodeIds, props.highlightedNodeIds, props.relatedEdgeIds, props.selectedCategory], applyGraphData, { deep: true })
+watch(() => props.activeNodeId, async (newId, oldId) => {
   applyGraphData()
   focusActiveNode()
+
+  // 处理连线动画
+  if (oldId) {
+    // 先隐藏旧连线
+    hideAllLinks()
+  }
+
+  if (newId) {
+    // 显示新选中题材的相关连线
+    await showLinksForTopic(newId)
+  }
 })
 
 onMounted(() => {
@@ -249,6 +490,8 @@ onBeforeUnmount(() => {
     class="topic-canvas w-full rounded-[34px]"
     data-testid="topic-graph-canvas"
     :data-state="graphReady ? 'ready' : 'initializing'"
+    :data-selected-category="props.selectedCategory || 'none'"
+    :data-highlight-count="String((props.highlightedNodeIds || []).length)"
   />
 </template>
 

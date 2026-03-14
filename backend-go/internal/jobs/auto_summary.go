@@ -45,7 +45,7 @@ var requestAutoSummaryChat = func(prompt string, metadata map[string]any) (strin
 	result, err := airouter.NewRouter().Chat(context.Background(), airouter.ChatRequest{
 		Capability: airouter.CapabilitySummary,
 		Messages: []airouter.Message{
-			{Role: "system", Content: "You are a professional news analysis assistant who summarizes and compares multiple articles."},
+			{Role: "system", Content: "你是一名专业的新闻分析助手，擅长总结和对比多篇文章。"},
 			{Role: "user", Content: prompt},
 		},
 		Temperature: &temperature,
@@ -395,6 +395,15 @@ func (s *AutoSummaryScheduler) generateSummaryForFeed(feed *models.Feed) (bool, 
 		log.Printf("[WARN] Failed to tag auto summary %d: %v", aiSummary.ID, err)
 	}
 
+	if err := topicgraph.EnqueueTopicAnalysisForSummary(uint64(aiSummary.ID), topicgraph.AnalysisPriorityMedium, database.DB); err != nil {
+		log.Printf("[WARN] Failed to enqueue topic analysis for auto summary %d: %v", aiSummary.ID, err)
+	}
+
+	// Tag individual articles for granular topic tracking
+	if err := topicgraph.TagArticles(articles, feedName, categoryName); err != nil {
+		log.Printf("[WARN] Failed to tag articles for feed %d: %v", feed.ID, err)
+	}
+
 	log.Printf("Successfully generated and saved summary for feed %d (ID: %d)", feed.ID, aiSummary.ID)
 	return true, nil
 }
@@ -431,42 +440,42 @@ func buildFeedSummaryPrompt(feedName string, categoryName string, articleCount i
 		catInfo = " (Category: " + categoryName + ")"
 	}
 
-	return `Please summarize the following ` + strconv.Itoa(articleCount) + ` articles from "` + feedName + `"` + catInfo + `.
+	return `请总结来自 "` + feedName + `"` + catInfo + ` 的 ` + strconv.Itoa(articleCount) + ` 篇文章。
 
-Articles (newest first):
+文章列表（按时间倒序）：
 ` + articlesText + `
 
-Use this format:
+请按以下格式输出：
 
-## Core Theme
-Summarize the main theme in one sentence.
+## 核心主题
+用一句话概括这批文章的核心主题。
 
-## Important News
+## 重要新闻
 
-### Top Stories
-List 2-3 key stories. For each story include:
-- A bold title
-- A short explanation in 2-3 sentences
-- A source citation in the form > [Article Title](Link)
+### 热点事件
+列出 2-3 个最重要的事件。每个事件包含：
+- 加粗标题
+- 2-3 句简述
+- 引用来源，格式为 > [文章标题](链接)
 
-### Other News
-List the other important stories. For each story include:
-- A bold title
-- A short explanation in 1-2 sentences
-- A source citation in the form > [Article Title](Link)
+### 其他重要新闻
+列出其余值得关注的新闻。每条包含：
+- 加粗标题
+- 1-2 句简述
+- 引用来源
 
-## Key Takeaways
-Summarize 3-5 important takeaways or trends.
+## 核心观点
+总结 3-5 个关键信号或趋势。
 
-## Tags
-#` + feedName + ` #tag1 #tag2 #tag3
+## 相关标签
+#` + feedName + ` #标签1 #标签2 #标签3
 
-Important:
-1. Every news item must include a source citation.
-2. Use the format > [Article Title](Article Link).
-3. Keep the summary concise and focused.
-4. Stay objective and neutral.
-5. Include the feed name as one of the tags: #` + feedName
+注意：
+1. 每条新闻都必须带来源引用。
+2. 引用格式固定为 > [文章标题](文章链接)。
+3. 总结要短，重点要清楚。
+4. 保持客观、中立。
+5. 将订阅源名称作为一个标签：#` + feedName
 }
 
 func (s *AutoSummaryScheduler) callAI(prompt string) (string, error) {

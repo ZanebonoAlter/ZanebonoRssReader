@@ -1,6 +1,7 @@
-import type { TopicGraphEdge, TopicGraphNode, TopicGraphPayload, TopicTag } from '~/api/topicGraph'
+import type { GraphNode, TopicCategory, TopicGraphEdge, TopicGraphPayload, TopicTag } from '../../../api/topicGraph'
+import { normalizeTopicCategory } from './normalizeTopicCategory'
 
-export interface TopicGraphSceneNode extends TopicGraphNode {
+export interface TopicGraphSceneNode extends GraphNode {
   size: number
   accent: string
   x?: number
@@ -38,21 +39,30 @@ export interface TopicGraphViewModel {
   emphasisLevels: Record<string, 'trunk' | 'branch' | 'peripheral'>
 }
 
-const TOPIC_COLOR = '#f08a4b'
-const ENTITY_COLOR = '#3f7cff'
 const FEED_COLOR = '#7b8a96'
+const TOPIC_DEFAULT_COLOR = '#f08a4b'
+const TOPIC_CATEGORY_ACCENTS: Record<TopicCategory, string> = {
+  event: '#f59e0b',
+  person: '#10b981',
+  keyword: '#6366f1',
+}
 
 export function buildTopicGraphViewModel(payload: TopicGraphPayload): TopicGraphViewModel {
   const topTopics = [...payload.top_topics].sort((left, right) => right.score - left.score)
-  const nodes = payload.nodes.map((node) => ({
-    ...node,
-    size: buildNodeSize(node),
-    accent: node.kind === 'feed'
-      ? node.color || FEED_COLOR
-      : node.label === node.label.toUpperCase()
-        ? ENTITY_COLOR
-        : TOPIC_COLOR,
-  }))
+  const topicCategoryBySlug = new Map(topTopics.map(topic => [topic.slug, normalizeTopicCategory(topic.category, topic.kind)] as const))
+  const topicCategoryByLabel = new Map(topTopics.map(topic => [topic.label, normalizeTopicCategory(topic.category, topic.kind)] as const))
+  const nodes = payload.nodes.map((node) => {
+    const normalizedNode = {
+      ...node,
+      category: resolveTopicCategory(node, topicCategoryBySlug, topicCategoryByLabel),
+    }
+
+    return {
+      ...normalizedNode,
+      size: buildNodeSize(normalizedNode),
+      accent: resolveNodeAccent(normalizedNode),
+    }
+  })
 
   const edges = payload.edges
     .filter(edge => edge.weight >= 0.35)
@@ -127,7 +137,34 @@ export function buildTopicGraphViewModel(payload: TopicGraphPayload): TopicGraph
   }
 }
 
-function buildNodeSize(node: TopicGraphNode) {
+function buildNodeSize(node: GraphNode) {
   const base = node.kind === 'feed' ? 5 : 8
   return Math.max(base, Math.round(base + node.weight * 2.2))
+}
+
+function resolveNodeAccent(node: GraphNode) {
+  if (node.kind === 'feed') {
+    return node.color || FEED_COLOR
+  }
+
+  if (node.category) {
+    return TOPIC_CATEGORY_ACCENTS[node.category]
+  }
+
+  return node.color || TOPIC_DEFAULT_COLOR
+}
+
+function resolveTopicCategory(
+  node: GraphNode,
+  categoryBySlug: Map<string, TopicCategory>,
+  categoryByLabel: Map<string, TopicCategory>,
+) {
+  if (node.kind !== 'topic') return node.category
+  if (node.category) return normalizeTopicCategory(node.category)
+
+  if (node.slug && categoryBySlug.has(node.slug)) {
+    return categoryBySlug.get(node.slug)
+  }
+
+  return categoryByLabel.get(node.label)
 }

@@ -12,8 +12,8 @@ describe('buildTopicGraphViewModel', () => {
       summary_count: 2,
       feed_count: 2,
       top_topics: [
-        { label: 'OpenAI', slug: 'openai', kind: 'entity', score: 2.4 },
-        { label: 'AI Agent', slug: 'ai-agent', kind: 'topic', score: 2.9 },
+        { label: 'OpenAI', slug: 'openai', category: 'keyword', score: 2.4 },
+        { label: 'AI Agent', slug: 'ai-agent', category: 'keyword', score: 2.9 },
       ],
       nodes: [
         { id: 'ai-agent', label: 'AI Agent', slug: 'ai-agent', kind: 'topic', weight: 5.2, summary_count: 2 },
@@ -43,7 +43,7 @@ describe('buildTopicGraphViewModel', () => {
       summary_count: 2,
       feed_count: 2,
       top_topics: [
-        { label: 'AI Agent', slug: 'ai-agent', kind: 'topic', score: 2.9 },
+        { label: 'AI Agent', slug: 'ai-agent', category: 'keyword', score: 2.9 },
       ],
       nodes: [
         { id: 'ai-agent', label: 'AI Agent', slug: 'ai-agent', kind: 'topic', weight: 5.2, summary_count: 2 },
@@ -85,7 +85,7 @@ describe('buildTopicGraphViewModel', () => {
       summary_count: 2,
       feed_count: 2,
       top_topics: [
-        { label: 'AI Agent', slug: 'ai-agent', kind: 'topic', score: 2.9 },
+        { label: 'AI Agent', slug: 'ai-agent', category: 'keyword', score: 2.9 },
       ],
       nodes: [
         { id: 'ai-agent', label: 'AI Agent', slug: 'ai-agent', kind: 'topic', weight: 5.2, summary_count: 2 },
@@ -128,6 +128,37 @@ describe('buildTopicGraphViewModel', () => {
     expect(viewModel.emphasisLevels).toEqual({})
   })
 
+  it('maps topic node accents from tag categories', () => {
+    const viewModel = buildTopicGraphViewModel({
+      type: 'daily',
+      anchor_date: '2026-03-11',
+      period_label: '2026-03-11 当日',
+      topic_count: 3,
+      summary_count: 2,
+      feed_count: 1,
+      top_topics: [
+        { label: 'wwdc 2026', slug: 'wwdc-2026', category: 'event', score: 3.1 },
+        { label: 'sam altman', slug: 'sam-altman', category: 'person', score: 2.7 },
+        { label: 'ai agent', slug: 'ai-agent', category: 'keyword', score: 2.3 },
+      ],
+      nodes: [
+        { id: 'wwdc-2026', label: 'wwdc 2026', slug: 'wwdc-2026', kind: 'topic', category: 'event', weight: 4.8, summary_count: 2 },
+        { id: 'sam-altman', label: 'sam altman', slug: 'sam-altman', kind: 'topic', category: 'person', weight: 4.3, summary_count: 2 },
+        { id: 'ai-agent', label: 'ai agent', slug: 'ai-agent', kind: 'topic', category: 'keyword', weight: 3.9, summary_count: 1 },
+        { id: 'feed-1', label: 'OpenAI Blog', kind: 'feed', weight: 1.8, color: '#3b6b87', feed_name: 'OpenAI Blog', category_name: 'AI' },
+      ],
+      edges: [
+        { id: 'wwdc::sam', source: 'wwdc-2026', target: 'sam-altman', kind: 'topic_topic', weight: 2.2 },
+        { id: 'sam::feed', source: 'sam-altman', target: 'feed-1', kind: 'topic_feed', weight: 1.1 },
+      ],
+    })
+
+    expect(viewModel.graph.nodes.find(node => node.id === 'wwdc-2026')?.accent).toBe('#f59e0b')
+    expect(viewModel.graph.nodes.find(node => node.id === 'sam-altman')?.accent).toBe('#10b981')
+    expect(viewModel.graph.nodes.find(node => node.id === 'ai-agent')?.accent).toBe('#6366f1')
+    expect(viewModel.graph.nodes.find(node => node.id === 'feed-1')?.accent).toBe('#3b6b87')
+  })
+
   it('handles trunk derivation when hero does not match any node', () => {
     const viewModel = buildTopicGraphViewModel({
       type: 'daily',
@@ -137,7 +168,7 @@ describe('buildTopicGraphViewModel', () => {
       summary_count: 1,
       feed_count: 1,
       top_topics: [
-        { label: 'Unknown Topic', slug: 'unknown-topic', kind: 'topic', score: 2.9 },
+        { label: 'Unknown Topic', slug: 'unknown-topic', category: 'keyword', score: 2.9 },
       ],
       nodes: [
         { id: 'existing', label: 'Existing Node', slug: 'existing', kind: 'topic', weight: 3.0, summary_count: 1 },

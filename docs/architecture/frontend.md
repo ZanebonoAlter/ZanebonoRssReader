@@ -111,6 +111,31 @@ front/
 
 Digest 页面走独立路由和独立视觉壳，不复用主阅读页的三栏壳。
 
+### Topics页面架构
+
+#### 组件结构
+
+- `TopicGraphPage`: 主页面容器
+  - `TopicGraphHeader`: 头部控制区（返回首页、刷新图谱）
+  - `TopicGraphCanvas`: 3D 拓扑图
+  - `TopicAnalysisTabs`: 分析分类 Tabs
+  - `TopicAnalysisPanel`: 分析内容展示
+  - `TopicGraphSidebar`: 右侧详情栏
+
+#### 状态管理
+
+- 选中状态统一在 `TopicGraphPage` 管理
+- `selectedCategory`: 当前选中的分类（event/person/keyword）
+- `selectedTagInCategory`: 当前选中的标签 slug
+- `highlightedNodeIds`: 需要高亮的节点 ID 列表
+
+#### 数据流
+
+1. 用户点击分类入口（热点分类按钮）后更新 `selectedCategory`
+2. 页面基于 `selectedCategory` 计算 `highlightedNodeIds`
+3. `highlightedNodeIds` 传给 `TopicGraphCanvas` 并驱动图谱高亮
+4. 用户切换分析 Tabs 或选中标签后，底部分析面板按类型加载对应分析数据
+
 ## 设计系统
 
 当前前端已经切到 editorial / magazine 风格，而不是常见 SaaS 蓝紫模板。

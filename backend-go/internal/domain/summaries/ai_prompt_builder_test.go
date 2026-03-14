@@ -54,11 +54,11 @@ func TestBuildPersonalizedPromptIncludesReadingHabitsForFractionalAverages(t *te
 		t.Fatalf("expected personalized context, got %#v", context)
 	}
 
-	if !strings.Contains(prompt, "### Reading Habits") {
+	if !strings.Contains(prompt, "### 阅读习惯") {
 		t.Fatalf("expected reading habits section in prompt, got %q", prompt)
 	}
 
-	if !strings.Contains(prompt, "Average reading time: 8 seconds") {
+	if !strings.Contains(prompt, "平均阅读时长: 8 秒") {
 		t.Fatalf("expected rounded average reading time in prompt, got %q", prompt)
 	}
 }

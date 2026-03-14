@@ -395,6 +395,10 @@ func (q *SummaryQueue) generateSummaryForFeed(feedID *uint, categoryID *uint, fe
 		log.Printf("[WARN] Failed to tag summary %d: %v", aiSummary.ID, err)
 	}
 
+	if err := topicgraph.EnqueueTopicAnalysisForSummary(uint64(aiSummary.ID), topicgraph.AnalysisPriorityMedium, database.DB); err != nil {
+		log.Printf("[WARN] Failed to enqueue topic analysis for summary %d: %v", aiSummary.ID, err)
+	}
+
 	return &aiSummary, nil
 }
 

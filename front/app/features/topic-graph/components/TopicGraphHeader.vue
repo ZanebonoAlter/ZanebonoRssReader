@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { Icon } from '@iconify/vue'
 import type { TopicGraphType } from '~/api/topicGraph'
 
 interface Props {
@@ -57,6 +58,11 @@ function updateDate(event: Event) {
         <button class="topic-toolbar__button" type="button" :disabled="props.loading" @click="emit('refresh')">
           {{ props.loading ? '图谱载入中...' : '刷新图谱' }}
         </button>
+
+        <NuxtLink to="/" class="topic-toolbar__home-button" data-testid="return-home-button">
+          <Icon icon="mdi:home-variant-outline" width="16" />
+          返回首页
+        </NuxtLink>
       </div>
     </div>
   </header>
@@ -144,5 +150,34 @@ function updateDate(event: Event) {
 .topic-toolbar__button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.topic-toolbar__home-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.45rem;
+  width: fit-content;
+  min-height: 2.35rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.82);
+  padding: 0 0.9rem;
+  font-size: 0.78rem;
+  text-decoration: none;
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease,
+    color 0.2s ease,
+    transform 0.2s ease;
+}
+
+.topic-toolbar__home-button:hover,
+.topic-toolbar__home-button:focus-visible {
+  transform: translateY(-1px);
+  border-color: rgba(240, 138, 75, 0.4);
+  background: rgba(240, 138, 75, 0.12);
+  color: rgba(255, 235, 223, 0.95);
 }
 </style>

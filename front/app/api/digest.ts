@@ -19,6 +19,15 @@ export interface DigestConfig {
   obsidian_weekly_digest: boolean
 }
 
+export interface DigestPreviewTopicTag {
+  slug: string
+  label: string
+  category: string
+  icon?: string
+  aliases?: string[]
+  score: number
+}
+
 export interface DigestPreviewSummary {
   id: number
   feed_id: number | null
@@ -30,6 +39,7 @@ export interface DigestPreviewSummary {
   summary_text: string
   article_count: number
   article_ids: number[]
+  topics: DigestPreviewTopicTag[]
   created_at: string
 }
 

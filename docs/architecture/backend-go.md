@@ -132,6 +132,30 @@ backend-go/
 - `digest` - 每日/每周汇总、飞书、Obsidian
 - `platform/ws` - WebSocket 进度推送
 
+### 主题分析服务
+
+#### 组件
+
+- `AnalysisService`: 分析业务逻辑
+- `AnalysisQueue`: 分析任务队列
+- `AIAnalyzer`: AI 分析器
+- `AnalysisHandler`: HTTP API 处理
+
+#### 数据模型
+
+- `TopicTagAnalysis`: 分析结果存储
+- `TopicAnalysisCursor`: 增量更新游标
+- `AnalysisJob`: 队列任务
+
+#### 工作流
+
+1. 新 summary 生成后触发 TagSummary
+2. 为每个关联 topic 创建分析任务
+3. 任务入队（优先级：手动 > 自动增量）
+4. Worker 出队任务并执行
+5. 调用 AI 进行分析
+6. 存储结果并更新游标
+
 ## 当前结构的问题
 
 当前主要问题已经从“目录混乱”变成“边界还不够干净”：

@@ -20,6 +20,7 @@ const (
 	CapabilityTopicTagging       Capability = "topic_tagging"
 	CapabilityDigestPolish       Capability = "digest_polish"
 	CapabilityOpenNotebook       Capability = "open_notebook"
+	CapabilityEmbedding          Capability = "embedding"
 	DefaultRouteName             string     = "default"
 	DefaultProviderName          string     = "default-primary"
 	ProviderTypeOpenAICompatible string     = "openai_compatible"
@@ -30,6 +31,7 @@ var defaultCapabilities = []Capability{
 	CapabilityArticleCompletion,
 	CapabilityTopicTagging,
 	CapabilityDigestPolish,
+	CapabilityEmbedding,
 }
 
 var (

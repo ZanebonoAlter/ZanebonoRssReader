@@ -130,6 +130,15 @@ const bottomFacts = computed(() => {
   ]
 })
 
+function getTopicCategoryMeta(category: string) {
+  const meta: Record<string, { label: string, color: string, defaultIcon: string }> = {
+    event: { label: '事件', color: '#f59e0b', defaultIcon: 'mdi:calendar-star' },
+    person: { label: '人物', color: '#10b981', defaultIcon: 'mdi:account' },
+    keyword: { label: '关键词', color: '#6366f1', defaultIcon: 'mdi:tag' },
+  }
+  return (meta[category] || meta.keyword)!
+}
+
 function weekdayLabel(day?: number) {
   const labels: Record<number, string> = {
     0: '周日',
@@ -563,6 +572,23 @@ onMounted(loadDashboard)
                   <span>·</span>
                   <span>{{ summary.created_at }}</span>
                 </div>
+                <div v-if="summary.topics?.length" class="mt-2 flex flex-wrap items-center gap-1.5">
+                  <button
+                    v-for="topic in summary.topics.slice(0, 5)"
+                    :key="topic.slug"
+                    class="digest-topic-tag"
+                    :style="{ borderColor: getTopicCategoryMeta(topic.category).color + '40', backgroundColor: getTopicCategoryMeta(topic.category).color + '12' }"
+                    type="button"
+                  >
+                    <Icon
+                      :icon="topic.icon || getTopicCategoryMeta(topic.category).defaultIcon"
+                      width="12"
+                      :style="{ color: getTopicCategoryMeta(topic.category).color }"
+                    />
+                    <span :style="{ color: getTopicCategoryMeta(topic.category).color }">{{ topic.label }}</span>
+                  </button>
+                  <span v-if="summary.topics.length > 5" class="text-xs text-ink-light">+{{ summary.topics.length - 5 }}</span>
+                </div>
               </button>
             </div>
 
@@ -912,5 +938,21 @@ onMounted(loadDashboard)
   .digest-stage {
     padding-bottom: 2rem;
   }
+}
+
+.digest-topic-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  border-radius: 999px;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+
+.digest-topic-tag:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
 }
 </style>

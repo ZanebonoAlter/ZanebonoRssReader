@@ -42,6 +42,15 @@ const metaFacts = computed(() => {
   ]
 })
 
+function getTopicCategoryMeta(category: string) {
+  const meta: Record<string, { label: string, color: string, defaultIcon: string }> = {
+    event: { label: '事件', color: '#f59e0b', defaultIcon: 'mdi:calendar-star' },
+    person: { label: '人物', color: '#10b981', defaultIcon: 'mdi:account' },
+    keyword: { label: '关键词', color: '#6366f1', defaultIcon: 'mdi:tag' },
+  }
+  return (meta[category] || meta.keyword)!
+}
+
 async function loadRelatedArticles(summary: DigestPreviewSummary | null) {
   if (!summary?.article_ids?.length) {
     relatedArticles.value = []
@@ -154,12 +163,29 @@ onBeforeUnmount(() => {
         <div class="flex flex-wrap items-start justify-between gap-4">
           <div class="max-w-5xl">
             <p class="text-xs uppercase tracking-[0.32em] text-ink-light">{{ activeTypeLabel }} Summary</p>
-            <div class="mt-3 flex flex-wrap items-center gap-3">
+<div class="mt-3 flex flex-wrap items-center gap-3">
               <div class="digest-feed-badge">
                 <Icon :icon="summary.feed_icon || 'mdi:rss'" width="16" :style="{ color: summary.feed_color || '#3b6b87' }" />
                 <span :style="{ color: summary.feed_color || '#3b6b87' }">{{ summary.feed_name }}</span>
               </div>
               <span class="digest-meta-chip">{{ summary.category_name }}</span>
+            </div>
+            <div v-if="summary.topics?.length" class="mt-3 flex flex-wrap items-center gap-2">
+              <span class="text-xs uppercase tracking-[0.2em] text-ink-light">话题</span>
+              <button
+                v-for="topic in summary.topics"
+                :key="topic.slug"
+                class="digest-topic-tag"
+                :style="{ borderColor: getTopicCategoryMeta(topic.category).color + '40', backgroundColor: getTopicCategoryMeta(topic.category).color + '12' }"
+                type="button"
+              >
+                <Icon
+                  :icon="topic.icon || getTopicCategoryMeta(topic.category).defaultIcon"
+                  width="14"
+                  :style="{ color: getTopicCategoryMeta(topic.category).color }"
+                />
+                <span :style="{ color: getTopicCategoryMeta(topic.category).color }">{{ topic.label }}</span>
+              </button>
             </div>
             <h2 class="mt-4 max-w-[16ch] text-3xl font-black leading-none text-ink-dark md:text-5xl">{{ summary.feed_name }}</h2>
             <p class="mt-3 max-w-[44rem] text-sm leading-7 text-ink-medium md:text-base">这条是 feed 级 AI 总结。点下面文章，会弹出来直接读。</p>
@@ -395,6 +421,24 @@ onBeforeUnmount(() => {
   background: rgba(255,255,255,0.8);
   padding: 1rem;
   transition: border-color 180ms ease, background 180ms ease, transform 180ms ease;
+}
+
+.digest-topic-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 1px solid;
+  border-radius: 999px;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: default;
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+
+.digest-topic-tag:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
 }
 
 .digest-article-card:hover {

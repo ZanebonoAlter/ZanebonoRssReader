@@ -1,41 +1,100 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import type { TopicGraphDetailPayload } from '~/api/topicGraph'
+import { computed, ref, watch } from 'vue'
+import type { TopicCategory, TopicGraphDetailPayload } from '~/api/topicGraph'
+import type { TimelineDigestSelection } from '~/types/timeline'
+import { normalizeTopicCategory } from '~/features/topic-graph/utils/normalizeTopicCategory'
+import KeywordCloud, { type Keyword } from './KeywordCloud.vue'
 
 interface Props {
   detail: TopicGraphDetailPayload | null
+  selectedDigest?: TimelineDigestSelection | null
   loading?: boolean
   error?: string | null
   dataState?: string
+  selectedKeyword?: string | null
 }
 
 const props = withDefaults(defineProps<Props>(), {
   loading: false,
+  selectedDigest: null,
   error: null,
   dataState: 'empty',
+  selectedKeyword: null,
 })
 
 const emit = defineEmits<{
   openArticle: [articleId: number]
+  highlightKeyword: [keywordSlug: string | null]
 }>()
 
-const featuredArticles = computed(() => {
-  if (!props.detail) return []
+// Internal selected keyword state (for toggle behavior)
+const internalSelectedKeyword = ref<string | null>(null)
 
-  const items = props.detail.summaries.flatMap(summary =>
-    summary.articles.map(article => ({
+// Computed selected keyword (prefer prop, fallback to internal)
+const activeKeywordSlug = computed(() => props.selectedKeyword !== undefined ? props.selectedKeyword : internalSelectedKeyword.value)
+
+const deduplicatedArticles = computed(() => {
+  if (!props.detail || !props.selectedDigest) return []
+
+  const topicArticleIds = new Set(props.detail.articles.map(article => article.id))
+  const matchedIds = new Set(props.selectedDigest.matchedArticleIds)
+
+  return props.selectedDigest.articles
+    .map(article => ({
       ...article,
-      feedName: summary.feed_name,
-      categoryName: summary.category_name,
-      summaryTitle: summary.title,
-    })),
-  )
-
-  return Array.from(new Map(items.map(item => [item.link, item])).values())
+      feedName: props.selectedDigest?.feedName || props.detail?.topic.label || '来源文章',
+      categoryName: props.selectedDigest?.categoryName || '日报',
+      summaryTitle: props.selectedDigest?.title || props.detail?.topic.label || '当前日报',
+      matchedTopic: matchedIds.has(article.id) || topicArticleIds.has(article.id),
+      matchedBySummaryOnly: !topicArticleIds.has(article.id),
+    }))
+    .sort((left, right) => {
+      if (left.matchedTopic === right.matchedTopic) return 0
+      return left.matchedTopic ? -1 : 1
+    })
 })
 
-const shouldScrollFeaturedArticles = computed(() => featuredArticles.value.length > 8)
+const keywords = computed((): Keyword[] => {
+  if (!props.detail?.related_tags?.length) return []
 
+  const maxCooccurrence = Math.max(...props.detail.related_tags.map(tag => tag.cooccurrence), 1)
+
+  return props.detail.related_tags.slice(0, 18).map(tag => ({
+    slug: tag.slug,
+    label: tag.label,
+    count: tag.cooccurrence,
+    relevance: Math.max(tag.cooccurrence / maxCooccurrence, 0.28),
+  }))
+})
+
+const shouldScrollFeaturedArticles = computed(() => deduplicatedArticles.value.length > 8)
+
+const topicCategoryLabels: Record<TopicCategory, string> = {
+  event: '事件',
+  person: '人物',
+  keyword: '关键词',
+}
+
+const displayTopicCategory = computed<TopicCategory>(() => {
+  if (!props.detail) return 'keyword'
+  return normalizeTopicCategory(props.detail.topic.category, props.detail.topic.kind)
+})
+
+function handleKeywordSelect(keyword: Keyword) {
+  if (activeKeywordSlug.value === keyword.slug) {
+    internalSelectedKeyword.value = null
+    emit('highlightKeyword', null)
+  } else {
+    internalSelectedKeyword.value = keyword.slug
+    emit('highlightKeyword', keyword.slug)
+  }
+}
+
+watch(() => props.selectedKeyword, (value) => {
+  if (value === null) {
+    internalSelectedKeyword.value = null
+  }
+})
 </script>
 
 <template>
@@ -48,47 +107,69 @@ const shouldScrollFeaturedArticles = computed(() => featuredArticles.value.lengt
     <div v-else-if="props.error" class="topic-sidebar__empty">{{ props.error }}</div>
     <div v-else-if="!props.detail" class="topic-sidebar__empty">点一个节点，右侧就会展开这类题材的近期总结、历史轨迹和外部入口。</div>
     <div v-else class="topic-sidebar__content">
+      <!-- Current topic header -->
       <section class="space-y-3">
         <p class="topic-sidebar__eyebrow">当前焦点</p>
         <div class="flex flex-wrap items-center gap-3">
           <h2 class="font-serif text-3xl text-[var(--topic-ink-strong)]">{{ props.detail.topic.label }}</h2>
-          <span class="topic-pill">{{ props.detail.topic.kind }}</span>
+          <span class="topic-pill" :class="`topic-pill--${displayTopicCategory}`">
+            {{ topicCategoryLabels[displayTopicCategory] }}
+          </span>
         </div>
+        <p class="text-sm text-[var(--topic-ink-medium)]">
+          {{ props.selectedDigest ? '当前日报来源文章' : '先从下方选择一条日报' }}
+        </p>
       </section>
 
+      <!-- Related Articles (deduplicated) -->
       <section class="topic-panel topic-panel--featured rounded-[28px] p-4 md:p-5">
         <div class="flex items-center justify-between gap-3">
-          <p class="topic-sidebar__eyebrow">相关新闻</p>
-          <span class="topic-summary__count">{{ featuredArticles.length }} 条</span>
+          <div>
+            <p class="topic-sidebar__eyebrow">日报文章</p>
+            <p v-if="props.selectedDigest" class="topic-related-card__context mt-2">{{ props.selectedDigest.title }}</p>
+          </div>
+          <span class="topic-summary__count">{{ deduplicatedArticles.length }} 条</span>
         </div>
         <div
-          v-if="featuredArticles.length"
+          v-if="deduplicatedArticles.length"
           class="topic-sidebar__news-scroll mt-4"
           :class="{ 'topic-sidebar__news-scroll--bounded': shouldScrollFeaturedArticles }"
           data-testid="topic-graph-related-articles"
         >
           <div class="grid gap-3">
             <button
-              v-for="article in featuredArticles"
+              v-for="article in deduplicatedArticles"
               :key="article.link"
               class="topic-related-card"
               type="button"
-              :data-testid="`topic-graph-article-trigger-${article.id}`"
+              data-testid="sidebar-article"
+              :data-article-id="String(article.id)"
               @click="emit('openArticle', article.id)"
             >
               <p class="topic-related-card__meta">{{ article.feedName }} · {{ article.categoryName }}</p>
               <h3 class="topic-related-card__title">{{ article.title }}</h3>
               <p class="topic-related-card__context">来自：{{ article.summaryTitle }}</p>
+              <p class="topic-related-card__note" :class="{ 'topic-related-card__note--soft': article.matchedBySummaryOnly }">
+                {{ article.matchedBySummaryOnly ? '命中日报关键词，article 本身暂未打上当前 topic 标签' : '命中当前 topic/article 标签' }}
+              </p>
             </button>
           </div>
         </div>
-        <div v-else class="topic-sidebar__empty topic-sidebar__empty--soft">这一话题当前还没有挂上文章链接。</div>
+        <div v-else class="topic-sidebar__empty topic-sidebar__empty--soft">点击下方日报后，这里只展示该日报里命中当前主题的文章。</div>
       </section>
 
-      <section class="topic-panel rounded-[26px] p-4">
+      <!-- Keyword Cloud (Related Topics) -->
+      <section v-if="keywords.length > 0" class="topic-panel rounded-[26px] p-4">
         <p class="topic-sidebar__eyebrow">相关主题</p>
-        <div class="mt-4 flex flex-wrap gap-2">
-          <span v-for="item in props.detail.related_topics" :key="item.slug" class="topic-pill">{{ item.label }}</span>
+        <div class="mt-4">
+          <KeywordCloud
+            :keywords="keywords"
+            :selected-keyword="activeKeywordSlug"
+            @select="handleKeywordSelect"
+          />
+          <p class="keywords-hint">
+            点击标签，只高亮当前标签节点和它的一跳邻居
+          </p>
         </div>
       </section>
     </div>
@@ -232,13 +313,24 @@ const shouldScrollFeaturedArticles = computed(() => featuredArticles.value.lengt
 
 .topic-pill {
   border-radius: 999px;
-  border: 1px solid rgba(240, 138, 75, 0.24);
   background: linear-gradient(180deg, rgba(22, 29, 39, 0.88), rgba(11, 17, 24, 0.96));
   padding: 0.45rem 0.85rem;
   font-size: 0.78rem;
   font-weight: 600;
-  color: rgba(255, 228, 209, 0.9);
+  color: rgba(248, 251, 255, 0.9);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.topic-pill--event {
+  border: 1px solid rgba(245, 158, 11, 0.32);
+}
+
+.topic-pill--person {
+  border: 1px solid rgba(16, 185, 129, 0.32);
+}
+
+.topic-pill--keyword {
+  border: 1px solid rgba(99, 102, 241, 0.32);
 }
 
 .topic-related-card {
@@ -291,6 +383,17 @@ const shouldScrollFeaturedArticles = computed(() => featuredArticles.value.lengt
   margin-top: 0.65rem;
 }
 
+.topic-related-card__note {
+  margin-top: 0.55rem;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: rgba(255, 227, 203, 0.86);
+}
+
+.topic-related-card__note--soft {
+  color: rgba(173, 193, 214, 0.72);
+}
+
 .topic-related-card {
   cursor: pointer;
 }
@@ -331,5 +434,12 @@ const shouldScrollFeaturedArticles = computed(() => featuredArticles.value.lengt
   padding: 0.32rem 0.7rem;
   font-size: 0.75rem;
   color: rgba(255, 228, 209, 0.88);
+}
+
+.keywords-hint {
+  font-size: 0.72rem;
+  color: rgba(255, 255, 255, 0.4);
+  text-align: center;
+  margin-top: 0.75rem;
 }
 </style>

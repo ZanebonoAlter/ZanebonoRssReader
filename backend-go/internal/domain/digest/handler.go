@@ -137,18 +137,28 @@ func sendDigestPreviewToOpenNotebook(kind string, preview *digestPreviewResponse
 	})
 }
 
+type digestPreviewTopicTag struct {
+	Slug     string   `json:"slug"`
+	Label    string   `json:"label"`
+	Category string   `json:"category"`
+	Icon     string   `json:"icon,omitempty"`
+	Aliases  []string `json:"aliases,omitempty"`
+	Score    float64  `json:"score"`
+}
+
 type digestPreviewSummary struct {
-	ID           uint   `json:"id"`
-	FeedID       *uint  `json:"feed_id"`
-	FeedName     string `json:"feed_name"`
-	FeedIcon     string `json:"feed_icon"`
-	FeedColor    string `json:"feed_color"`
-	CategoryID   uint   `json:"category_id"`
-	CategoryName string `json:"category_name"`
-	SummaryText  string `json:"summary_text"`
-	ArticleCount int    `json:"article_count"`
-	ArticleIDs   []uint `json:"article_ids"`
-	CreatedAt    string `json:"created_at"`
+	ID           uint                    `json:"id"`
+	FeedID       *uint                   `json:"feed_id"`
+	FeedName     string                  `json:"feed_name"`
+	FeedIcon     string                  `json:"feed_icon"`
+	FeedColor    string                  `json:"feed_color"`
+	CategoryID   uint                    `json:"category_id"`
+	CategoryName string                  `json:"category_name"`
+	SummaryText  string                  `json:"summary_text"`
+	ArticleCount int                     `json:"article_count"`
+	ArticleIDs   []uint                  `json:"article_ids"`
+	Topics       []digestPreviewTopicTag `json:"topics"`
+	CreatedAt    string                  `json:"created_at"`
 }
 
 type digestPreviewCategory struct {
@@ -421,6 +431,43 @@ func buildDigestMarkdown(kind string, date time.Time, digests []CategoryDigest) 
 	return builder.String()
 }
 
+func extractSummaryTopics(summary models.AISummary) []digestPreviewTopicTag {
+	if len(summary.SummaryTopics) == 0 {
+		return nil
+	}
+
+	topics := make([]digestPreviewTopicTag, 0, len(summary.SummaryTopics))
+	for _, link := range summary.SummaryTopics {
+		if link.TopicTag == nil {
+			continue
+		}
+
+		var aliases []string
+		if strings.TrimSpace(link.TopicTag.Aliases) != "" {
+			json.Unmarshal([]byte(link.TopicTag.Aliases), &aliases)
+		}
+
+		category := link.TopicTag.Category
+		if category == "" {
+			category = link.TopicTag.Kind // fallback to Kind for backward compatibility
+		}
+		if category == "" {
+			category = "keyword" // default fallback
+		}
+
+		topics = append(topics, digestPreviewTopicTag{
+			Slug:     link.TopicTag.Slug,
+			Label:    link.TopicTag.Label,
+			Category: category,
+			Icon:     link.TopicTag.Icon,
+			Aliases:  aliases,
+			Score:    link.Score,
+		})
+	}
+
+	return topics
+}
+
 func buildPreviewCategories(digests []CategoryDigest) ([]digestPreviewCategory, *uint, *uint) {
 	categories := make([]digestPreviewCategory, 0, len(digests))
 	var defaultCategoryID *uint
@@ -446,6 +493,8 @@ func buildPreviewCategories(digests []CategoryDigest) ([]digestPreviewCategory, 
 			}
 
 			articleIDs := parseSummaryArticleIDs(summary.Articles)
+			topics := extractSummaryTopics(summary)
+
 			summaryItem := digestPreviewSummary{
 				ID:           summary.ID,
 				FeedID:       summary.FeedID,
@@ -457,6 +506,7 @@ func buildPreviewCategories(digests []CategoryDigest) ([]digestPreviewCategory, 
 				SummaryText:  summary.Summary,
 				ArticleCount: summary.ArticleCount,
 				ArticleIDs:   articleIDs,
+				Topics:       topics,
 				CreatedAt:    models.FormatDatetimeCST(summary.CreatedAt),
 			}
 			summaries = append(summaries, summaryItem)

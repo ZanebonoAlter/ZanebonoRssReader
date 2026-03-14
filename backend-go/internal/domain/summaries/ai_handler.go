@@ -40,7 +40,7 @@ func SummarizeArticle(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
-			"error":   "Missing required fields",
+			"error":   "API 密钥是必填项",
 		})
 		return
 	}
@@ -95,7 +95,7 @@ func TestAIConnection(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
-			"error":   "Missing required fields",
+			"error":   "缺少必填字段",
 		})
 		return
 	}
@@ -105,14 +105,14 @@ func TestAIConnection(c *gin.Context) {
 	if err := aiService.TestConnection(); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
-			"error":   "Connection test failed: " + err.Error(),
+			"error":   "连接测试失败：" + err.Error(),
 		})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"message": "Connection test succeeded",
+		"message": "连接测试成功",
 	})
 }
 
@@ -149,7 +149,7 @@ func SaveAISettings(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
-			"error":   "API key is required",
+			"error":   "缺少必填字段",
 		})
 		return
 	}
@@ -198,7 +198,7 @@ func SaveAISettings(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"message": "AI settings saved successfully",
+		"message": "AI 设置保存成功",
 	})
 }
 
