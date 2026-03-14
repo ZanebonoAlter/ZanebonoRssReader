@@ -55,6 +55,14 @@ const statCards = computed(() => ([
   { label: 'Feed 数', value: viewModel.value.stats.feedCount },
 ]))
 
+const pageState = computed(() => {
+  if (loadingGraph.value) return 'loading'
+  if (selectedPreviewArticle.value) return 'article-preview'
+  if (detail.value) return 'detail'
+  if (graphPayload.value) return 'graph-ready'
+  return 'empty'
+})
+
 async function loadGraph() {
   loadingGraph.value = true
   notice.value = null
@@ -182,25 +190,29 @@ await loadGraph()
 </script>
 
 <template>
-  <div class="topic-stage min-h-screen px-4 py-5 md:px-6 md:py-7">
-    <div class="topic-shell mx-auto w-full space-y-5">
-      <TopicGraphHeader
-        :selected-type="selectedType"
-        :selected-date="selectedDate"
-        :loading="loadingGraph"
-        :hero-label="viewModel.stats.heroLabel"
-        :hero-subline="viewModel.stats.heroSubline"
-        @update:type="selectedType = $event"
-        @update:date="selectedDate = $event"
-        @refresh="loadGraph"
-      />
-
+  <div
+    class="topic-stage min-h-screen px-4 py-5 md:px-6 md:py-7"
+    data-testid="topic-graph-page"
+    :data-state="pageState"
+  >
+    <div class="topic-shell mx-auto w-full">
       <section class="topic-layout grid gap-5 2xl:grid-cols-[minmax(0,2.15fr)_minmax(430px,0.95fr)]">
         <div class="space-y-5">
           <article class="topic-canvas-shell rounded-[34px] p-4 md:p-5">
-            <div class="topic-studio grid gap-4 xl:grid-cols-[270px_minmax(0,1fr)]">
+            <div class="topic-studio grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
               <aside class="topic-studio__rail rounded-[30px] p-4 md:p-5">
-                <div>
+                <TopicGraphHeader
+                  :selected-type="selectedType"
+                  :selected-date="selectedDate"
+                  :loading="loadingGraph"
+                  :hero-label="viewModel.stats.heroLabel"
+                  :hero-subline="viewModel.stats.heroSubline"
+                  @update:type="selectedType = $event"
+                  @update:date="selectedDate = $event"
+                  @refresh="loadGraph"
+                />
+
+                <div class="mt-6">
                   <p class="text-xs uppercase tracking-[0.3em] text-white/42">Graph Field</p>
                   <h2 class="mt-2 font-serif text-2xl text-white md:text-[2.25rem]">{{ graphPayload?.period_label || '话题网络' }}</h2>
                   <p class="mt-3 text-sm leading-6 text-[rgba(255,255,255,0.68)]">
@@ -208,14 +220,14 @@ await loadGraph()
                   </p>
                 </div>
 
-                <div class="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
+                <div class="mt-6 grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
                   <article v-for="card in statCards" :key="card.label" class="topic-stat-card rounded-[24px] px-4 py-3">
                     <p class="topic-stat-card__label">{{ card.label }}</p>
                     <p class="topic-stat-card__value">{{ card.value }}</p>
                   </article>
                 </div>
 
-                <div>
+                <div class="mt-6">
                   <p class="text-xs uppercase tracking-[0.24em] text-white/42">热点题材</p>
                   <div class="mt-3 flex flex-wrap gap-2 xl:flex-col xl:items-stretch">
                     <button
@@ -260,21 +272,38 @@ await loadGraph()
           </p>
         </div>
 
-        <div class="topic-reading-rail">
-          <TopicGraphSidebar :detail="detail" :loading="loadingDetail" :error="notice" @open-article="openArticlePreview" />
+        <div class="topic-reading-rail" data-testid="topic-graph-sidebar-region">
+          <TopicGraphSidebar
+            :detail="detail"
+            :loading="loadingDetail"
+            :error="notice"
+            :data-state="detail ? 'detail' : (loadingDetail ? 'loading' : 'empty')"
+            @open-article="openArticlePreview"
+          />
         </div>
       </section>
     </div>
 
     <Teleport to="body">
-      <div v-if="selectedPreviewArticle" class="topic-article-modal" @click.self="closeArticlePreview">
+      <div
+        v-if="selectedPreviewArticle"
+        class="topic-article-modal"
+        data-testid="topic-graph-article-preview"
+        @click.self="closeArticlePreview"
+      >
         <div class="topic-article-modal__panel">
           <header class="topic-article-modal__header">
             <p class="truncate text-sm text-ink-medium">
               {{ loadingPreviewArticle ? '正在准备文章预览...' : '文章预览里保留项目已有的阅读、收藏和抓取动作。' }}
             </p>
 
-            <button class="btn-ghost min-h-11 min-w-11 px-0" type="button" aria-label="关闭文章弹窗" @click="closeArticlePreview">
+            <button
+              class="btn-ghost min-h-11 min-w-11 px-0"
+              type="button"
+              aria-label="关闭文章弹窗"
+              data-testid="topic-graph-article-preview-close"
+              @click="closeArticlePreview"
+            >
               <Icon icon="mdi:close" width="18" />
             </button>
           </header>
@@ -304,7 +333,13 @@ await loadGraph()
   width: min(100%, calc(100vw - 1.5rem));
 }
 
-.topic-canvas-shell,
+.topic-canvas-shell {
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(11, 18, 24, 0.4);
+  box-shadow: 0 40px 120px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(20px);
+}
+
 .topic-note {
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(11, 18, 24, 0.7);
@@ -317,15 +352,16 @@ await loadGraph()
 }
 
 .topic-studio__rail {
-  display: grid;
-  gap: 1rem;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: linear-gradient(180deg, rgba(7, 14, 20, 0.78), rgba(13, 24, 34, 0.86));
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  background: linear-gradient(180deg, rgba(15, 23, 31, 0.85), rgba(8, 14, 20, 0.95));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 .topic-stat-card {
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  background: rgba(0, 0, 0, 0.2);
 }
 
 .topic-stat-card__label {
