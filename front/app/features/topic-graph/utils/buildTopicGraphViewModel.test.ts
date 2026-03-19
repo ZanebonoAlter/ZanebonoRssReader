@@ -9,15 +9,15 @@ describe('buildTopicGraphViewModel', () => {
       anchor_date: '2026-03-11',
       period_label: '2026-03-11 当日',
       topic_count: 3,
-      summary_count: 2,
+      article_count: 2,
       feed_count: 2,
       top_topics: [
         { label: 'OpenAI', slug: 'openai', category: 'keyword', score: 2.4 },
         { label: 'AI Agent', slug: 'ai-agent', category: 'keyword', score: 2.9 },
       ],
       nodes: [
-        { id: 'ai-agent', label: 'AI Agent', slug: 'ai-agent', kind: 'topic', weight: 5.2, summary_count: 2 },
-        { id: 'openai', label: 'OpenAI', slug: 'openai', kind: 'topic', weight: 4.1, summary_count: 2 },
+        { id: 'ai-agent', label: 'AI Agent', slug: 'ai-agent', kind: 'topic', weight: 5.2, article_count: 2 },
+        { id: 'openai', label: 'OpenAI', slug: 'openai', kind: 'topic', weight: 4.1, article_count: 2 },
         { id: 'feed-1', label: 'OpenAI Blog', kind: 'feed', weight: 1.8, color: '#3b6b87', feed_name: 'OpenAI Blog', category_name: 'AI' },
       ],
       edges: [
@@ -40,14 +40,14 @@ describe('buildTopicGraphViewModel', () => {
       anchor_date: '2026-03-11',
       period_label: '2026-03-11 当日',
       topic_count: 3,
-      summary_count: 2,
+      article_count: 2,
       feed_count: 2,
       top_topics: [
         { label: 'AI Agent', slug: 'ai-agent', category: 'keyword', score: 2.9 },
       ],
       nodes: [
-        { id: 'ai-agent', label: 'AI Agent', slug: 'ai-agent', kind: 'topic', weight: 5.2, summary_count: 2 },
-        { id: 'openai', label: 'OpenAI', slug: 'openai', kind: 'topic', weight: 4.1, summary_count: 2 },
+        { id: 'ai-agent', label: 'AI Agent', slug: 'ai-agent', kind: 'topic', weight: 5.2, article_count: 2 },
+        { id: 'openai', label: 'OpenAI', slug: 'openai', kind: 'topic', weight: 4.1, article_count: 2 },
         { id: 'feed-1', label: 'OpenAI Blog', kind: 'feed', weight: 1.8, color: '#3b6b87', feed_name: 'OpenAI Blog', category_name: 'AI' },
       ],
       edges: [
@@ -82,14 +82,14 @@ describe('buildTopicGraphViewModel', () => {
       anchor_date: '2026-03-11',
       period_label: '2026-03-11 当日',
       topic_count: 3,
-      summary_count: 2,
+      article_count: 2,
       feed_count: 2,
       top_topics: [
         { label: 'AI Agent', slug: 'ai-agent', category: 'keyword', score: 2.9 },
       ],
       nodes: [
-        { id: 'ai-agent', label: 'AI Agent', slug: 'ai-agent', kind: 'topic', weight: 5.2, summary_count: 2 },
-        { id: 'openai', label: 'OpenAI', slug: 'openai', kind: 'topic', weight: 4.1, summary_count: 2 },
+        { id: 'ai-agent', label: 'AI Agent', slug: 'ai-agent', kind: 'topic', weight: 5.2, article_count: 2 },
+        { id: 'openai', label: 'OpenAI', slug: 'openai', kind: 'topic', weight: 4.1, article_count: 2 },
       ],
       edges: [
         { id: 'weak', source: 'ai-agent', target: 'openai', kind: 'topic_topic', weight: 0.5 },
@@ -109,7 +109,7 @@ describe('buildTopicGraphViewModel', () => {
       anchor_date: '2026-03-11',
       period_label: '03-10 - 03-16',
       topic_count: 0,
-      summary_count: 0,
+      article_count: 0,
       feed_count: 0,
       top_topics: [],
       nodes: [],
@@ -134,7 +134,7 @@ describe('buildTopicGraphViewModel', () => {
       anchor_date: '2026-03-11',
       period_label: '2026-03-11 当日',
       topic_count: 3,
-      summary_count: 2,
+      article_count: 2,
       feed_count: 1,
       top_topics: [
         { label: 'wwdc 2026', slug: 'wwdc-2026', category: 'event', score: 3.1 },
@@ -142,9 +142,9 @@ describe('buildTopicGraphViewModel', () => {
         { label: 'ai agent', slug: 'ai-agent', category: 'keyword', score: 2.3 },
       ],
       nodes: [
-        { id: 'wwdc-2026', label: 'wwdc 2026', slug: 'wwdc-2026', kind: 'topic', category: 'event', weight: 4.8, summary_count: 2 },
-        { id: 'sam-altman', label: 'sam altman', slug: 'sam-altman', kind: 'topic', category: 'person', weight: 4.3, summary_count: 2 },
-        { id: 'ai-agent', label: 'ai agent', slug: 'ai-agent', kind: 'topic', category: 'keyword', weight: 3.9, summary_count: 1 },
+        { id: 'wwdc-2026', label: 'wwdc 2026', slug: 'wwdc-2026', kind: 'topic', category: 'event', weight: 4.8, article_count: 2 },
+        { id: 'sam-altman', label: 'sam altman', slug: 'sam-altman', kind: 'topic', category: 'person', weight: 4.3, article_count: 2 },
+        { id: 'ai-agent', label: 'ai agent', slug: 'ai-agent', kind: 'topic', category: 'keyword', weight: 3.9, article_count: 1 },
         { id: 'feed-1', label: 'OpenAI Blog', kind: 'feed', weight: 1.8, color: '#3b6b87', feed_name: 'OpenAI Blog', category_name: 'AI' },
       ],
       edges: [
@@ -165,13 +165,13 @@ describe('buildTopicGraphViewModel', () => {
       anchor_date: '2026-03-11',
       period_label: '2026-03-11 当日',
       topic_count: 2,
-      summary_count: 1,
+      article_count: 1,
       feed_count: 1,
       top_topics: [
         { label: 'Unknown Topic', slug: 'unknown-topic', category: 'keyword', score: 2.9 },
       ],
       nodes: [
-        { id: 'existing', label: 'Existing Node', slug: 'existing', kind: 'topic', weight: 3.0, summary_count: 1 },
+        { id: 'existing', label: 'Existing Node', slug: 'existing', kind: 'topic', weight: 3.0, article_count: 1 },
       ],
       edges: [],
     })

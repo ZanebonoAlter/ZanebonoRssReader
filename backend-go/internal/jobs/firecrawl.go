@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"my-robot-backend/internal/domain/contentprocessing"
@@ -21,6 +22,8 @@ type FirecrawlScheduler struct {
 	lastExecutionTime *time.Time
 	lastError         string
 	concurrency       int
+	queueSize         int32
+	processingCount   int32
 }
 
 func NewFirecrawlScheduler() *FirecrawlScheduler {
@@ -29,7 +32,7 @@ func NewFirecrawlScheduler() *FirecrawlScheduler {
 		checkInterval: 300,
 		stopChan:      make(chan struct{}),
 		status:        "idle",
-		concurrency:   3,
+		concurrency:   1,
 	}
 }
 
@@ -66,9 +69,12 @@ func (s *FirecrawlScheduler) checkAndCrawl() {
 	startTime := time.Now()
 	s.status = "running"
 	s.lastExecutionTime = &startTime
+	atomic.StoreInt32(&s.processingCount, 0)
 
 	defer func() {
 		s.status = "idle"
+		atomic.StoreInt32(&s.queueSize, 0)
+		atomic.StoreInt32(&s.processingCount, 0)
 	}()
 
 	config, err := contentprocessing.GetFirecrawlConfig()
@@ -98,111 +104,89 @@ func (s *FirecrawlScheduler) checkAndCrawl() {
 	batchID := time.Now().Format("20060102150405")
 	s.broadcastProgress(batchID, "processing", len(articles), 0, 0, nil)
 
-	type crawlResult struct {
-		articleID uint
-		success   bool
-		errMsg    string
-		title     string
-	}
-
-	results := make(chan crawlResult, len(articles))
-	semaphore := make(chan struct{}, s.concurrency)
-
-	var wg sync.WaitGroup
-
-	for i := range articles {
-		article := articles[i]
-		wg.Add(1)
-		go func(art models.Article) {
-			defer wg.Done()
-			semaphore <- struct{}{}
-			defer func() { <-semaphore }()
-
-			var feed models.Feed
-			if err := database.DB.First(&feed, art.FeedID).Error; err != nil {
-				results <- crawlResult{
-					articleID: art.ID,
-					success:   false,
-					errMsg:    err.Error(),
-					title:     art.Title,
-				}
-				return
-			}
-
-			database.DB.Model(&art).Update("firecrawl_status", "processing")
-
-			s.broadcastProgress(batchID, "processing", len(articles), 0, 0, &ws.FirecrawlArticleProgress{
-				ID:     art.ID,
-				Title:  art.Title,
-				Status: "processing",
-			})
-
-			result, crawlErr := firecrawlService.ScrapePage(art.Link)
-			if crawlErr != nil {
-				results <- crawlResult{
-					articleID: art.ID,
-					success:   false,
-					errMsg:    crawlErr.Error(),
-					title:     art.Title,
-				}
-				log.Printf("[Firecrawl] Failed to crawl %s: %v", art.Link, crawlErr)
-				return
-			}
-
-			now := time.Now()
-			updates := map[string]interface{}{
-				"firecrawl_status":     "completed",
-				"firecrawl_content":    result.Data.Markdown,
-				"firecrawl_crawled_at": now,
-			}
-			if feed.ContentCompletionEnabled {
-				updates["content_status"] = "incomplete"
-			}
-			database.DB.Model(&art).Updates(updates)
-
-			results <- crawlResult{
-				articleID: art.ID,
-				success:   true,
-				title:     art.Title,
-			}
-		}(article)
-	}
-
-	go func() {
-		wg.Wait()
-		close(results)
-	}()
+	atomic.StoreInt32(&s.queueSize, int32(len(articles)))
+	atomic.StoreInt32(&s.processingCount, 0)
+	log.Printf("[Firecrawl] Starting sequential processing of %d articles (concurrency=1)", len(articles))
 
 	completed := 0
 	failed := 0
-	for res := range results {
-		if res.success {
-			completed++
-		} else {
+
+	// 单线程串行处理，一个一个来
+	for i := range articles {
+		art := articles[i]
+
+		var feed models.Feed
+		if err := database.DB.First(&feed, art.FeedID).Error; err != nil {
 			failed++
-			database.DB.Model(&models.Article{}).
-				Where("id = ?", res.articleID).
-				Updates(map[string]interface{}{
-					"firecrawl_status": "failed",
-					"firecrawl_error":  res.errMsg,
-				})
+			database.DB.Model(&art).Updates(map[string]interface{}{
+				"firecrawl_status": "failed",
+				"firecrawl_error":  err.Error(),
+			})
+			s.broadcastProgress(batchID, "processing", len(articles), completed, failed, &ws.FirecrawlArticleProgress{
+				ID:     art.ID,
+				Title:  art.Title,
+				Status: "failed",
+				Error:  err.Error(),
+			})
+			continue
 		}
 
+		database.DB.Model(&art).Update("firecrawl_status", "processing")
+
 		s.broadcastProgress(batchID, "processing", len(articles), completed, failed, &ws.FirecrawlArticleProgress{
-			ID:    res.articleID,
-			Title: res.title,
-			Status: func() string {
-				if res.success {
-					return "completed"
-				}
-				return "failed"
-			}(),
-			Error: res.errMsg,
+			ID:     art.ID,
+			Title:  art.Title,
+			Status: "processing",
 		})
+
+		result, crawlErr := firecrawlService.ScrapePage(art.Link)
+		if crawlErr != nil {
+			failed++
+			database.DB.Model(&art).Updates(map[string]interface{}{
+				"firecrawl_status": "failed",
+				"firecrawl_error":  crawlErr.Error(),
+			})
+			s.broadcastProgress(batchID, "processing", len(articles), completed, failed, &ws.FirecrawlArticleProgress{
+				ID:     art.ID,
+				Title:  art.Title,
+				Status: "failed",
+				Error:  crawlErr.Error(),
+			})
+			log.Printf("[Firecrawl] Failed to crawl %s: %v", art.Link, crawlErr)
+			continue
+		}
+
+		now := time.Now()
+		updates := map[string]interface{}{
+			"firecrawl_status":     "completed",
+			"firecrawl_content":    result.Data.Markdown,
+			"firecrawl_crawled_at": now,
+		}
+		if feed.ContentCompletionEnabled {
+			updates["content_status"] = "incomplete"
+		}
+		database.DB.Model(&art).Updates(updates)
+
+		completed++
+		s.broadcastProgress(batchID, "processing", len(articles), completed, failed, &ws.FirecrawlArticleProgress{
+			ID:     art.ID,
+			Title:  art.Title,
+			Status: "completed",
+		})
+
+		// 更新队列状态
+		atomic.StoreInt32(&s.queueSize, int32(len(articles)-completed-failed))
+		atomic.StoreInt32(&s.processingCount, 0)
+
+		// 每次处理完一个后稍微停顿一下，避免对目标站点造成压力
+		time.Sleep(500 * time.Millisecond)
 	}
 
+	atomic.StoreInt32(&s.queueSize, 0)
+	atomic.StoreInt32(&s.processingCount, 0)
+
 	duration := time.Since(startTime).Seconds()
-	log.Printf("[Firecrawl] Crawled %d/%d articles in %.2fs", completed, len(articles), duration)
+	log.Printf("[Firecrawl] Sequential crawl completed: %d completed, %d failed out of %d articles in %.2fs", completed, failed, len(articles), duration)
 
 	s.broadcastProgress(batchID, "completed", len(articles), completed, failed, nil)
 	s.lastError = ""
@@ -236,6 +220,8 @@ func (s *FirecrawlScheduler) GetStatus() map[string]interface{} {
 		"last_execution_time": s.lastExecutionTime,
 		"last_error":          s.lastError,
 		"concurrency":         s.concurrency,
+		"queue_size":          atomic.LoadInt32(&s.queueSize),
+		"processing":          atomic.LoadInt32(&s.processingCount),
 	}
 }
 

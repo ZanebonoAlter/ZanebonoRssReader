@@ -20,12 +20,12 @@ func BuildTopicGraph(kind string, anchor time.Time) (*TopicGraphResponse, error)
 		return nil, err
 	}
 
-	summaries, err := fetchSummaries(windowStart, windowEnd)
+	articleTags, err := fetchArticleTagsData(windowStart, windowEnd)
 	if err != nil {
 		return nil, err
 	}
 
-	nodes, edges, topTopics := buildGraphPayload(summaries)
+	nodes, edges, topTopics, articleCount := buildGraphPayloadFromArticles(articleTags)
 	feedCount := 0
 	for _, node := range nodes {
 		if node.Kind == "feed" {
@@ -40,7 +40,7 @@ func BuildTopicGraph(kind string, anchor time.Time) (*TopicGraphResponse, error)
 		Nodes:        nodes,
 		Edges:        edges,
 		TopicCount:   len(topTopics),
-		SummaryCount: len(summaries),
+		ArticleCount: articleCount,
 		FeedCount:    feedCount,
 		TopTopics:    topTopics,
 	}, nil
@@ -316,11 +316,11 @@ func buildGraphPayload(summaries []models.AISummary) ([]GraphNode, []GraphEdge, 
 					Icon:         topic.Icon,
 					Color:        GetCategoryColor(topic.Category),
 					Weight:       topic.Score,
-					SummaryCount: 0,
+					ArticleCount: 0,
 				}
 			}
 			topicNodes[topic.Slug].Weight += topic.Score
-			topicNodes[topic.Slug].SummaryCount++
+			topicNodes[topic.Slug].ArticleCount++
 
 			merged := topicScores[topic.Slug]
 			if merged.Label == "" || merged.Score < topic.Score {
@@ -402,17 +402,20 @@ func buildTopicHistory(kind string, slug string, anchor time.Time) ([]TopicHisto
 		if err != nil {
 			return nil, err
 		}
-		summaries, err := fetchSummaries(start, end)
+
+		articleTags, err := fetchArticleTagsData(start, end)
 		if err != nil {
 			return nil, err
 		}
 
 		count := 0
-		for _, summary := range summaries {
-			if containsTopic(summaryTopics(summary), slug) {
-				count++
+		articleSet := make(map[uint]bool)
+		for _, at := range articleTags {
+			if at.TopicTag != nil && at.TopicTag.Slug == slug {
+				articleSet[at.ArticleID] = true
 			}
 		}
+		count = len(articleSet)
 
 		history = append(history, TopicHistoryPoint{
 			AnchorDate: start.Format("2006-01-02"),
@@ -598,18 +601,21 @@ type TopicsByCategoryResult struct {
 }
 
 // BuildTopicsByCategory builds topic lists grouped by category from article tags
+// Only includes tags extracted by LLM (not heuristic feed/category names)
 func BuildTopicsByCategory(kind string, anchor time.Time) (*TopicsByCategoryResult, error) {
 	windowStart, windowEnd, _, err := resolveWindow(kind, anchor)
 	if err != nil {
 		return nil, err
 	}
 
-	// Get articles from the time window with their tags
+	// Get articles from the time window with their LLM-extracted tags
+	// Filter by source='llm' to exclude heuristic tags (feed names, category names)
 	var articleTags []models.ArticleTopicTag
 	err = database.DB.
 		Joins("JOIN articles ON articles.id = article_topic_tags.article_id").
 		Joins("JOIN topic_tags ON topic_tags.id = article_topic_tags.topic_tag_id").
 		Where("articles.created_at >= ? AND articles.created_at < ?", windowStart, windowEnd).
+		Where("article_topic_tags.source = ?", "llm").
 		Preload("TopicTag").
 		Find(&articleTags).Error
 	if err != nil {
@@ -683,4 +689,180 @@ func sortTagsByScoreMap(tagMap map[string]*TopicTag) []TopicTag {
 	})
 
 	return result
+}
+
+// ArticleTagData represents aggregated data from article_topic_tags for graph building
+type ArticleTagData struct {
+	ArticleID uint
+	FeedID    uint
+	FeedTitle string
+	FeedColor string
+	TopicTag  *models.TopicTag
+	Score     float64
+}
+
+// fetchArticleTagsData retrieves article-topic associations with feed info for graph building
+func fetchArticleTagsData(start, end time.Time) ([]ArticleTagData, error) {
+	var articleTags []models.ArticleTopicTag
+	err := database.DB.
+		Joins("JOIN articles ON articles.id = article_topic_tags.article_id").
+		Joins("JOIN topic_tags ON topic_tags.id = article_topic_tags.topic_tag_id").
+		Where("articles.created_at >= ? AND articles.created_at < ?", start, end).
+		Where("article_topic_tags.source = ?", "llm").
+		Preload("TopicTag").
+		Preload("Article.Feed").
+		Find(&articleTags).Error
+	if err != nil {
+		return nil, err
+	}
+
+	data := make([]ArticleTagData, 0, len(articleTags))
+	for _, at := range articleTags {
+		if at.TopicTag == nil || at.Article == nil {
+			continue
+		}
+		feedTitle := "未知订阅源"
+		feedColor := "#3b6b87"
+		if at.Article.Feed.ID != 0 {
+			if strings.TrimSpace(at.Article.Feed.Title) != "" {
+				feedTitle = at.Article.Feed.Title
+			}
+			if strings.TrimSpace(at.Article.Feed.Color) != "" {
+				feedColor = at.Article.Feed.Color
+			}
+		}
+		data = append(data, ArticleTagData{
+			ArticleID: at.ArticleID,
+			FeedID:    at.Article.FeedID,
+			FeedTitle: feedTitle,
+			FeedColor: feedColor,
+			TopicTag:  at.TopicTag,
+			Score:     at.Score,
+		})
+	}
+
+	return data, nil
+}
+
+// buildGraphPayloadFromArticles builds graph nodes and edges from article tag data
+func buildGraphPayloadFromArticles(data []ArticleTagData) ([]GraphNode, []GraphEdge, []TopicTag, int) {
+	topicNodes := map[string]*GraphNode{}
+	feedNodes := map[string]*GraphNode{}
+	edgeMap := map[string]*GraphEdge{}
+	topicScores := map[string]TopicTag{}
+	articleSet := make(map[uint]bool)
+
+	for _, item := range data {
+		articleSet[item.ArticleID] = true
+
+		feedNodeID := fmt.Sprintf("feed-%d", item.FeedID)
+		if _, exists := feedNodes[feedNodeID]; !exists {
+			feedNodes[feedNodeID] = &GraphNode{
+				ID:       feedNodeID,
+				Label:    item.FeedTitle,
+				Kind:     "feed",
+				Weight:   1,
+				Color:    item.FeedColor,
+				FeedName: item.FeedTitle,
+			}
+		}
+		feedNodes[feedNodeID].Weight += 0.35
+
+		topicSlug := item.TopicTag.Slug
+		topicLabel := item.TopicTag.Label
+		topicCategory := normalizeDisplayCategory(item.TopicTag.Kind, item.TopicTag.Category)
+
+		if _, exists := topicNodes[topicSlug]; !exists {
+			topicNodes[topicSlug] = &GraphNode{
+				ID:           topicSlug,
+				Label:        topicLabel,
+				Slug:         topicSlug,
+				Kind:         "topic",
+				Category:     topicCategory,
+				Icon:         item.TopicTag.Icon,
+				Color:        GetCategoryColor(topicCategory),
+				Weight:       0,
+				ArticleCount: 0,
+			}
+		}
+		topicNodes[topicSlug].Weight += item.Score
+		topicNodes[topicSlug].ArticleCount++
+
+		merged := topicScores[topicSlug]
+		if merged.Label == "" || merged.Score < item.Score {
+			topicScores[topicSlug] = TopicTag{
+				ID:       item.TopicTag.ID,
+				Label:    topicLabel,
+				Slug:     topicSlug,
+				Category: topicCategory,
+				Icon:     item.TopicTag.Icon,
+				Kind:     normalizeTopicKind(item.TopicTag.Kind, item.TopicTag.Category),
+				Score:    item.Score,
+			}
+		}
+
+		edgeKey := topicSlug + "::" + feedNodeID
+		if _, exists := edgeMap[edgeKey]; !exists {
+			edgeMap[edgeKey] = &GraphEdge{ID: edgeKey, Source: topicSlug, Target: feedNodeID, Kind: "topic_feed", Weight: 0}
+		}
+		edgeMap[edgeKey].Weight += item.Score
+	}
+
+	// Build topic-topic edges from co-occurrence in same article
+	articleTopics := make(map[uint][]string)
+	for _, item := range data {
+		articleTopics[item.ArticleID] = append(articleTopics[item.ArticleID], item.TopicTag.Slug)
+	}
+	for _, slugs := range articleTopics {
+		for i := 0; i < len(slugs); i++ {
+			for j := i + 1; j < len(slugs); j++ {
+				if slugs[i] == slugs[j] {
+					continue
+				}
+				left, right := slugs[i], slugs[j]
+				if left > right {
+					left, right = right, left
+				}
+				edgeKey := left + "::" + right
+				if _, exists := edgeMap[edgeKey]; !exists {
+					edgeMap[edgeKey] = &GraphEdge{ID: edgeKey, Source: left, Target: right, Kind: "topic_topic", Weight: 0}
+				}
+				edgeMap[edgeKey].Weight += 0.5
+			}
+		}
+	}
+
+	nodes := make([]GraphNode, 0, len(topicNodes)+len(feedNodes))
+	for _, node := range topicNodes {
+		nodes = append(nodes, *node)
+	}
+	for _, node := range feedNodes {
+		nodes = append(nodes, *node)
+	}
+	sort.SliceStable(nodes, func(i, j int) bool {
+		if nodes[i].Weight == nodes[j].Weight {
+			return nodes[i].Label < nodes[j].Label
+		}
+		return nodes[i].Weight > nodes[j].Weight
+	})
+
+	edges := make([]GraphEdge, 0, len(edgeMap))
+	for _, edge := range edgeMap {
+		edges = append(edges, *edge)
+	}
+	sort.SliceStable(edges, func(i, j int) bool { return edges[i].Weight > edges[j].Weight })
+
+	topTopics := make([]TopicTag, 0, len(topicScores))
+	for _, topic := range topicScores {
+		topic.Score = topicNodes[topic.Slug].Weight
+		topTopics = append(topTopics, topic)
+	}
+	sort.SliceStable(topTopics, func(i, j int) bool {
+		if topTopics[i].Score == topTopics[j].Score {
+			return topTopics[i].Label < topTopics[j].Label
+		}
+		return topTopics[i].Score > topTopics[j].Score
+	})
+
+	return nodes, edges, topTopics, len(articleSet)
 }

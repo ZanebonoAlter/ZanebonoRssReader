@@ -4,6 +4,8 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useArticlesApi } from '~/api/articles'
 import {
   useTopicGraphApi,
+  type HotspotDigestCard,
+  type TopicsByCategoryPayload,
   type TopicCategory,
   type TopicGraphDetailPayload,
   type TopicGraphType,
@@ -45,6 +47,15 @@ const notice = ref<string | null>(null)
 const selectedPreviewArticle = ref<Article | null>(null)
 const previewArticles = ref<Article[]>([])
 
+// Hotspot topics state (from getTopicsByCategory API)
+const hotspotData = ref<TopicsByCategoryPayload | null>(null)
+const loadingHotspots = ref(false)
+
+// Hotspot digests state (reverse trace: tag -> articles -> digests)
+const hotspotDigests = ref<HotspotDigestCard[]>([])
+const loadingHotspotDigests = ref(false)
+const selectedHotspotTag = ref<{ slug: string; label: string; category: TopicCategory } | null>(null)
+
 // Timeline state
 const timelineFilters = ref<TimelineFilters>({
   dateRange: null,
@@ -65,7 +76,7 @@ const viewModel = computed(() => graphPayload.value
       anchor_date: selectedDate.value,
       period_label: '正在载入',
       topic_count: 0,
-      summary_count: 0,
+      article_count: 0,
       feed_count: 0,
       top_topics: [],
       nodes: [],
@@ -108,30 +119,101 @@ const relatedEdgeIds = computed(() => {
     .map(edge => edge.id)
 })
 const topTopicLabels = computed(() => viewModel.value.topTopics.slice(0, 12))
-const eventTopics = computed(() => topTopicLabels.value.filter(topic => normalizeTopicCategory(topic.category, topic.kind) === 'event'))
-const personTopics = computed(() => topTopicLabels.value.filter(topic => normalizeTopicCategory(topic.category, topic.kind) === 'person'))
-const keywordTopics = computed(() => topTopicLabels.value.filter(topic => normalizeTopicCategory(topic.category, topic.kind) === 'keyword'))
+
+// Hotspot categories now use data from getTopicsByCategory API
+// Hotspot search state
+const hotspotSearchQueries = ref<Record<string, string>>({ event: '', person: '', keyword: '' })
+const hotspotDropdownOpen = ref<Record<string, boolean>>({ event: false, person: false, keyword: false })
+const hotspotShowAll = ref<Record<string, boolean>>({ event: false, person: false, keyword: false })
+
+// Refs for hotspot search containers
+const hotspotSearchRefs = ref<Record<string, HTMLDivElement | null>>({ event: null, person: null, keyword: null })
+
+// Filter topics based on search query
+function filterTopics(topics: any[], query: string) {
+  if (!query.trim()) return topics
+  const lowerQuery = query.toLowerCase()
+  return topics.filter(topic =>
+    topic.label.toLowerCase().includes(lowerQuery) ||
+    topic.slug.toLowerCase().includes(lowerQuery)
+  )
+}
+
+// Toggle show all topics
+function toggleShowAll(categoryKey: string) {
+  hotspotShowAll.value[categoryKey] = !hotspotShowAll.value[categoryKey]
+}
+
+// Close specific dropdown
+function closeHotspotDropdown(categoryKey: string) {
+  hotspotDropdownOpen.value[categoryKey] = false
+}
+
+// Close all dropdowns when clicking outside
+function handleClickOutside(event: MouseEvent) {
+  const target = event.target as Node
+  
+  Object.keys(hotspotSearchRefs.value).forEach((key) => {
+    const container = hotspotSearchRefs.value[key]
+    if (container && !container.contains(target)) {
+      hotspotDropdownOpen.value[key] = false
+    }
+  })
+}
+
+// Add/remove click outside listener
+watch(() => Object.values(hotspotDropdownOpen.value).some(Boolean), (isAnyOpen) => {
+  if (isAnyOpen) {
+    document.addEventListener('click', handleClickOutside, true)
+  } else {
+    document.removeEventListener('click', handleClickOutside, true)
+  }
+})
+
+// Cleanup on unmount
+onBeforeUnmount(() => {
+  document.removeEventListener('click', handleClickOutside, true)
+})
+
 const hotspotCategories = computed(() => ([
   {
     key: 'event',
     label: '事件',
     icon: 'mdi:calendar-alert-outline',
     headerClass: 'topic-category-header--event',
-    topics: eventTopics.value,
+    topics: hotspotData.value?.events || [],
+    filteredTopics: filterTopics(hotspotData.value?.events || [], hotspotSearchQueries.value.event),
+    displayTopics: hotspotShowAll.value.event 
+      ? filterTopics(hotspotData.value?.events || [], hotspotSearchQueries.value.event)
+      : filterTopics(hotspotData.value?.events || [], hotspotSearchQueries.value.event).slice(0, 8),
+    hasMore: filterTopics(hotspotData.value?.events || [], hotspotSearchQueries.value.event).length > 8,
+    showAll: hotspotShowAll.value.event,
   },
   {
     key: 'person',
     label: '人物',
     icon: 'mdi:account-voice-outline',
     headerClass: 'topic-category-header--person',
-    topics: personTopics.value,
+    topics: hotspotData.value?.people || [],
+    filteredTopics: filterTopics(hotspotData.value?.people || [], hotspotSearchQueries.value.person),
+    displayTopics: hotspotShowAll.value.person
+      ? filterTopics(hotspotData.value?.people || [], hotspotSearchQueries.value.person)
+      : filterTopics(hotspotData.value?.people || [], hotspotSearchQueries.value.person).slice(0, 8),
+    hasMore: filterTopics(hotspotData.value?.people || [], hotspotSearchQueries.value.person).length > 8,
+    showAll: hotspotShowAll.value.person,
   },
   {
     key: 'keyword',
     label: '关键词',
     icon: 'mdi:key-variant',
     headerClass: 'topic-category-header--keyword',
-    topics: keywordTopics.value,
+    topics: hotspotData.value?.keywords || [],
+    filteredTopics: filterTopics(hotspotData.value?.keywords || [], hotspotSearchQueries.value.keyword),
+    displayTopics: hotspotShowAll.value.keyword
+      ? filterTopics(hotspotData.value?.keywords || [], hotspotSearchQueries.value.keyword)
+      : filterTopics(hotspotData.value?.keywords || [], hotspotSearchQueries.value.keyword).slice(0, 8),
+    hasMore: filterTopics(hotspotData.value?.keywords || [], hotspotSearchQueries.value.keyword).length > 8,
+    showAll: hotspotShowAll.value.keyword,
   },
 ]))
 const timelineItems = computed((): TimelineDigest[] => {
@@ -159,11 +241,58 @@ const timelineItems = computed((): TimelineDigest[] => {
       })),
     }))
 })
+
+// Hotspot digests converted to TimelineDigest format for display
+const hotspotTimelineItems = computed((): TimelineDigest[] => {
+  if (!hotspotDigests.value.length) return []
+
+  return hotspotDigests.value
+    .filter((digest) => matchesTimelineFilters(digest.created_at, timelineFilters.value))
+    .map(digest => ({
+      id: String(digest.id),
+      title: digest.title,
+      summary: digest.summary,
+      createdAt: digest.created_at,
+      feedName: digest.feed_name,
+      categoryName: digest.category_name,
+      articleCount: digest.article_count,
+      tags: [], // Hotspot digests don't have tags in the response
+      articles: digest.matched_articles?.map(article => ({
+        id: article.id,
+        title: article.title,
+        link: '',
+      })) || [],
+    }))
+})
+
+// Effective timeline items: use hotspot digests when available, otherwise use topic detail summaries
+// This allows hotspot tag clicks to show digests containing articles with that tag
+const effectiveTimelineItems = computed((): TimelineDigest[] => {
+  // When a hotspot tag is selected and we have hotspot digests, prioritize them
+  if (selectedHotspotTag.value && hotspotDigests.value.length > 0) {
+    return hotspotTimelineItems.value
+  }
+  // Otherwise use the topic detail summaries
+  return timelineItems.value
+})
 const selectedDigest = computed<TimelineDigestSelection | null>(() => {
   if (!selectedDigestId.value) return null
-  const digest = timelineItems.value.find(item => item.id === selectedDigestId.value)
-  if (!digest || !detail.value) return null
+  const digest = effectiveTimelineItems.value.find(item => item.id === selectedDigestId.value)
+  if (!digest) return null
 
+  // For hotspot digests, use hotspot tag to fetch matched articles
+  if (selectedHotspotTag.value && hotspotDigests.value.length > 0) {
+    const hotspotDigest = hotspotDigests.value.find(d => String(d.id) === selectedDigestId.value)
+    if (hotspotDigest) {
+      return {
+        ...digest,
+        matchedArticleIds: hotspotDigest.matched_articles?.map(a => a.id) || [],
+      }
+    }
+  }
+
+  // For topic detail digests, match against topic articles
+  if (!detail.value) return null
   const topicArticleIds = new Set(detail.value.articles.map(article => article.id))
   const matchedArticleIds = digest.articles
     .map(article => article.id)
@@ -176,11 +305,11 @@ const selectedDigest = computed<TimelineDigestSelection | null>(() => {
 })
 const previewDigest = computed(() => {
   if (!previewDigestId.value) return null
-  return timelineItems.value.find(item => item.id === previewDigestId.value) || null
+  return effectiveTimelineItems.value.find(item => item.id === previewDigestId.value) || null
 })
 const statCards = computed(() => ([
   { label: '主题数', value: viewModel.value.stats.topicCount },
-  { label: '总结数', value: viewModel.value.stats.summaryCount },
+  { label: '文章数', value: viewModel.value.stats.articleCount },
   { label: 'Feed 数', value: viewModel.value.stats.feedCount },
 ]))
 
@@ -195,6 +324,7 @@ const pageState = computed(() => {
 const selectedTopicInfo = computed(() => {
   if (detail.value?.topic) {
     return {
+      id: detail.value.topic.id,
       slug: detail.value.topic.slug,
       label: detail.value.topic.label,
       category: normalizeTopicCategory(detail.value.topic.category, detail.value.topic.kind),
@@ -207,11 +337,30 @@ const selectedTopicInfo = computed(() => {
   if (!topic) return null
 
     return {
+      id: topic.id ?? 0,
       slug: topic.slug,
       label: topic.label,
       category: normalizeTopicCategory(topic.category, topic.kind),
     }
 })
+
+async function loadHotspots() {
+  loadingHotspots.value = true
+  try {
+    const response = await topicGraphApi.getTopicsByCategory(selectedType.value, selectedDate.value)
+    if (response.success && response.data) {
+      hotspotData.value = response.data
+    } else {
+      console.error('Failed to load hotspots:', response.error)
+      hotspotData.value = null
+    }
+  } catch (error) {
+    console.error('Failed to load hotspots:', error)
+    hotspotData.value = null
+  } finally {
+    loadingHotspots.value = false
+  }
+}
 
 async function loadGraph() {
   loadingGraph.value = true
@@ -240,6 +389,9 @@ async function loadGraph() {
     } else {
       detail.value = null
     }
+
+    // Load hotspot data in parallel
+    void loadHotspots()
   } catch (error) {
     console.error('Failed to load topic graph:', error)
     notice.value = error instanceof Error ? error.message : '主题图谱加载失败'
@@ -280,10 +432,53 @@ async function loadTopicDetail(slug: string) {
   }
 }
 
-function handleTagSelect(slug: string, category: TopicCategory) {
+async function handleTagSelect(slug: string, category: TopicCategory) {
   selectedCategory.value = category
   selectedTopicSlug.value = slug
+
+  // Find the tag label from hotspot data
+  let tagLabel = slug
+  const allTags = [
+    ...(hotspotData.value?.events || []),
+    ...(hotspotData.value?.people || []),
+    ...(hotspotData.value?.keywords || []),
+  ]
+  const foundTag = allTags.find(t => t.slug === slug)
+  if (foundTag) {
+    tagLabel = foundTag.label
+  }
+
+  // Update selected hotspot tag
+  selectedHotspotTag.value = { slug, label: tagLabel, category }
+
+  // Load digests for this tag (reverse trace: tag -> articles -> digests)
+  await loadHotspotDigests(slug)
+
+  // Also load topic detail for the sidebar
   void loadTopicDetail(slug)
+}
+
+async function loadHotspotDigests(tagSlug: string) {
+  loadingHotspotDigests.value = true
+  try {
+    const response = await topicGraphApi.getDigestsByArticleTag(
+      tagSlug,
+      selectedType.value,
+      selectedDate.value,
+      20
+    )
+    if (response.success && response.data) {
+      hotspotDigests.value = response.data.digests
+    } else {
+      hotspotDigests.value = []
+      console.error('Failed to load hotspot digests:', response.error)
+    }
+  } catch (error) {
+    console.error('Failed to load hotspot digests:', error)
+    hotspotDigests.value = []
+  } finally {
+    loadingHotspotDigests.value = false
+  }
 }
 
 function handleNodeClick(node: { slug?: string; kind: string; category?: TopicCategory }) {
@@ -623,7 +818,7 @@ watch(selectedTopicSlug, () => {
   clearAIAnalysisPolling()
 })
 
-watch(timelineItems, (items) => {
+watch(effectiveTimelineItems, (items) => {
   if (!items.length) {
     selectedDigestId.value = null
     previewDigestId.value = null
@@ -722,16 +917,83 @@ await loadGraph()
                       <div class="topic-category-header" :class="category.headerClass">
                         <Icon :icon="category.icon" width="14" />
                         <span>{{ category.label }}</span>
+                        <span class="topic-count">({{ category.topics.length }})</span>
                       </div>
 
-                      <div class="topic-category-tags mt-3">
+                        <!-- Search Input -->
+                      <div :ref="el => { if (el) hotspotSearchRefs[category.key] = el as HTMLDivElement }" class="topic-search-wrapper mt-3">
+                        <div class="topic-search-input-wrapper" @click="hotspotDropdownOpen[category.key] = true">
+                          <Icon icon="mdi:magnify" width="14" class="topic-search-icon" />
+                          <input
+                            v-model="hotspotSearchQueries[category.key]"
+                            type="text"
+                            class="topic-search-input"
+                            placeholder="搜索..."
+                            @focus="hotspotDropdownOpen[category.key] = true"
+                          />
+                          <button
+                            v-if="hotspotSearchQueries[category.key]"
+                            class="topic-search-clear"
+                            @click.stop="hotspotSearchQueries[category.key] = ''"
+                          >
+                            <Icon icon="mdi:close" width="12" />
+                          </button>
+                        </div>
+
+                        <!-- Dropdown -->
+                        <div
+                          v-if="hotspotDropdownOpen[category.key] && category.filteredTopics.length > 0"
+                          class="topic-search-dropdown"
+                          @mousedown.prevent
+                        >
+                          <div class="topic-dropdown-scroll">
+                            <button
+                              v-for="topic in category.displayTopics"
+                              :key="topic.slug"
+                              type="button"
+                              class="topic-dropdown-item"
+                              :class="{
+                                'topic-dropdown-item--active': selectedTopicSlug === topic.slug,
+                              }"
+                              @click="handleTagSelect(topic.slug, normalizeTopicCategory(topic.category, topic.kind)); hotspotDropdownOpen[category.key] = false"
+                            >
+                              <Icon v-if="topic.icon" :icon="topic.icon" width="14" />
+                              <span>{{ topic.label }}</span>
+                            </button>
+                          </div>
+                          <button
+                            v-if="category.hasMore"
+                            class="topic-dropdown-toggle"
+                            @click="toggleShowAll(category.key)"
+                          >
+                            <Icon :icon="category.showAll ? 'mdi:chevron-up' : 'mdi:chevron-down'" width="16" />
+                            {{ category.showAll ? '收起' : `显示全部 (${category.filteredTopics.length})` }}
+                          </button>
+                        </div>
+
+                        <!-- No Results -->
+                        <div
+                          v-if="hotspotDropdownOpen[category.key] && hotspotSearchQueries[category.key] && category.filteredTopics.length === 0"
+                          class="topic-search-no-results"
+                        >
+                          未找到匹配的结果
+                          <button
+                            class="topic-dropdown-close"
+                            @click.stop="closeHotspotDropdown(category.key)"
+                          >
+                            关闭
+                          </button>
+                        </div>
+                      </div>
+
+                      <!-- Quick Tags (show top 5 without search) -->
+                      <div v-if="!hotspotSearchQueries[category.key]" class="topic-quick-tags mt-3">
                         <button
-                          v-for="topic in category.topics"
+                          v-for="topic in category.topics.slice(0, 5)"
                           :key="topic.slug"
                           type="button"
                           class="topic-badge text-left"
-                          data-testid="topic-badge"
-                        :class="{
+                          :class="{
                             'topic-badge--event': normalizeTopicCategory(topic.category, topic.kind) === 'event',
                             'topic-badge--person': normalizeTopicCategory(topic.category, topic.kind) === 'person',
                             'topic-badge--keyword': normalizeTopicCategory(topic.category, topic.kind) === 'keyword',
@@ -741,6 +1003,13 @@ await loadGraph()
                         >
                           <Icon v-if="topic.icon" :icon="topic.icon" width="14" />
                           {{ topic.label }}
+                        </button>
+                        <button
+                          v-if="category.topics.length > 5"
+                          class="topic-more-hint"
+                          @click="hotspotSearchQueries[category.key] = ''; hotspotDropdownOpen[category.key] = true"
+                        >
+                          +{{ category.topics.length - 5 }} 更多
                         </button>
                       </div>
                     </section>
@@ -758,9 +1027,9 @@ await loadGraph()
 
           <!-- Timeline Section -->
           <article class="topic-timeline-shell rounded-[34px] p-4 md:p-5">
-            <TopicTimeline
+<TopicTimeline
                 :selected-topic="selectedTopicInfo"
-                :items="timelineItems"
+                :items="effectiveTimelineItems"
                 :filters="timelineFilters"
                 :active-digest-id="selectedDigestId"
                 :ai-analysis-status="aiAnalysisStatus"
@@ -786,6 +1055,7 @@ await loadGraph()
             :error="notice"
             :data-state="detail ? 'detail' : (loadingDetail ? 'loading' : 'empty')"
             :selected-keyword="selectedKeywordSlug"
+            :selected-tag-slug="selectedHotspotTag?.slug"
             @open-article="openArticlePreview"
             @highlight-keyword="handleKeywordHighlight"
           />
@@ -1175,5 +1445,218 @@ await loadGraph()
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
+}
+
+/* Hotspot Search Styles */
+.topic-search-wrapper {
+  position: relative;
+  width: 100%;
+}
+
+.topic-search-input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  padding: 0.35rem 0.75rem;
+  transition: all 0.2s ease;
+}
+
+.topic-search-input-wrapper:focus-within {
+  border-color: rgba(240, 138, 75, 0.5);
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.topic-search-icon {
+  color: rgba(255, 255, 255, 0.4);
+  flex-shrink: 0;
+}
+
+.topic-search-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 0.8rem;
+  padding: 0 0.5rem;
+  min-width: 0;
+}
+
+.topic-search-input::placeholder {
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.topic-search-clear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.topic-search-clear:hover {
+  background: rgba(255, 255, 255, 0.2);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.topic-search-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  background: rgba(22, 28, 38, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 0.5rem;
+  max-height: 400px;
+  display: flex;
+  flex-direction: column;
+  z-index: 50;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(20px);
+}
+
+.topic-dropdown-scroll {
+  overflow-y: auto;
+  max-height: 320px;
+  padding-right: 0.25rem;
+}
+
+.topic-dropdown-scroll::-webkit-scrollbar {
+  width: 4px;
+}
+
+.topic-dropdown-scroll::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 2px;
+}
+
+.topic-dropdown-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 2px;
+}
+
+.topic-dropdown-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.topic-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.6rem 0.75rem;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 0.82rem;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.topic-dropdown-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.topic-dropdown-item--active {
+  background: rgba(240, 138, 75, 0.2) !important;
+  color: rgba(255, 235, 220, 0.95) !important;
+}
+
+.topic-dropdown-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  width: 100%;
+  padding: 0.6rem 0.75rem;
+  margin-top: 0.35rem;
+  border-radius: 8px;
+  border: none;
+  background: rgba(240, 138, 75, 0.15);
+  color: rgba(255, 220, 200, 0.85);
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.topic-dropdown-toggle:hover {
+  background: rgba(240, 138, 75, 0.25);
+  color: rgba(255, 235, 220, 0.95);
+}
+
+.topic-search-no-results {
+  padding: 1rem;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 0.8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.topic-dropdown-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.4rem 0.9rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  align-self: center;
+}
+
+.topic-dropdown-close:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.topic-quick-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.topic-more-hint {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.4rem 0.75rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 0.75rem;
+  border: none;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.topic-more-hint:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.topic-count {
+  margin-left: 0.5rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 0.7rem;
 }
 </style>

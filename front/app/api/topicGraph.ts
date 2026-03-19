@@ -38,7 +38,7 @@ export interface GraphNode {
   category?: TopicCategory
   icon?: string
   weight: number
-  summary_count?: number
+  article_count?: number
   color?: string
   feed_name?: string
   category_name?: string
@@ -61,7 +61,7 @@ export interface TopicGraphPayload {
   nodes: GraphNode[]
   edges: TopicGraphEdge[]
   topic_count: number
-  summary_count: number
+  article_count: number
   feed_count: number
   top_topics: TopicTag[]
 }
@@ -70,6 +70,26 @@ export interface TopicsByCategoryPayload {
   events: TopicTag[]
   people: TopicTag[]
   keywords: TopicTag[]
+}
+
+export interface HotspotDigestCard {
+  id: number
+  title: string
+  summary: string
+  feed_name: string
+  feed_color: string
+  category_name: string
+  article_count: number
+  created_at: string
+  matched_articles?: Array<{
+    id: number
+    title: string
+  }>
+}
+
+export interface HotspotDigestsResponse {
+  digests: HotspotDigestCard[]
+  total: number
 }
 
 export interface TopicGraphSummaryCard {
@@ -238,6 +258,14 @@ export function useTopicGraphApi() {
 
     async getTopicsByCategory(type: TopicGraphType, date?: string) {
       return apiClient.get<TopicsByCategoryPayload>(withQuery('/topic-graph/by-category', { type, date }))
+    },
+
+    async getDigestsByArticleTag(slug: string, type: TopicGraphType, date?: string, limit?: number) {
+      return apiClient.get<HotspotDigestsResponse>(withQuery(`/topic-graph/tag/${slug}/digests`, {
+        type,
+        date,
+        limit: limit ? String(limit) : undefined,
+      }))
     },
 
     async getTopicArticles(params: GetTopicArticlesParams) {

@@ -159,13 +159,13 @@ func SetupRoutes(r *gin.Engine) {
 
 		topicGraph := api.Group("/topic-graph")
 		{
-			analysisService := topicgraphdomain.GetAnalysisService(database.DB)
-			topicgraphdomain.RegisterAnalysisRoutes(topicGraph, analysisService)
 			topicGraph.GET("/:type", topicgraphdomain.GetTopicGraph)
 			topicGraph.GET("/topic/:slug", topicgraphdomain.GetTopicDetail)
-			topicGraph.GET("/topic/:slug/articles", topicgraphdomain.GetTopicArticles)
 			topicGraph.GET("/by-category", topicgraphdomain.GetTopicsByCategory)
+			topicGraph.GET("/tag/:slug/digests", topicgraphdomain.GetDigestsByArticleTagHandler)
+			topicGraph.GET("/topic/:slug/articles", topicgraphdomain.GetTopicArticles)
 		}
+		topicgraphdomain.RegisterAnalysisRoutes(topicGraph, topicgraphdomain.GetAnalysisService(database.DB))
 
 		digestGroup := api.Group("/digest")
 		{

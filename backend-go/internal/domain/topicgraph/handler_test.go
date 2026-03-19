@@ -73,6 +73,25 @@ func seedTopicGraphData(t *testing.T) {
 	for _, summary := range summaries {
 		require.NoError(t, database.DB.Create(&summary).Error)
 	}
+
+	// Create topic tags for articles
+	topicTags := []models.TopicTag{
+		{Label: "AI Agent", Slug: "ai-agent", Category: models.TagCategoryKeyword, Kind: "keyword"},
+		{Label: "OpenAI", Slug: "openai", Category: models.TagCategoryKeyword, Kind: "keyword"},
+	}
+	for i := range topicTags {
+		require.NoError(t, database.DB.Create(&topicTags[i]).Error)
+	}
+
+	// Link articles to topic tags (source='llm' to match the query filter)
+	articleTopicTags := []models.ArticleTopicTag{
+		{ArticleID: articles[0].ID, TopicTagID: topicTags[0].ID, Score: 1.0, Source: "llm"},
+		{ArticleID: articles[0].ID, TopicTagID: topicTags[1].ID, Score: 0.8, Source: "llm"},
+		{ArticleID: articles[1].ID, TopicTagID: topicTags[0].ID, Score: 0.9, Source: "llm"},
+	}
+	for i := range articleTopicTags {
+		require.NoError(t, database.DB.Create(&articleTopicTags[i]).Error)
+	}
 }
 
 func seedTopicArticlesData(t *testing.T) {
@@ -144,7 +163,8 @@ func TestGetTopicGraphReturnsNodesAndEdges(t *testing.T) {
 
 	var persistedCount int64
 	require.NoError(t, database.DB.Model(&models.TopicTag{}).Count(&persistedCount).Error)
-	require.Equal(t, int64(0), persistedCount)
+	// TopicTags are pre-created in seedTopicGraphData for article-topic associations
+	require.Equal(t, int64(2), persistedCount)
 }
 
 func TestGetTopicDetailReturnsHistoryAndSummaries(t *testing.T) {

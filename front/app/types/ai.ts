@@ -306,6 +306,7 @@ export interface AIAnalysisResult {
  * Topic info for AI analysis
  */
 export interface TopicInfo {
+  id: number
   slug: string
   label: string
   category: TopicCategoryType

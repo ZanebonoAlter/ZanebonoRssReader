@@ -23,7 +23,7 @@ export interface TopicGraphViewModel {
     heroLabel: string
     heroSubline: string
     topicCount: string
-    summaryCount: string
+    articleCount: string
     feedCount: string
   }
   topTopics: TopicTag[]
@@ -125,7 +125,7 @@ export function buildTopicGraphViewModel(payload: TopicGraphPayload): TopicGraph
       heroLabel: hero?.label || '还没有图谱',
       heroSubline: hero ? `${payload.period_label} 里最活跃的话题` : '先生成一些 AI 总结，图谱才会长出来。',
       topicCount: String(payload.topic_count ?? 0),
-      summaryCount: String(payload.summary_count ?? 0),
+      articleCount: String(payload.article_count ?? 0),
       feedCount: String(payload.feed_count ?? 0),
     },
     topTopics,

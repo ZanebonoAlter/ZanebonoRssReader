@@ -66,7 +66,7 @@ type GraphNode struct {
 	Icon         string  `json:"icon,omitempty"`
 	Kind         string  `json:"kind"` // "topic" or "feed" (for backward compat)
 	Weight       float64 `json:"weight"`
-	SummaryCount int     `json:"summary_count,omitempty"`
+	ArticleCount int     `json:"article_count,omitempty"`
 	Color        string  `json:"color,omitempty"`
 	FeedName     string  `json:"feed_name,omitempty"`
 	CategoryName string  `json:"category_name,omitempty"`
@@ -148,7 +148,7 @@ type TopicGraphResponse struct {
 	Nodes        []GraphNode `json:"nodes"`
 	Edges        []GraphEdge `json:"edges"`
 	TopicCount   int         `json:"topic_count"`
-	SummaryCount int         `json:"summary_count"`
+	ArticleCount int         `json:"article_count"`
 	FeedCount    int         `json:"feed_count"`
 	TopTopics    []TopicTag  `json:"top_topics"`
 }

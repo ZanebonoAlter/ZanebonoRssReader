@@ -297,6 +297,8 @@ func (s *AutoSummaryScheduler) runSummaryCycle(triggerSource string) {
 	s.updateSchedulerStatus("idle", "", &startTime, summary)
 }
 
+const maxArticlesPerSummary = 80
+
 func (s *AutoSummaryScheduler) generateSummaryForFeed(feed *models.Feed) (bool, error) {
 	if s.aiConfig == nil {
 		return false, fmt.Errorf("AI config not set")
@@ -323,15 +325,6 @@ func (s *AutoSummaryScheduler) generateSummaryForFeed(feed *models.Feed) (bool, 
 
 	log.Printf("Found %d articles for feed %d", len(articles), feed.ID)
 
-	articleTexts := make([]string, 0, len(articles))
-	for i, article := range articles {
-		if i >= 80 {
-			break
-		}
-
-		articleTexts = append(articleTexts, buildAutoSummaryArticleText(article))
-	}
-
 	feedName := feed.Title
 	if feedName == "" {
 		feedName = "Unknown feed"
@@ -342,70 +335,107 @@ func (s *AutoSummaryScheduler) generateSummaryForFeed(feed *models.Feed) (bool, 
 		categoryName = feed.Category.Name
 	}
 
-	title := feedName + " - " + time.Now().Format("2006-01-02 15:04") + " News Summary"
-	articlesText := joinStrings(articleTexts, "\n---\n")
+	batches := chunkArticles(articles, maxArticlesPerSummary)
+	totalBatches := len(batches)
+	allArticleIDs := make([]uint, 0, len(articles))
 
-	preferenceService := preferences.NewPreferenceService(database.DB)
-	promptBuilder := summaries.NewAISummaryPromptBuilder(preferenceService, database.DB)
-	summaryPrompt, promptContext, err := promptBuilder.BuildPersonalizedPrompt(feedName, categoryName, articlesText, len(articles), "en")
-	if err != nil {
-		return false, fmt.Errorf("failed to build prompt: %w", err)
+	for batchIndex, batch := range batches {
+		batchNum := batchIndex + 1
+		log.Printf("Processing batch %d/%d with %d articles for feed %d", batchNum, totalBatches, len(batch), feed.ID)
+
+		articleTexts := make([]string, 0, len(batch))
+		for _, article := range batch {
+			articleTexts = append(articleTexts, buildAutoSummaryArticleText(article))
+		}
+
+		title := feedName + " - " + time.Now().Format("2006-01-02 15:04")
+		if totalBatches > 1 {
+			title = fmt.Sprintf("%s (Part %d/%d)", title, batchNum, totalBatches)
+		}
+		title = title + " News Summary"
+
+		articlesText := joinStrings(articleTexts, "\n---\n")
+
+		preferenceService := preferences.NewPreferenceService(database.DB)
+		promptBuilder := summaries.NewAISummaryPromptBuilder(preferenceService, database.DB)
+		summaryPrompt, promptContext, err := promptBuilder.BuildPersonalizedPrompt(feedName, categoryName, articlesText, len(batch), "en")
+		if err != nil {
+			return false, fmt.Errorf("failed to build prompt: %w", err)
+		}
+
+		log.Printf(
+			"Auto summary prompt built for feed=%s batch=%d/%d personalized=%t preferred_feeds=%d preferred_categories=%d",
+			feedName, batchNum, totalBatches,
+			promptContext.Personalized,
+			promptContext.FeedCount,
+			promptContext.CategoryCount,
+		)
+
+		summaryText, err := s.callAI(summaryPrompt)
+		if err != nil {
+			return false, fmt.Errorf("AI API call failed: %w", err)
+		}
+
+		batchArticleIDs := make([]uint, len(batch))
+		for i, article := range batch {
+			batchArticleIDs[i] = article.ID
+		}
+		allArticleIDs = append(allArticleIDs, batchArticleIDs...)
+		articleIDsJSON, _ := json.Marshal(batchArticleIDs)
+
+		var categoryID *uint
+		if feed.CategoryID != nil {
+			catIDVal := *feed.CategoryID
+			categoryID = &catIDVal
+		}
+
+		aiSummary := models.AISummary{
+			FeedID:       &feed.ID,
+			CategoryID:   categoryID,
+			Title:        title,
+			Summary:      summaryText,
+			Articles:     string(articleIDsJSON),
+			ArticleCount: len(batch),
+			TimeRange:    timeRange,
+		}
+
+		if err := database.DB.Create(&aiSummary).Error; err != nil {
+			return false, fmt.Errorf("failed to save summary: %w", err)
+		}
+
+		if err := topicgraph.TagSummary(&aiSummary); err != nil {
+			log.Printf("[WARN] Failed to tag auto summary %d: %v", aiSummary.ID, err)
+		}
+
+		if err := topicgraph.EnqueueTopicAnalysisForSummary(uint64(aiSummary.ID), topicgraph.AnalysisPriorityMedium, database.DB); err != nil {
+			log.Printf("[WARN] Failed to enqueue topic analysis for auto summary %d: %v", aiSummary.ID, err)
+		}
+
+		if err := topicgraph.TagArticles(batch, feedName, categoryName); err != nil {
+			log.Printf("[WARN] Failed to tag articles for feed %d batch %d: %v", feed.ID, batchNum, err)
+		}
+
+		log.Printf("Successfully generated summary for feed %d batch %d/%d (ID: %d)", feed.ID, batchNum, totalBatches, aiSummary.ID)
 	}
 
-	log.Printf(
-		"Auto summary prompt built for feed=%s personalized=%t preferred_feeds=%d preferred_categories=%d",
-		feedName,
-		promptContext.Personalized,
-		promptContext.FeedCount,
-		promptContext.CategoryCount,
-	)
-
-	summaryText, err := s.callAI(summaryPrompt)
-	if err != nil {
-		return false, fmt.Errorf("AI API call failed: %w", err)
-	}
-
-	articleIDs := make([]uint, len(articles))
-	for i, article := range articles {
-		articleIDs[i] = article.ID
-	}
-	articleIDsJSON, _ := json.Marshal(articleIDs)
-
-	var categoryID *uint
-	if feed.CategoryID != nil {
-		catIDVal := *feed.CategoryID
-		categoryID = &catIDVal
-	}
-
-	aiSummary := models.AISummary{
-		FeedID:       &feed.ID,
-		CategoryID:   categoryID,
-		Title:        title,
-		Summary:      summaryText,
-		Articles:     string(articleIDsJSON),
-		ArticleCount: len(articles),
-		TimeRange:    timeRange,
-	}
-
-	if err := database.DB.Create(&aiSummary).Error; err != nil {
-		return false, fmt.Errorf("failed to save summary: %w", err)
-	}
-
-	if err := topicgraph.TagSummary(&aiSummary); err != nil {
-		log.Printf("[WARN] Failed to tag auto summary %d: %v", aiSummary.ID, err)
-	}
-
-	if err := topicgraph.EnqueueTopicAnalysisForSummary(uint64(aiSummary.ID), topicgraph.AnalysisPriorityMedium, database.DB); err != nil {
-		log.Printf("[WARN] Failed to enqueue topic analysis for auto summary %d: %v", aiSummary.ID, err)
-	}
-
-	// Tag individual articles for granular topic tracking
-	if err := topicgraph.TagArticles(articles, feedName, categoryName); err != nil {
-		log.Printf("[WARN] Failed to tag articles for feed %d: %v", feed.ID, err)
-	}
-
-	log.Printf("Successfully generated and saved summary for feed %d (ID: %d)", feed.ID, aiSummary.ID)
+	log.Printf("Completed %d summary batches for feed %d, total %d articles", totalBatches, feed.ID, len(allArticleIDs))
 	return true, nil
+}
+
+func chunkArticles(articles []models.Article, chunkSize int) [][]models.Article {
+	if len(articles) <= chunkSize {
+		return [][]models.Article{articles}
+	}
+
+	chunks := make([][]models.Article, 0, (len(articles)+chunkSize-1)/chunkSize)
+	for i := 0; i < len(articles); i += chunkSize {
+		end := i + chunkSize
+		if end > len(articles) {
+			end = len(articles)
+		}
+		chunks = append(chunks, articles[i:end])
+	}
+	return chunks
 }
 
 func buildAutoSummaryArticleText(article models.Article) string {

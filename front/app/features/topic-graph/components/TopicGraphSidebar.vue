@@ -12,6 +12,7 @@ interface Props {
   error?: string | null
   dataState?: string
   selectedKeyword?: string | null
+  selectedTagSlug?: string | null
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -20,6 +21,7 @@ const props = withDefaults(defineProps<Props>(), {
   error: null,
   dataState: 'empty',
   selectedKeyword: null,
+  selectedTagSlug: null,
 })
 
 const emit = defineEmits<{
@@ -39,7 +41,18 @@ const deduplicatedArticles = computed(() => {
   const topicArticleIds = new Set(props.detail.articles.map(article => article.id))
   const matchedIds = new Set(props.selectedDigest.matchedArticleIds)
 
+  // 如果有选中的标签slug，只显示与该标签相关的文章
+  const hasSelectedTag = props.selectedTagSlug && props.selectedTagSlug.trim() !== ''
+
   return props.selectedDigest.articles
+    .filter(article => {
+      // 如果没有选中的标签，显示所有文章
+      if (!hasSelectedTag) return true
+
+      // 如果选中了标签，只显示与当前话题标签匹配的文章
+      // matchedIds 包含与当前标签相关的文章ID
+      return matchedIds.has(article.id) || topicArticleIds.has(article.id)
+    })
     .map(article => ({
       ...article,
       feedName: props.selectedDigest?.feedName || props.detail?.topic.label || '来源文章',

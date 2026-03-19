@@ -81,10 +81,9 @@ export const useAIAnalysisStore = defineStore('aiAnalysis', () => {
     })
 
     try {
-      // Get tag ID from topic (assuming it's stored somewhere)
-      // For now, we'll use the slug to get the analysis status
+      // Use the topic's id for the tagID
       const statusResponse = await api.getAnalysisStatus({
-        tagID: 0, // This should be the actual tag ID
+        tagID: topic.id,
         analysisType: topic.category as 'event' | 'person' | 'keyword',
         windowType: windowType.value,
         anchorDate: anchorDate.value,
@@ -128,7 +127,7 @@ export const useAIAnalysisStore = defineStore('aiAnalysis', () => {
 
       // If status is 'pending' or 'missing', start the analysis
       const rebuildResponse = await api.rebuildTopicAnalysis({
-        tagID: 0, // This should be the actual tag ID
+        tagID: topic.id,
         analysisType: topic.category as 'event' | 'person' | 'keyword',
         windowType: windowType.value,
         anchorDate: anchorDate.value,
@@ -173,7 +172,7 @@ export const useAIAnalysisStore = defineStore('aiAnalysis', () => {
 
     try {
       const response = await api.rebuildTopicAnalysis({
-        tagID: 0, // This should be the actual tag ID
+        tagID: topic.id,
         analysisType: topic.category as 'event' | 'person' | 'keyword',
         windowType: windowType.value,
         anchorDate: anchorDate.value,
@@ -236,7 +235,7 @@ export const useAIAnalysisStore = defineStore('aiAnalysis', () => {
 
     try {
       const response = await api.getAnalysisStatus({
-        tagID: 0, // This should be the actual tag ID
+        tagID: topic.id,
         analysisType: topic.category as 'event' | 'person' | 'keyword',
         windowType: windowType.value,
         anchorDate: anchorDate.value,

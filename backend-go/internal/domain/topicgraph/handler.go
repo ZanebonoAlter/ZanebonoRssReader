@@ -119,6 +119,43 @@ func GetTopicArticles(c *gin.Context) {
 	})
 }
 
+// GetDigestsByArticleTagHandler returns digests that contain articles with the given tag
+func GetDigestsByArticleTagHandler(c *gin.Context) {
+	tagSlug := c.Param("slug")
+	if tagSlug == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "tag slug is required"})
+		return
+	}
+
+	kind := c.DefaultQuery("type", "daily")
+	anchor, err := parseAnchorDate(c.Query("date"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	limit := 20
+	if l := c.Query("limit"); l != "" {
+		if parsed, err := parseIntParam(l, 1, 100); err == nil {
+			limit = parsed
+		}
+	}
+
+	digests, err := GetDigestsByArticleTag(tagSlug, kind, anchor, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": gin.H{
+			"digests": digests,
+			"total":   len(digests),
+		},
+	})
+}
+
 // parseIntParam parses an integer query parameter with bounds checking
 func parseIntParam(value string, min, max int) (int, error) {
 	var result int
