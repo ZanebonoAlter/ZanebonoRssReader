@@ -122,7 +122,7 @@ export const useApiStore = defineStore('api', () => {
         refreshError: feed.refresh_error,
         lastRefreshAt: feed.last_refresh_at,
         aiSummaryEnabled: feed.ai_summary_enabled !== undefined ? feed.ai_summary_enabled : true, // Default to true if not set
-        contentCompletionEnabled: feed.content_completion_enabled,
+        articleSummaryEnabled: feed.article_summary_enabled,
         completionOnRefresh: feed.completion_on_refresh,
         maxCompletionRetries: feed.max_completion_retries,
         firecrawlEnabled: feed.firecrawl_enabled,
@@ -190,7 +190,7 @@ export const useApiStore = defineStore('api', () => {
       max_articles?: number
       refresh_interval?: number
       ai_summary_enabled?: boolean
-      content_completion_enabled?: boolean
+      article_summary_enabled?: boolean
       completion_on_refresh?: boolean
       max_completion_retries?: number
       firecrawl_enabled?: boolean
@@ -266,9 +266,8 @@ export const useApiStore = defineStore('api', () => {
         category: article.category_id ? String(article.category_id) : '',
         read: article.read || false,
         favorite: article.favorite || false,
-        contentStatus: article.content_status,
-        fullContent: article.full_content,
-        contentFetchedAt: article.content_fetched_at,
+        summaryStatus: article.summary_status,
+        summaryGeneratedAt: article.summary_generated_at,
         completionAttempts: article.completion_attempts,
         completionError: article.completion_error,
         aiContentSummary: article.ai_content_summary,
@@ -480,6 +479,5 @@ export const useApiStore = defineStore('api', () => {
     initialize,
   }
 })
-
 
 

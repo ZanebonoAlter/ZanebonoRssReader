@@ -155,8 +155,8 @@ func (s *FirecrawlScheduler) checkAndCrawl() {
 				"firecrawl_content":    result.Data.Markdown,
 				"firecrawl_crawled_at": now,
 			}
-			if feed.ContentCompletionEnabled {
-				updates["content_status"] = "incomplete"
+			if feed.ArticleSummaryEnabled {
+				updates["summary_status"] = "incomplete"
 			}
 			database.DB.Model(&art).Updates(updates)
 

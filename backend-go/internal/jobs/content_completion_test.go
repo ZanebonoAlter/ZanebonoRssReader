@@ -29,11 +29,11 @@ func TestContentCompletionSchedulerGetStatusIncludesOverviewAndCurrentArticle(t 
 	setupSchedulersTestDB(t)
 
 	feed := models.Feed{
-		Title:                    "Feed",
-		URL:                      "https://feed.example/rss",
-		ContentCompletionEnabled: true,
-		FirecrawlEnabled:         true,
-		MaxCompletionRetries:     3,
+		Title:                 "Feed",
+		URL:                   "https://feed.example/rss",
+		ArticleSummaryEnabled: true,
+		FirecrawlEnabled:      true,
+		MaxCompletionRetries:  3,
 	}
 	if err := database.DB.Create(&feed).Error; err != nil {
 		t.Fatalf("create feed: %v", err)
@@ -44,7 +44,7 @@ func TestContentCompletionSchedulerGetStatusIncludesOverviewAndCurrentArticle(t 
 		Title:            "Queue me",
 		Link:             "https://feed.example/a1",
 		FirecrawlStatus:  "completed",
-		ContentStatus:    "incomplete",
+		SummaryStatus:    "incomplete",
 		FirecrawlContent: "ready",
 	}
 	if err := database.DB.Create(&article).Error; err != nil {

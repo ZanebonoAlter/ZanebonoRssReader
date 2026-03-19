@@ -41,11 +41,11 @@ func TestCompleteFeedArticlesRetriesFailedArticlesWhenTriggeredManually(t *testi
 	completionService.SetAICredentials(aiServer.URL, "token", "test-model")
 
 	feed := models.Feed{
-		Title:                    "Feed",
-		URL:                      "https://example.com/rss",
-		ContentCompletionEnabled: true,
-		FirecrawlEnabled:         true,
-		MaxCompletionRetries:     1,
+		Title:                 "Feed",
+		URL:                   "https://example.com/rss",
+		ArticleSummaryEnabled: true,
+		FirecrawlEnabled:      true,
+		MaxCompletionRetries:  1,
 	}
 	if err := database.DB.Create(&feed).Error; err != nil {
 		t.Fatalf("create feed: %v", err)
@@ -57,7 +57,7 @@ func TestCompleteFeedArticlesRetriesFailedArticlesWhenTriggeredManually(t *testi
 		Link:               "https://example.com/a1",
 		FirecrawlStatus:    "completed",
 		FirecrawlContent:   "body",
-		ContentStatus:      "failed",
+		SummaryStatus:      "failed",
 		CompletionAttempts: 1,
 		CompletionError:    "Max retries exceeded",
 	}
@@ -87,8 +87,8 @@ func TestCompleteFeedArticlesRetriesFailedArticlesWhenTriggeredManually(t *testi
 	if err := database.DB.First(&refreshed, article.ID).Error; err != nil {
 		t.Fatalf("reload article: %v", err)
 	}
-	if refreshed.ContentStatus != "complete" {
-		t.Fatalf("content status = %q, want complete", refreshed.ContentStatus)
+	if refreshed.SummaryStatus != "complete" {
+		t.Fatalf("summary status = %q, want complete", refreshed.SummaryStatus)
 	}
 	if refreshed.CompletionAttempts != 2 {
 		t.Fatalf("completion attempts = %d, want 2", refreshed.CompletionAttempts)

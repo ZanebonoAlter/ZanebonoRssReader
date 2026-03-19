@@ -171,13 +171,13 @@ backend-go/
 
 当前模型里已经明确出现这些新增能力字段：
 
-- `feeds.content_completion_enabled`
+- `feeds.article_summary_enabled`
 - `feeds.completion_on_refresh`
 - `feeds.max_completion_retries`
 - `feeds.firecrawl_enabled`
 - `articles.image_url`
-- `articles.content_status`
-- `articles.full_content`
+- `articles.summary_status`
+- `articles.summary_generated_at`
 - `articles.ai_content_summary`
 - `articles.firecrawl_status`
 - `articles.firecrawl_content`

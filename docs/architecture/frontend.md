@@ -81,7 +81,7 @@ front/
 `useApiStore()` 是前端数据主源。
 
 - 持有 `categories`、`feeds`、`allFeeds`、`articles`
-- 负责后端返回值到前端字段的映射
+- 负责后端返回值到前端字段的映射，例如 `article_summary_enabled -> articleSummaryEnabled`、`summary_status -> summaryStatus`
 - 负责增删改后重新拉取必要数据
 - 负责文章已读、收藏、批量已读等更新
 
@@ -100,6 +100,7 @@ front/
 - 前端 store 和组件内部统一用 `camelCase`
 - ID 在前端统一存成 `string`
 - 数字 ID 与字符串 ID 的转换只应发生在 API 边界或 store 映射层
+- 文章处理相关字段统一使用 `articleSummaryEnabled`、`summaryStatus`、`summaryGeneratedAt`
 
 ## 页面骨架
 

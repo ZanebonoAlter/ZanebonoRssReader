@@ -105,7 +105,7 @@ const errorHint = computed(() => props.article.completionError || props.article.
                     :icon="summaryMeta.icon"
                     width="12"
                     height="12"
-                    :class="{ 'animate-spin': article.contentStatus === 'pending' }"
+                    :class="{ 'animate-spin': article.summaryStatus === 'pending' }"
                   />
                   {{ summaryMeta.label }}
                 </span>

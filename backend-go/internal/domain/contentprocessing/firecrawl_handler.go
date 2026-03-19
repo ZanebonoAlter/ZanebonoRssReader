@@ -86,7 +86,7 @@ func CrawlArticle(c *gin.Context) {
 	article.FirecrawlStatus = "completed"
 	article.FirecrawlContent = result.Data.Markdown
 	article.FirecrawlError = ""
-	article.ContentStatus = "incomplete"
+	article.SummaryStatus = "incomplete"
 	now := time.Now()
 	article.FirecrawlCrawledAt = &now
 	database.DB.Save(&article)
@@ -96,7 +96,7 @@ func CrawlArticle(c *gin.Context) {
 		"data": gin.H{
 			"firecrawl_content": result.Data.Markdown,
 			"firecrawl_status":  "completed",
-			"content_status":    "incomplete",
+			"summary_status":    "incomplete",
 		},
 	})
 }

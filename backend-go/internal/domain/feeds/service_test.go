@@ -16,30 +16,30 @@ func TestBuildArticleFromEntryTracksOnlyRunnableStates(t *testing.T) {
 		Author:      "bot",
 	}
 
-	fullPipelineFeed := models.Feed{ID: 1, FirecrawlEnabled: true, ContentCompletionEnabled: true}
+	fullPipelineFeed := models.Feed{ID: 1, FirecrawlEnabled: true, ArticleSummaryEnabled: true}
 	fullPipelineArticle := service.buildArticleFromEntry(fullPipelineFeed, entry)
 	if fullPipelineArticle.FirecrawlStatus != "pending" {
 		t.Fatalf("firecrawl status = %q, want pending", fullPipelineArticle.FirecrawlStatus)
 	}
-	if fullPipelineArticle.ContentStatus != "incomplete" {
-		t.Fatalf("content status = %q, want incomplete", fullPipelineArticle.ContentStatus)
+	if fullPipelineArticle.SummaryStatus != "incomplete" {
+		t.Fatalf("summary status = %q, want incomplete", fullPipelineArticle.SummaryStatus)
 	}
 
-	manualOnlyFeed := models.Feed{ID: 2, FirecrawlEnabled: false, ContentCompletionEnabled: true}
+	manualOnlyFeed := models.Feed{ID: 2, FirecrawlEnabled: false, ArticleSummaryEnabled: true}
 	manualOnlyArticle := service.buildArticleFromEntry(manualOnlyFeed, entry)
 	if manualOnlyArticle.FirecrawlStatus != "" {
 		t.Fatalf("firecrawl status = %q, want empty", manualOnlyArticle.FirecrawlStatus)
 	}
-	if manualOnlyArticle.ContentStatus != "complete" {
-		t.Fatalf("content status = %q, want complete", manualOnlyArticle.ContentStatus)
+	if manualOnlyArticle.SummaryStatus != "complete" {
+		t.Fatalf("summary status = %q, want complete", manualOnlyArticle.SummaryStatus)
 	}
 
-	disabledFeed := models.Feed{ID: 3, FirecrawlEnabled: false, ContentCompletionEnabled: false}
+	disabledFeed := models.Feed{ID: 3, FirecrawlEnabled: false, ArticleSummaryEnabled: false}
 	disabledArticle := service.buildArticleFromEntry(disabledFeed, entry)
 	if disabledArticle.FirecrawlStatus != "" {
 		t.Fatalf("disabled firecrawl status = %q, want empty", disabledArticle.FirecrawlStatus)
 	}
-	if disabledArticle.ContentStatus != "complete" {
-		t.Fatalf("disabled content status = %q, want complete", disabledArticle.ContentStatus)
+	if disabledArticle.SummaryStatus != "complete" {
+		t.Fatalf("disabled summary status = %q, want complete", disabledArticle.SummaryStatus)
 	}
 }

@@ -49,12 +49,12 @@ func TestCompleteArticleWithForceUsesAIRouterRoute(t *testing.T) {
 		t.Fatalf("create route provider: %v", err)
 	}
 
-	feed := models.Feed{Title: "Feed", URL: fmt.Sprintf("https://example.com/%s", t.Name()), ContentCompletionEnabled: true, FirecrawlEnabled: true, MaxCompletionRetries: 2}
+	feed := models.Feed{Title: "Feed", URL: fmt.Sprintf("https://example.com/%s", t.Name()), ArticleSummaryEnabled: true, FirecrawlEnabled: true, MaxCompletionRetries: 2}
 	if err := database.DB.Create(&feed).Error; err != nil {
 		t.Fatalf("create feed: %v", err)
 	}
 
-	article := models.Article{FeedID: feed.ID, Title: "Need routing", Link: "https://example.com/a1", FirecrawlStatus: "completed", FirecrawlContent: "body", ContentStatus: "incomplete"}
+	article := models.Article{FeedID: feed.ID, Title: "Need routing", Link: "https://example.com/a1", FirecrawlStatus: "completed", FirecrawlContent: "body", SummaryStatus: "incomplete"}
 	if err := database.DB.Create(&article).Error; err != nil {
 		t.Fatalf("create article: %v", err)
 	}
@@ -68,8 +68,11 @@ func TestCompleteArticleWithForceUsesAIRouterRoute(t *testing.T) {
 	if err := database.DB.First(&refreshed, article.ID).Error; err != nil {
 		t.Fatalf("reload article: %v", err)
 	}
-	if refreshed.ContentStatus != "complete" {
-		t.Fatalf("content status = %q, want complete", refreshed.ContentStatus)
+	if refreshed.SummaryStatus != "complete" {
+		t.Fatalf("summary status = %q, want complete", refreshed.SummaryStatus)
+	}
+	if refreshed.SummaryGeneratedAt == nil {
+		t.Fatal("expected summary generated timestamp to be populated")
 	}
 	if refreshed.AIContentSummary == "" {
 		t.Fatal("expected AI content summary to be populated from router")
@@ -80,18 +83,18 @@ func TestGetOverviewCountsQueueState(t *testing.T) {
 	setupServicesTestDB(t)
 
 	feedEnabled := models.Feed{
-		Title:                    "Enabled Feed",
-		URL:                      "https://enabled.example/rss",
-		ContentCompletionEnabled: true,
-		FirecrawlEnabled:         true,
-		MaxCompletionRetries:     3,
+		Title:                 "Enabled Feed",
+		URL:                   "https://enabled.example/rss",
+		ArticleSummaryEnabled: true,
+		FirecrawlEnabled:      true,
+		MaxCompletionRetries:  3,
 	}
 	feedDisabled := models.Feed{
-		Title:                    "Disabled Feed",
-		URL:                      "https://disabled.example/rss",
-		ContentCompletionEnabled: false,
-		FirecrawlEnabled:         true,
-		MaxCompletionRetries:     3,
+		Title:                 "Disabled Feed",
+		URL:                   "https://disabled.example/rss",
+		ArticleSummaryEnabled: false,
+		FirecrawlEnabled:      true,
+		MaxCompletionRetries:  3,
 	}
 
 	if err := database.DB.Create(&feedEnabled).Error; err != nil {
@@ -103,13 +106,13 @@ func TestGetOverviewCountsQueueState(t *testing.T) {
 
 	now := time.Now()
 	articles := []models.Article{
-		{FeedID: feedEnabled.ID, Title: "eligible-1", Link: "https://a/1", FirecrawlStatus: "completed", ContentStatus: "incomplete", FirecrawlContent: "ready"},
-		{FeedID: feedEnabled.ID, Title: "eligible-2", Link: "https://a/2", FirecrawlStatus: "completed", ContentStatus: "incomplete", FirecrawlContent: "ready"},
-		{FeedID: feedEnabled.ID, Title: "processing", Link: "https://a/3", FirecrawlStatus: "completed", ContentStatus: "pending", FirecrawlContent: "ready"},
-		{FeedID: feedEnabled.ID, Title: "done", Link: "https://a/4", FirecrawlStatus: "completed", ContentStatus: "complete", ContentFetchedAt: &now},
-		{FeedID: feedEnabled.ID, Title: "failed", Link: "https://a/5", FirecrawlStatus: "completed", ContentStatus: "failed", CompletionError: "boom"},
-		{FeedID: feedEnabled.ID, Title: "waiting crawl", Link: "https://a/6", FirecrawlStatus: "pending", ContentStatus: "incomplete"},
-		{FeedID: feedDisabled.ID, Title: "feed disabled", Link: "https://a/7", FirecrawlStatus: "completed", ContentStatus: "incomplete", FirecrawlContent: "ready"},
+		{FeedID: feedEnabled.ID, Title: "eligible-1", Link: "https://a/1", FirecrawlStatus: "completed", SummaryStatus: "incomplete", FirecrawlContent: "ready"},
+		{FeedID: feedEnabled.ID, Title: "eligible-2", Link: "https://a/2", FirecrawlStatus: "completed", SummaryStatus: "incomplete", FirecrawlContent: "ready"},
+		{FeedID: feedEnabled.ID, Title: "processing", Link: "https://a/3", FirecrawlStatus: "completed", SummaryStatus: "pending", FirecrawlContent: "ready"},
+		{FeedID: feedEnabled.ID, Title: "done", Link: "https://a/4", FirecrawlStatus: "completed", SummaryStatus: "complete", SummaryGeneratedAt: &now},
+		{FeedID: feedEnabled.ID, Title: "failed", Link: "https://a/5", FirecrawlStatus: "completed", SummaryStatus: "failed", CompletionError: "boom"},
+		{FeedID: feedEnabled.ID, Title: "waiting crawl", Link: "https://a/6", FirecrawlStatus: "pending", SummaryStatus: "incomplete"},
+		{FeedID: feedDisabled.ID, Title: "feed disabled", Link: "https://a/7", FirecrawlStatus: "completed", SummaryStatus: "incomplete", FirecrawlContent: "ready"},
 	}
 
 	if err := database.DB.Create(&articles).Error; err != nil {

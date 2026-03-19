@@ -114,8 +114,8 @@ func (s *ContentCompletionScheduler) checkAndCompleteArticles() {
 	var articles []models.Article
 	err := database.DB.
 		Joins("JOIN feeds ON feeds.id = articles.feed_id").
-		Where("articles.firecrawl_status = ? AND articles.content_status = ?", "completed", "incomplete").
-		Where("feeds.content_completion_enabled = ?", true).
+		Where("articles.firecrawl_status = ? AND articles.summary_status = ?", "completed", "incomplete").
+		Where("feeds.article_summary_enabled = ?", true).
 		Preload("Feed").
 		Limit(50).
 		Find(&articles).Error
