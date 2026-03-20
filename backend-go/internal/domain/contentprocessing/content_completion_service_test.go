@@ -1,6 +1,7 @@
 package contentprocessing
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -240,5 +241,142 @@ func TestCompleteArticleWithForceRetriesUntilMaxAndLogsMetadata(t *testing.T) {
 	}
 	if refreshed.CompletionAttempts != 2 {
 		t.Fatalf("completion attempts after second attempt = %d, want 2", refreshed.CompletionAttempts)
+	}
+}
+
+func TestCompleteArticleWithForceSkipsFreshPendingAndReclaimsStalePending(t *testing.T) {
+	setupServicesTestDB(t)
+
+	aiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"# Test\n\n- reclaimed"}}]}`))
+	}))
+	defer aiServer.Close()
+
+	provider := models.AIProvider{Name: "completion-primary", ProviderType: airouter.ProviderTypeOpenAICompatible, BaseURL: aiServer.URL, APIKey: "token", Model: "test-model", Enabled: true}
+	if err := database.DB.Create(&provider).Error; err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+	route := models.AIRoute{Name: airouter.DefaultRouteName, Capability: string(airouter.CapabilityArticleCompletion), Enabled: true, Strategy: "ordered_failover"}
+	if err := database.DB.Create(&route).Error; err != nil {
+		t.Fatalf("create route: %v", err)
+	}
+	if err := database.DB.Create(&models.AIRouteProvider{RouteID: route.ID, ProviderID: provider.ID, Priority: 1, Enabled: true}).Error; err != nil {
+		t.Fatalf("create route provider: %v", err)
+	}
+
+	feed := models.Feed{Title: "Feed", URL: fmt.Sprintf("https://example.com/%s", t.Name()), ArticleSummaryEnabled: true, FirecrawlEnabled: true, MaxCompletionRetries: 2}
+	if err := database.DB.Create(&feed).Error; err != nil {
+		t.Fatalf("create feed: %v", err)
+	}
+
+	now := time.Now().In(time.FixedZone("CST", 8*3600))
+	freshStartedAt := now.Add(-2 * time.Minute)
+	staleStartedAt := now.Add(-2 * time.Hour)
+
+	fresh := models.Article{FeedID: feed.ID, Title: "Fresh pending", Link: "https://example.com/fresh", FirecrawlStatus: "completed", FirecrawlContent: "body", SummaryStatus: "pending", SummaryProcessingStartedAt: &freshStartedAt}
+	if err := database.DB.Create(&fresh).Error; err != nil {
+		t.Fatalf("create fresh article: %v", err)
+	}
+	stale := models.Article{FeedID: feed.ID, Title: "Stale pending", Link: "https://example.com/stale", FirecrawlStatus: "completed", FirecrawlContent: "body", SummaryStatus: "pending", SummaryProcessingStartedAt: &staleStartedAt}
+	if err := database.DB.Create(&stale).Error; err != nil {
+		t.Fatalf("create stale article: %v", err)
+	}
+
+	service := NewContentCompletionService("http://localhost:11235")
+	if err := service.CompleteArticleWithForce(fresh.ID, false); err != nil {
+		t.Fatalf("fresh pending should be skipped without error: %v", err)
+	}
+	if err := service.CompleteArticleWithForce(stale.ID, false); err != nil {
+		t.Fatalf("stale pending should be reclaimed: %v", err)
+	}
+
+	var freshReloaded models.Article
+	if err := database.DB.First(&freshReloaded, fresh.ID).Error; err != nil {
+		t.Fatalf("reload fresh article: %v", err)
+	}
+	if freshReloaded.SummaryStatus != "pending" {
+		t.Fatalf("fresh status = %q, want pending", freshReloaded.SummaryStatus)
+	}
+	if freshReloaded.CompletionAttempts != 0 {
+		t.Fatalf("fresh completion attempts = %d, want 0", freshReloaded.CompletionAttempts)
+	}
+
+	var staleReloaded models.Article
+	if err := database.DB.First(&staleReloaded, stale.ID).Error; err != nil {
+		t.Fatalf("reload stale article: %v", err)
+	}
+	if staleReloaded.SummaryStatus != "complete" {
+		t.Fatalf("stale status = %q, want complete", staleReloaded.SummaryStatus)
+	}
+	if staleReloaded.CompletionAttempts != 1 {
+		t.Fatalf("stale completion attempts = %d, want 1", staleReloaded.CompletionAttempts)
+	}
+	if staleReloaded.SummaryProcessingStartedAt != nil {
+		t.Fatalf("stale summary_processing_started_at = %v, want nil after completion", staleReloaded.SummaryProcessingStartedAt)
+	}
+
+	var callLogs []models.AICallLog
+	if err := database.DB.Order("id ASC").Find(&callLogs).Error; err != nil {
+		t.Fatalf("load call logs: %v", err)
+	}
+	if len(callLogs) != 1 {
+		t.Fatalf("call log count = %d, want 1 for reclaimed stale article only", len(callLogs))
+	}
+}
+
+func TestCompleteArticleWithMetadataAddsSchedulerRunIDToCallLogs(t *testing.T) {
+	setupServicesTestDB(t)
+
+	aiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"# Test\n\n- ok"}}]}`))
+	}))
+	defer aiServer.Close()
+
+	provider := models.AIProvider{Name: "completion-primary", ProviderType: airouter.ProviderTypeOpenAICompatible, BaseURL: aiServer.URL, APIKey: "token", Model: "test-model", Enabled: true}
+	if err := database.DB.Create(&provider).Error; err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+	route := models.AIRoute{Name: airouter.DefaultRouteName, Capability: string(airouter.CapabilityArticleCompletion), Enabled: true, Strategy: "ordered_failover"}
+	if err := database.DB.Create(&route).Error; err != nil {
+		t.Fatalf("create route: %v", err)
+	}
+	if err := database.DB.Create(&models.AIRouteProvider{RouteID: route.ID, ProviderID: provider.ID, Priority: 1, Enabled: true}).Error; err != nil {
+		t.Fatalf("create route provider: %v", err)
+	}
+
+	feed := models.Feed{Title: "Feed", URL: fmt.Sprintf("https://example.com/%s", t.Name()), ArticleSummaryEnabled: true, FirecrawlEnabled: true, MaxCompletionRetries: 2}
+	if err := database.DB.Create(&feed).Error; err != nil {
+		t.Fatalf("create feed: %v", err)
+	}
+
+	article := models.Article{FeedID: feed.ID, Title: "Need run id", Link: "https://example.com/run-id", FirecrawlStatus: "completed", FirecrawlContent: "body", SummaryStatus: "incomplete"}
+	if err := database.DB.Create(&article).Error; err != nil {
+		t.Fatalf("create article: %v", err)
+	}
+
+	service := NewContentCompletionService("http://localhost:11235")
+	if err := service.CompleteArticleWithMetadata(article.ID, false, map[string]any{
+		"scheduler_run_id": "run-123",
+		"trigger_source":   "scheduler",
+	}); err != nil {
+		t.Fatalf("complete article with metadata: %v", err)
+	}
+
+	var callLog models.AICallLog
+	if err := database.DB.First(&callLog).Error; err != nil {
+		t.Fatalf("load call log: %v", err)
+	}
+
+	meta := map[string]any{}
+	if err := json.Unmarshal([]byte(callLog.RequestMeta), &meta); err != nil {
+		t.Fatalf("unmarshal request meta: %v", err)
+	}
+	if meta["scheduler_run_id"] != "run-123" {
+		t.Fatalf("scheduler_run_id = %v, want run-123", meta["scheduler_run_id"])
+	}
+	if meta["trigger_source"] != "scheduler" {
+		t.Fatalf("trigger_source = %v, want scheduler", meta["trigger_source"])
 	}
 }

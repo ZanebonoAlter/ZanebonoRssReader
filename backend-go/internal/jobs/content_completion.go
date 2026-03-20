@@ -29,6 +29,7 @@ type ContentCompletionScheduler struct {
 	lastExecutionTime *time.Time
 	lastRunSummary    *ContentCompletionRunSummary
 	mu                sync.RWMutex
+	executionMutex    sync.Mutex
 }
 
 type ContentCompletionRunSummary struct {
@@ -93,10 +94,7 @@ func (s *ContentCompletionScheduler) Stop() {
 }
 
 func (s *ContentCompletionScheduler) TriggerNow() map[string]interface{} {
-	s.mu.RLock()
-	isExecuting := s.isExecuting
-	s.mu.RUnlock()
-	if isExecuting {
+	if !s.executionMutex.TryLock() {
 		return map[string]interface{}{
 			"accepted":    false,
 			"started":     false,
@@ -106,7 +104,7 @@ func (s *ContentCompletionScheduler) TriggerNow() map[string]interface{} {
 		}
 	}
 
-	go s.checkAndCompleteArticles()
+	go s.runCompletionCycle("manual", nextContentCompletionRunID("manual"))
 	return map[string]interface{}{
 		"accepted": true,
 		"started":  true,
@@ -181,6 +179,17 @@ func (s *ContentCompletionScheduler) ResetStats() error {
 }
 
 func (s *ContentCompletionScheduler) checkAndCompleteArticles() {
+	if !s.executionMutex.TryLock() {
+		log.Println("Content completion scheduler already running, skipping this cycle")
+		return
+	}
+
+	s.runCompletionCycle("scheduled", nextContentCompletionRunID("scheduled"))
+}
+
+func (s *ContentCompletionScheduler) runCompletionCycle(triggerSource, runID string) {
+	defer s.executionMutex.Unlock()
+
 	var task models.SchedulerTask
 	if err := database.DB.Where("name = ?", s.taskName).First(&task).Error; err != nil {
 		log.Printf("Scheduler task not found: %v", err)
@@ -209,14 +218,7 @@ func (s *ContentCompletionScheduler) checkAndCompleteArticles() {
 	runSummary := &ContentCompletionRunSummary{
 		StartedAt: now.Format(time.RFC3339),
 	}
-	var articles []models.Article
-	err := database.DB.
-		Joins("JOIN feeds ON feeds.id = articles.feed_id").
-		Where("articles.firecrawl_status = ? AND articles.summary_status = ?", "completed", "incomplete").
-		Where("feeds.article_summary_enabled = ?", true).
-		Preload("Feed").
-		Limit(50).
-		Find(&articles).Error
+	articles, err := s.completionService.ListReadyArticles(50)
 	if err != nil {
 		task.Status = "error"
 		task.LastError = err.Error()
@@ -247,7 +249,10 @@ func (s *ContentCompletionScheduler) checkAndCompleteArticles() {
 			continue
 		}
 
-		if err := s.completionService.CompleteArticle(article.ID); err != nil {
+		if err := s.completionService.CompleteArticleWithMetadata(article.ID, false, map[string]any{
+			"scheduler_run_id": runID,
+			"trigger_source":   triggerSource,
+		}); err != nil {
 			errors = append(errors, fmt.Errorf("article %d: %w", article.ID, err))
 			runSummary.FailedCount++
 			appendRunError(runSummary, article.ID, err.Error(), classifyCompletionError(err.Error()))
@@ -305,6 +310,10 @@ func (s *ContentCompletionScheduler) checkAndCompleteArticles() {
 	s.mu.Lock()
 	s.lastRunSummary = runSummary
 	s.mu.Unlock()
+}
+
+func nextContentCompletionRunID(triggerSource string) string {
+	return fmt.Sprintf("content-completion-%s-%d", triggerSource, time.Now().UnixNano())
 }
 
 func (s *ContentCompletionScheduler) initSchedulerTask() {

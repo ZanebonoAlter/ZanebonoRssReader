@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"my-robot-backend/internal/platform/database"
 )
 
 func TestDigestSchedulerAutoSendToOpenNotebook(t *testing.T) {
@@ -60,4 +61,18 @@ func TestDigestSchedulerAutoSendToOpenNotebookSkipsWhenDisabled(t *testing.T) {
 
 	require.False(t, ok)
 	require.False(t, called)
+}
+
+func TestDigestSchedulerSkipsOverlappingDailyGeneration(t *testing.T) {
+	setupDigestHandlerTestDB(t)
+
+	scheduler := NewDigestScheduler()
+	scheduler.executionMutex.Lock()
+	defer scheduler.executionMutex.Unlock()
+
+	scheduler.generateDailyDigest()
+
+	var configCount int64
+	require.NoError(t, database.DB.Model(&DigestConfig{}).Count(&configCount).Error)
+	require.Equal(t, int64(0), configCount)
 }

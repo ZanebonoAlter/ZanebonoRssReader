@@ -46,6 +46,11 @@ type ContentCompletionBlockedReasons struct {
 	ReadyButMissingContentCount int `json:"ready_but_missing_content_count"`
 }
 
+const (
+	contentCompletionProcessingLease      = 30 * time.Minute
+	contentCompletionClockSkewGracePeriod = 2 * time.Minute
+)
+
 func NewContentCompletionService(crawlBaseURL string) *ContentCompletionService {
 	return &ContentCompletionService{
 		crawlClient: NewCrawl4AIClient(crawlBaseURL),
@@ -80,10 +85,14 @@ func (s *ContentCompletionService) IsContentIncomplete(article *models.Article) 
 }
 
 func (s *ContentCompletionService) CompleteArticle(articleID uint) error {
-	return s.CompleteArticleWithForce(articleID, false)
+	return s.CompleteArticleWithMetadata(articleID, false, nil)
 }
 
 func (s *ContentCompletionService) CompleteArticleWithForce(articleID uint, force bool) error {
+	return s.CompleteArticleWithMetadata(articleID, force, nil)
+}
+
+func (s *ContentCompletionService) CompleteArticleWithMetadata(articleID uint, force bool, metadata map[string]any) error {
 	var article models.Article
 	if err := database.DB.First(&article, articleID).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
@@ -112,6 +121,7 @@ func (s *ContentCompletionService) CompleteArticleWithForce(articleID uint, forc
 	if article.CompletionAttempts >= completionRetryLimit(&feed) && !force {
 		article.SummaryStatus = "failed"
 		article.CompletionError = "Max retries exceeded"
+		article.SummaryProcessingStartedAt = nil
 		database.DB.Save(&article)
 		return fmt.Errorf("max completion retries exceeded")
 	}
@@ -121,10 +131,18 @@ func (s *ContentCompletionService) CompleteArticleWithForce(articleID uint, forc
 		article.SummaryGeneratedAt = nil
 	}
 
-	article.SummaryStatus = "pending"
-	article.CompletionAttempts++
-	article.CompletionError = ""
-	database.DB.Save(&article)
+	now := currentCompletionTime()
+	claimed, err := s.claimArticleForCompletion(article.ID, force, now)
+	if err != nil {
+		return fmt.Errorf("claim article for completion: %w", err)
+	}
+	if !claimed {
+		return nil
+	}
+
+	if err := database.DB.First(&article, articleID).Error; err != nil {
+		return fmt.Errorf("failed to reload claimed article: %w", err)
+	}
 
 	if s.aiService == nil || s.aiService.BaseURL == "" || s.aiService.APIKey == "" {
 		if !s.hasRouteConfig() {
@@ -143,7 +161,7 @@ func (s *ContentCompletionService) CompleteArticleWithForce(articleID uint, forc
 		return fmt.Errorf("no firecrawl content available")
 	}
 
-	summary, err := s.summarizeContent(article.ID, article.FeedID, article.Title, contentToSummarize)
+	summary, err := s.summarizeContent(article.ID, article.FeedID, article.Title, contentToSummarize, metadata)
 	if err != nil {
 		if err := s.persistCompletionFailure(&article, &feed, err.Error()); err != nil {
 			return fmt.Errorf("persist completion failure: %w", err)
@@ -151,11 +169,12 @@ func (s *ContentCompletionService) CompleteArticleWithForce(articleID uint, forc
 		return fmt.Errorf("AI summarization failed: %w", err)
 	}
 
-	now := time.Now().In(time.FixedZone("CST", 8*3600))
+	now = currentCompletionTime()
 	article.AIContentSummary = formatAISummary(summary)
 	article.SummaryStatus = "complete"
 	article.CompletionError = ""
 	article.SummaryGeneratedAt = &now
+	article.SummaryProcessingStartedAt = nil
 
 	if err := database.DB.Save(&article).Error; err != nil {
 		return fmt.Errorf("failed to save article: %w", err)
@@ -165,15 +184,7 @@ func (s *ContentCompletionService) CompleteArticleWithForce(articleID uint, forc
 }
 
 func (s *ContentCompletionService) AutoCompletePendingArticles(limit int) ([]uint, []error) {
-	var articles []models.Article
-
-	err := database.DB.
-		Joins("JOIN feeds ON feeds.id = articles.feed_id").
-		Where("articles.firecrawl_status = ? AND articles.summary_status = ?", "completed", "incomplete").
-		Where("feeds.article_summary_enabled = ?", true).
-		Preload("Feed").
-		Limit(limit).
-		Find(&articles).Error
+	articles, err := s.ListReadyArticles(limit)
 
 	if err != nil {
 		return nil, []error{fmt.Errorf("failed to fetch articles: %w", err)}
@@ -195,6 +206,28 @@ func (s *ContentCompletionService) AutoCompletePendingArticles(limit int) ([]uin
 	}
 
 	return completedIDs, errors
+}
+
+func (s *ContentCompletionService) ListReadyArticles(limit int) ([]models.Article, error) {
+	var articles []models.Article
+	staleBefore := staleCompletionStartedBefore(currentCompletionTime())
+
+	query := database.DB.
+		Joins("JOIN feeds ON feeds.id = articles.feed_id").
+		Where("articles.firecrawl_status = ?", "completed").
+		Where("feeds.article_summary_enabled = ?", true).
+		Where("articles.summary_status = ? OR (articles.summary_status = ? AND (articles.summary_processing_started_at IS NULL OR articles.summary_processing_started_at <= ?))", "incomplete", "pending", staleBefore).
+		Preload("Feed")
+
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+
+	if err := query.Find(&articles).Error; err != nil {
+		return nil, err
+	}
+
+	return articles, nil
 }
 
 func (s *ContentCompletionService) CheckAndMarkIncompleteArticles(feedID uint) (int, error) {
@@ -275,11 +308,19 @@ func (s *ContentCompletionService) GetOverview() (*ContentCompletionOverview, er
 		item.assign(count)
 	}
 
-	overview.StaleProcessingCount = overview.ProcessingCount
+	staleBefore := staleCompletionStartedBefore(currentCompletionTime())
+	var staleCount int64
+	if err := database.DB.Model(&models.Article{}).
+		Where("summary_status = ?", "pending").
+		Where("summary_processing_started_at IS NULL OR summary_processing_started_at <= ?", staleBefore).
+		Count(&staleCount).Error; err != nil {
+		return nil, err
+	}
+	overview.StaleProcessingCount = int(staleCount)
 	overview.LiveProcessingCount = 0
 
 	var staleArticle models.Article
-	if err := database.DB.Where("summary_status = ?", "pending").Order("created_at ASC").First(&staleArticle).Error; err == nil {
+	if err := database.DB.Where("summary_status = ?", "pending").Where("summary_processing_started_at IS NULL OR summary_processing_started_at <= ?", staleBefore).Order("summary_processing_started_at ASC").Order("created_at ASC").First(&staleArticle).Error; err == nil {
 		overview.StaleProcessingArticle = ToArticleRef(staleArticle)
 	}
 
@@ -341,7 +382,16 @@ func (s *ContentCompletionService) hasRouteConfig() bool {
 	return err == nil && provider != nil && strings.TrimSpace(provider.APIKey) != ""
 }
 
-func (s *ContentCompletionService) summarizeContent(articleID uint, feedID uint, title, content string) (*platformai.AISummaryResponse, error) {
+func (s *ContentCompletionService) summarizeContent(articleID uint, feedID uint, title, content string, metadata map[string]any) (*platformai.AISummaryResponse, error) {
+	requestMeta := map[string]any{
+		"article_id": articleID,
+		"feed_id":    feedID,
+		"title":      title,
+	}
+	for key, value := range metadata {
+		requestMeta[key] = value
+	}
+
 	if s.router != nil {
 		maxTokens := 16000
 		result, err := s.router.Chat(context.Background(), airouter.ChatRequest{
@@ -351,11 +401,7 @@ func (s *ContentCompletionService) summarizeContent(articleID uint, feedID uint,
 				{Role: "user", Content: s.aiService.PrepareArticleContent(title, content)},
 			},
 			MaxTokens: &maxTokens,
-			Metadata: map[string]any{
-				"article_id": articleID,
-				"feed_id":    feedID,
-				"title":      title,
-			},
+			Metadata:  requestMeta,
 		})
 		if err == nil {
 			return platformai.ParseSummaryMarkdown(result.Content), nil
@@ -370,6 +416,7 @@ func (s *ContentCompletionService) summarizeContent(articleID uint, feedID uint,
 
 func (s *ContentCompletionService) persistCompletionFailure(article *models.Article, feed *models.Feed, message string) error {
 	article.CompletionError = message
+	article.SummaryProcessingStartedAt = nil
 	if article.CompletionAttempts >= completionRetryLimit(feed) {
 		article.SummaryStatus = "failed"
 	} else {
@@ -383,6 +430,41 @@ func completionRetryLimit(feed *models.Feed) int {
 		return 1
 	}
 	return feed.MaxCompletionRetries
+}
+
+func currentCompletionTime() time.Time {
+	return time.Now().In(time.FixedZone("CST", 8*3600))
+}
+
+func staleCompletionStartedBefore(now time.Time) time.Time {
+	return now.Add(-(contentCompletionProcessingLease + contentCompletionClockSkewGracePeriod))
+}
+
+func (s *ContentCompletionService) claimArticleForCompletion(articleID uint, force bool, now time.Time) (bool, error) {
+	updates := map[string]any{
+		"summary_status":                "pending",
+		"completion_error":              "",
+		"summary_processing_started_at": now,
+		"completion_attempts":           gorm.Expr("completion_attempts + 1"),
+	}
+	if force {
+		updates["ai_content_summary"] = ""
+		updates["summary_generated_at"] = nil
+	}
+
+	query := database.DB.Model(&models.Article{}).Where("id = ?", articleID)
+	if force {
+		query = query.Where("summary_status <> ? OR summary_processing_started_at IS NULL OR summary_processing_started_at <= ?", "pending", staleCompletionStartedBefore(now))
+	} else {
+		query = query.Where("summary_status = ? OR (summary_status = ? AND (summary_processing_started_at IS NULL OR summary_processing_started_at <= ?))", "incomplete", "pending", staleCompletionStartedBefore(now))
+	}
+
+	result := query.Updates(updates)
+	if result.Error != nil {
+		return false, result.Error
+	}
+
+	return result.RowsAffected > 0, nil
 }
 
 func ToArticleRef(article models.Article) *ContentCompletionArticleRef {

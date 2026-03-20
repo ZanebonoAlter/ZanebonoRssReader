@@ -35,10 +35,11 @@ func parseTime(timeStr string) (hour, minute int, err error) {
 }
 
 type DigestScheduler struct {
-	cron      *cron.Cron
-	isRunning bool
-	mu        sync.Mutex
-	config    *DigestConfig
+	cron           *cron.Cron
+	isRunning      bool
+	mu             sync.Mutex
+	executionMutex sync.Mutex
+	config         *DigestConfig
 }
 
 func NewDigestScheduler() *DigestScheduler {
@@ -254,6 +255,12 @@ func (s *DigestScheduler) generateDetailedDigestMessage(digests []CategoryDigest
 }
 
 func (s *DigestScheduler) generateDailyDigest() {
+	if !s.executionMutex.TryLock() {
+		log.Println("Digest generation already running, skipping daily cycle")
+		return
+	}
+	defer s.executionMutex.Unlock()
+
 	log.Println("Starting daily digest generation")
 
 	config, err := s.loadOrCreateConfig()
@@ -291,6 +298,12 @@ func (s *DigestScheduler) generateDailyDigest() {
 }
 
 func (s *DigestScheduler) generateWeeklyDigest() {
+	if !s.executionMutex.TryLock() {
+		log.Println("Digest generation already running, skipping weekly cycle")
+		return
+	}
+	defer s.executionMutex.Unlock()
+
 	log.Println("Starting weekly digest generation")
 
 	config, err := s.loadOrCreateConfig()

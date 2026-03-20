@@ -184,3 +184,34 @@ func TestContentCompletionSchedulerStartRepairsLegacyTaskRows(t *testing.T) {
 		t.Fatalf("legacy content_completion rows = %d, want 0", legacyCount)
 	}
 }
+
+func TestContentCompletionSchedulerSkipsCycleWhenAlreadyRunning(t *testing.T) {
+	setupSchedulersTestDB(t)
+
+	task := models.SchedulerTask{
+		Name:          "ai_summary",
+		Description:   "AI summarize Firecrawl content",
+		CheckInterval: 3600,
+		Status:        "idle",
+	}
+	if err := database.DB.Create(&task).Error; err != nil {
+		t.Fatalf("create scheduler task: %v", err)
+	}
+
+	scheduler := NewContentCompletionScheduler(contentprocessing.NewContentCompletionService("http://localhost:11235"), 60)
+	scheduler.executionMutex.Lock()
+	defer scheduler.executionMutex.Unlock()
+
+	scheduler.checkAndCompleteArticles()
+
+	var refreshed models.SchedulerTask
+	if err := database.DB.Where("name = ?", "ai_summary").First(&refreshed).Error; err != nil {
+		t.Fatalf("reload scheduler task: %v", err)
+	}
+	if refreshed.LastExecutionTime != nil {
+		t.Fatalf("last execution time = %v, want nil when cycle is skipped", refreshed.LastExecutionTime)
+	}
+	if refreshed.Status != "idle" {
+		t.Fatalf("status = %q, want idle when cycle is skipped", refreshed.Status)
+	}
+}

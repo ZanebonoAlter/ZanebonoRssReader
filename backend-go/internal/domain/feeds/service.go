@@ -66,7 +66,7 @@ func (s *FeedService) RefreshFeed(feedID uint) error {
 		}
 
 		var existingArticle models.Article
-		err := database.DB.Where("feed_id = ? AND link = ?", feed.ID, entry.Link).First(&existingArticle).Error
+		err := database.DB.Where("feed_id = ? AND title = ?", feed.ID, entry.Title).First(&existingArticle).Error
 		if err == nil {
 			continue
 		}

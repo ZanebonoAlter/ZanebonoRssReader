@@ -19,6 +19,7 @@ type FirecrawlScheduler struct {
 	checkInterval     int
 	stopChan          chan struct{}
 	wg                sync.WaitGroup
+	executionMutex    sync.Mutex
 	status            string
 	lastExecutionTime *time.Time
 	lastError         string
@@ -52,7 +53,17 @@ func (s *FirecrawlScheduler) Stop() {
 }
 
 func (s *FirecrawlScheduler) TriggerNow() map[string]interface{} {
-	go s.checkAndCrawl()
+	if !s.executionMutex.TryLock() {
+		return map[string]interface{}{
+			"accepted":    false,
+			"started":     false,
+			"reason":      "already_running",
+			"message":     "Firecrawl 正在执行中，稍后再试。",
+			"status_code": 409,
+		}
+	}
+
+	go s.runCrawlCycle()
 	return map[string]interface{}{
 		"accepted": true,
 		"started":  true,
@@ -96,6 +107,17 @@ func (s *FirecrawlScheduler) run() {
 }
 
 func (s *FirecrawlScheduler) checkAndCrawl() {
+	if !s.executionMutex.TryLock() {
+		log.Println("[Firecrawl] Scheduler already running, skipping this cycle")
+		return
+	}
+
+	s.runCrawlCycle()
+}
+
+func (s *FirecrawlScheduler) runCrawlCycle() {
+	defer s.executionMutex.Unlock()
+
 	startTime := time.Now()
 	s.status = "running"
 	s.lastExecutionTime = &startTime
