@@ -35,14 +35,17 @@ func NewPreferenceUpdateScheduler(checkInterval int) *PreferenceUpdateScheduler 
 
 func (s *PreferenceUpdateScheduler) Start() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	if s.running {
+		s.mu.Unlock()
 		return nil
 	}
 
 	s.running = true
 	s.wg.Add(1)
+	nextRun := time.Now().Add(time.Duration(s.checkInterval) * time.Second)
+	s.nextRun = &nextRun
+	s.mu.Unlock()
 
 	go func() {
 		defer s.wg.Done()
@@ -60,8 +63,6 @@ func (s *PreferenceUpdateScheduler) Start() error {
 			}
 		}
 	}()
-
-	s.updateNextRun(time.Now().Add(time.Duration(s.checkInterval) * time.Second))
 
 	log.Printf("Preference update scheduler started (interval: %d seconds)", s.checkInterval)
 	return nil

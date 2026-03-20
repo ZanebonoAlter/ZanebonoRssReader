@@ -5,6 +5,7 @@
 - 主阅读页：`/`
 - Digest 总览：`/digest`
 - Digest 单视图：`/digest/daily`、`/digest/weekly`
+- Topic Graph：`/topics`
 
 ## 主阅读页
 
@@ -190,3 +191,26 @@ Digest 设置支持：
 - WebSocket 只用于 AI 总结队列进度
 - Digest 详情里的文章弹窗直接复用主阅读组件
 - 文章内容源切换和 Firecrawl 状态已经进主阅读链路
+
+## Topic Graph
+
+Topic Graph 是独立页面，不走主阅读页三栏壳。
+
+### 页面能力
+
+- 支持 `daily / weekly` 切换
+- 支持按锚点日期刷新图谱
+- 支持 3D topic/feed 图谱浏览
+- 支持热点标签分组浏览（事件 / 人物 / 关键词）
+- 支持 topic 详情、相关标签、相关文章
+- 支持按标签反查相关 digest
+- 支持底部 AI analysis 面板与历史面板
+- 支持文章预览，且复用 `ArticleContentView`
+
+### 数据链路特点
+
+- 图谱主体、热点分类、topic detail 是分开拉取的
+- 点击热点标签后，时间线会优先切到反查 digest 结果
+- 底部 analysis 面板会按 topic 类型自动加载对应 analysis
+
+更完整的组件分层和数据流说明见 `docs/guides/topic-graph.md`。
