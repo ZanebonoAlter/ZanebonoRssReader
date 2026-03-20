@@ -74,6 +74,61 @@ func (s *AutoRefreshScheduler) Stop() {
 	log.Println("Auto-refresh scheduler stopped")
 }
 
+func (s *AutoRefreshScheduler) UpdateInterval(interval int) error {
+	if interval <= 0 {
+		return fmt.Errorf("interval must be positive")
+	}
+
+	wasRunning := s.isRunning
+	if wasRunning {
+		s.Stop()
+	}
+
+	s.cron = cron.New()
+	s.checkInterval = time.Duration(interval) * time.Second
+
+	if wasRunning {
+		if err := s.Start(); err != nil {
+			return err
+		}
+	}
+
+	var task models.SchedulerTask
+	if err := database.DB.Where("name = ?", "auto_refresh").First(&task).Error; err == nil {
+		nextRun := time.Now().Add(s.checkInterval)
+		database.DB.Model(&task).Updates(map[string]interface{}{
+			"check_interval":      interval,
+			"next_execution_time": &nextRun,
+		})
+	}
+
+	return nil
+}
+
+func (s *AutoRefreshScheduler) ResetStats() error {
+	var task models.SchedulerTask
+	if err := database.DB.Where("name = ?", "auto_refresh").First(&task).Error; err != nil {
+		return err
+	}
+
+	nextRun := time.Now().Add(s.checkInterval)
+	updates := map[string]interface{}{
+		"status":                  "idle",
+		"last_error":              "",
+		"last_error_time":         nil,
+		"total_executions":        0,
+		"successful_executions":   0,
+		"failed_executions":       0,
+		"consecutive_failures":    0,
+		"last_execution_time":     nil,
+		"last_execution_duration": nil,
+		"last_execution_result":   "",
+		"next_execution_time":     &nextRun,
+	}
+
+	return database.DB.Model(&task).Updates(updates).Error
+}
+
 func (s *AutoRefreshScheduler) checkAndRefreshFeeds() {
 	if !s.executionMutex.TryLock() {
 		log.Println("Auto-refresh scheduler already running, skipping this cycle")

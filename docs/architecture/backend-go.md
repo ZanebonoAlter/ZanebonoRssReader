@@ -2,19 +2,16 @@
 
 ## 先说结论
 
-后端现在已经完成了一轮目录归位。
+这份文档只描述当前 `backend-go/` 已经落地的真实结构，不再沿用旧的预期分层。
 
-当前真实结构已经是：
+当前后端可以直接按四层理解：
 
-- `backend-go/internal/app/`
-- `backend-go/internal/platform/`
-- `backend-go/internal/domain/`
-- `backend-go/internal/jobs/`
+- `cmd/`：启动入口和辅助命令
+- `internal/app/`：应用装配、路由注册、运行时启动与退出
+- `internal/platform/`：数据库、配置、AI 路由、WebSocket、共享基础设施
+- `internal/domain/` + `internal/jobs/`：业务域能力与后台调度执行壳
 
-所以这份文档现在主要讲两件事：
-
-1. 当前真实结构是什么
-2. 这套结构各自负责什么
+如果你发现文档和代码不一致，优先相信源码入口：`backend-go/cmd/server/main.go`、`backend-go/internal/app/router.go`、`backend-go/internal/app/runtime.go`。
 
 ## 技术栈
 
@@ -24,18 +21,17 @@
 - SQLite
 - Viper
 - Gorilla WebSocket
+- robfig/cron
 
 ## 当前真实入口
 
 - 服务入口：`backend-go/cmd/server/main.go`
 - 路由装配：`backend-go/internal/app/router.go`
-- 运行时装配：`backend-go/internal/app/runtime.go`
-- 运行时共享状态：`backend-go/internal/app/runtimeinfo/schedulers.go`
+- 运行时启动：`backend-go/internal/app/runtime.go`
+- 运行时共享引用：`backend-go/internal/app/runtimeinfo/schedulers.go`
 - 配置加载：`backend-go/internal/platform/config/config.go`
-- 数据库初始化：`backend-go/internal/platform/database/db.go`
+- 数据库初始化与表补丁：`backend-go/internal/platform/database/db.go`
 - 配置文件：`backend-go/configs/config.yaml`
-
-如果你要看“服务怎么启动起来”，优先看 `cmd/server` 和 `internal/app`，不要再只盯着 `main.go`。
 
 ## 当前目录现实
 
@@ -51,6 +47,7 @@ backend-go/
 │   ├── app/
 │   │   └── runtimeinfo/
 │   ├── domain/
+│   │   ├── aiadmin/
 │   │   ├── articles/
 │   │   ├── categories/
 │   │   ├── contentprocessing/
@@ -59,10 +56,10 @@ backend-go/
 │   │   ├── models/
 │   │   ├── preferences/
 │   │   ├── summaries/
-│   │   ├── topictypes/        # 共享类型和工具函数
-│   │   ├── topicgraph/        # 图谱查询和展示
-│   │   ├── topicanalysis/     # 分析队列和 AI 分析
-│   │   └── topicextraction/   # 标签提取和匹配
+│   │   ├── topicanalysis/
+│   │   ├── topicextraction/
+│   │   ├── topicgraph/
+│   │   └── topictypes/
 │   ├── jobs/
 │   └── platform/
 │       ├── ai/
@@ -71,233 +68,270 @@ backend-go/
 │       ├── config/
 │       ├── database/
 │       ├── middleware/
+│       ├── opennotebook/
 │       └── ws/
 ```
 
-## 这些目录现在各管什么
+## 分层职责
 
 ### `cmd/`
 
-- `server/` - HTTP 服务入口
-- `migrate-digest/` - digest 表迁移工具
-- `test-digest/` - digest 联调和测试入口
+- `server/`：HTTP 服务真实入口
+- `migrate-digest/`：digest 配置/表迁移命令
+- `migrate-tags/`：主题标签相关迁移命令
+- `test-digest/`：digest 联调入口
 
 ### `internal/app/`
 
-这是应用壳层。
+这是应用壳层，负责把平台能力、业务域和后台任务接起来。
 
-- `router.go` - 统一注册 HTTP 和 WebSocket 路由
-- `runtime.go` - 启动 jobs、装配运行时、处理优雅退出
-- `runtimeinfo/` - 暂存 scheduler 运行时引用，避免 job 和 domain 互相咬住
+- `router.go`：注册 HTTP API 和 WebSocket 路由
+- `runtime.go`：启动 scheduler、初始化内容补全服务、注册优雅退出
+- `runtimeinfo/`：临时保存运行时实例，给 handler 查询状态或触发任务
+
+这里要注意：`runtimeinfo` 还是过渡方案，它不是完整的 runtime container。
 
 ### `internal/platform/`
 
-平台能力统一归这层。
+这是共享基础设施层，不承载具体业务语义。
 
-- `config/` - 读取 `configs/config.yaml` 和默认值
-- `database/` - 数据库初始化、建表、字段补丁
-- `middleware/` - Gin 中间件
-- `ws/` - WebSocket hub
-- `ai/` - OpenAI 风格调用封装
-- `aisettings/` - 共享 AI / Firecrawl 配置读写
+- `config/`：读取 `configs/config.yaml`
+- `database/`：初始化 SQLite、建表、索引、字段补丁
+- `middleware/`：Gin 中间件，例如 CORS
+- `ws/`：WebSocket hub，给前端推送异步任务状态
+- `ai/`：AI 调用封装
+- `airouter/`：AI provider、capability route、failover 路由
+- `aisettings/`：兼容旧配置表的 AI / Firecrawl / Open Notebook 配置读写
+- `opennotebook/`：Open Notebook 客户端能力
 
 ### `internal/domain/`
 
-业务域都收进这里。一个功能需要的 handler、service、model helper，优先都在同域里找。
+业务能力按域组织，handler 和 service 主要都放在域目录里。
 
-- `categories/` - 分类管理
-- `feeds/` - 订阅管理、刷新、OPML
-- `articles/` - 文章列表、详情、状态更新
-- `summaries/` - AI 设置、自动摘要配置、摘要队列
-- `preferences/` - 阅读行为和偏好分析
-- `contentprocessing/` - 内容补全、抓取、Firecrawl 相关处理
-- `digest/` - digest 配置、生成器、导出器、手动运行
-- `models/` - 共享 GORM 模型和公共格式化 helper
-- `topictypes/` - 主题相关共享类型和工具函数（TopicTag、ExtractionInput 等）
-- `topicgraph/` - 图谱查询、展示、API handler
-- `topicanalysis/` - 分析队列、AI 分析器、嵌入向量服务
-- `topicextraction/` - 标签提取、解析、匹配
+- `aiadmin/`：AI provider 与 capability route 管理
+- `categories/`：分类 CRUD
+- `feeds/`：订阅 CRUD、刷新、OPML、RSS 解析
+- `articles/`：文章列表、详情、状态更新、统计
+- `summaries/`：摘要列表、单篇摘要、自动摘要配置、摘要队列
+- `preferences/`：阅读行为记录与偏好分析
+- `contentprocessing/`：内容补全、Firecrawl 配置与抓取、文章正文处理
+- `digest/`：digest 配置、预览、手动运行、导出、定时调度
+- `topictypes/`：主题图谱共享类型和窗口工具
+- `topicextraction/`：摘要/文章标签提取
+- `topicanalysis/`：主题分析任务与分析结果 API
+- `topicgraph/`：主题图谱、主题详情、主题相关文章查询
+- `models/`：共享 GORM 模型和部分格式化 helper
 
 ### `internal/jobs/`
 
-定时任务执行壳统一放这里。
+这里是调度外壳，不放完整业务，只负责定时触发和运行状态记录。
 
-- `auto_refresh.go`
-- `auto_summary.go`
-- `content_completion.go`
-- `firecrawl.go`
-- `preference_update.go`
-- `handler.go` - scheduler 状态和手动 trigger 接口
+- `auto_refresh.go`：扫描到点 feed 并异步触发刷新
+- `auto_summary.go`：按 feed 聚合近时间窗文章并生成 `ai_summaries`
+- `content_completion.go`：对 `firecrawl completed + summary incomplete` 的文章做内容补全
+- `firecrawl.go`：轮询待抓取文章并执行 Firecrawl
+- `preference_update.go`：阅读偏好更新任务
+- `handler.go`：部分 scheduler 状态查询与手动触发 API
 
-## 当前主要业务域
+## 当前主要子系统
 
-现在领域边界已经比之前清楚很多：
+### 订阅与文章
 
-- `categories` - 分类管理
-- `feeds` - 订阅管理和刷新
-- `articles` - 文章读取、状态更新、统计
-- `summaries` - AI 摘要和摘要队列
-- `preferences` - 阅读行为与偏好分析
-- `contentprocessing` - 内容补全、抓取、Firecrawl 开关与正文处理
-- `digest` - 每日/每周汇总、飞书、Obsidian
-- `topicgraph` + `topicanalysis` + `topicextraction` - 主题图谱（标签提取、分析、查询展示）
-- `platform/airouter` - AI 路由和 provider 管理
-- `platform/ws` - WebSocket 进度推送
+`feeds` 和 `articles` 是基础数据面。
 
-### 主题图谱子系统
+- feed 刷新负责拉 RSS、去重、入库 article
+- article 记录承接后续 Firecrawl、内容补全、摘要、主题分析
+- feed 上的 `firecrawl_enabled`、`article_summary_enabled` 会直接影响文章入库后的状态初始化
 
-主题图谱功能已拆分为三个子域，共享类型集中在 `topictypes` 包：
+### AI 与内容增强
 
-#### 目录结构
+这部分不再只是一个“AI 摘要开关”，而是三层叠加：
 
-```
-domain/
-├── topictypes/        # 共享类型和工具函数
-│   ├── types.go       # TopicTag, ExtractionInput, GraphNode 等
-│   ├── helpers.go     # Slugify, NormalizeDisplayCategory 等
-│   └── services.go    # ResolveWindow, ParseAnchorDate, FetchArticlesForSummaries
-├── topicgraph/        # 图谱查询和展示
-│   ├── handler.go     # HTTP API (GetTopicGraph, GetTopicDetail 等)
-│   ├── service.go     # 图谱构建、查询逻辑
-│   └── hotspot_digests.go
-├── topicanalysis/     # 分析队列和 AI 分析
-│   ├── analysis_service.go  # 分析业务逻辑
-│   ├── analysis_queue.go    # 任务队列
-│   ├── ai_analysis.go       # AI 分析器
-│   ├── analysis_handler.go  # HTTP API
-│   └── embedding.go         # 嵌入向量服务
-└── topicextraction/   # 标签提取和匹配
-    ├── tagger.go             # 摘要标签提取入口
-    ├── article_tagger.go     # 文章标签提取
-    ├── extractor.go          # 基础启发式提取
-    └── extractor_enhanced.go # AI 增强提取（含嵌入匹配）
-```
+- `platform/airouter`：管理 provider 和 capability route
+- `domain/contentprocessing`：正文抓取、内容补全、Firecrawl 配置
+- `domain/summaries` + `jobs/auto_summary.go`：按订阅批量生成摘要
 
-#### 依赖关系
+### Digest
 
-```
-topictypes (无依赖，纯类型)
+digest 现在已经是正式子系统，不是边角工具。
+
+- 支持 daily / weekly 两类时间窗
+- 支持配置查询、预览、手动执行、定时执行
+- 支持 Feishu、Obsidian、Open Notebook 三条输出链路
+- digest 配置更新后会尝试热重载 `DigestScheduler`
+
+### 主题图谱
+
+主题能力已经拆成四个包：
+
+- `topictypes`：共享类型和窗口解析
+- `topicextraction`：从摘要/文章提取 topic tag
+- `topicanalysis`：生成并查询 topic analysis
+- `topicgraph`：返回图谱节点边、详情、相关文章、相关 digest
+
+依赖方向大致是：
+
+```text
+topictypes
     ↑
     ├── topicgraph
     ├── topicanalysis
-    └── topicextraction → topicanalysis (EmbeddingService)
+    └── topicextraction -> topicanalysis
 ```
 
-#### 组件说明
+## 数据模型重点
 
-- **topictypes**: 共享类型定义（TopicTag、ExtractionInput、GraphNode 等）和工具函数（Slugify、NormalizeDisplayCategory）
-- **topicgraph**: 图谱查询和展示，构建节点/边数据，处理 API 请求
-- **topicanalysis**: 分析任务队列、AI 分析、嵌入向量生成和相似度匹配
-- **topicextraction**: 标签提取入口，支持启发式和 AI 两种模式
+旧文档只写 feed/article 基础字段已经不够，当前后端的数据面至少包含这些正式能力。
 
-#### 数据模型
+### `feeds`
 
-- `TopicTag`: 标签（slug、label、category）
-- `TopicTagAnalysis`: 分析结果存储
-- `TopicAnalysisCursor`: 增量更新游标
-- `TopicTagEmbedding`: 标签嵌入向量
+- `article_summary_enabled`
+- `completion_on_refresh`
+- `max_completion_retries`
+- `firecrawl_enabled`
+- `refresh_interval`
+- `refresh_status`
 
-#### 工作流
+### `articles`
 
-1. 新 summary 生成后触发 `topicextraction.TagSummary`
-2. AI 提取候选标签（或回退到启发式提取）
-3. 嵌入匹配找到相似标签，必要时 AI 判断复用/新建
-4. 为每个关联 topic 创建分析任务（`topicanalysis`）
-5. 任务入队，Worker 出队并调用 AI 分析
-6. 存储结果，图谱查询时由 `topicgraph` 组装展示
+- `image_url`
+- `summary_status`
+- `summary_generated_at`
+- `ai_content_summary`
+- `completion_attempts`
+- `completion_error`
+- `firecrawl_status`
+- `firecrawl_content`
+- `firecrawl_error`
+- `firecrawl_crawled_at`
 
-## 当前结构的问题
+### 其他关键表/模型
 
-当前主要问题已经从“目录混乱”变成“边界还不够干净”：
+- `ai_settings`：兼容旧配置存储
+- `ai_providers` / `ai_routes` / `ai_route_providers`：AI 路由配置
+- `ai_summaries`：按 feed/分类聚合后的摘要
+- `scheduler_tasks`：scheduler 最近执行状态、耗时、错误、结果摘要
+- `digest_configs`：digest 配置
+- 主题图谱相关模型：`topic_tags`、`topic_tag_analyses`、`topic_tag_embeddings` 等
 
-- `domain/models` 还是共享模型桶，后续可以继续按域拆细
-- `runtimeinfo` 目前还是过渡层，后续可以继续收敛成更明确的 runtime container
-- `aisettings` 仍在承载跨域配置，后续可以继续拆 ownership
-- digest 测试已经过时，文档和验证时要单独看待
+## 真实 API 面
 
-## 数据模型已经变了
+`internal/app/router.go` 当前已经注册这些主路由组：
 
-旧文档只写基础 feed/article 字段已经不够了。
+- `/api/categories`
+- `/api/feeds`
+- `/api/articles`
+- `/api/ai`
+- `/api/summaries`
+- `/api/schedulers`
+- `/api/reading-behavior`
+- `/api/user-preferences`
+- `/api/content-completion`
+- `/api/firecrawl`
+- `/api/topic-graph`
+- `/api/digest`
+- `/api/import-opml` / `/api/export-opml`
+- `/ws`
 
-当前模型里已经明确出现这些新增能力字段：
+其中 `topic-graph` 组下面还挂了 `analysis` 子路由，AI 管理则已经扩展到 provider 和 route 级别，而不是只有“摘要设置”一个入口。
 
-- `feeds.article_summary_enabled`
-- `feeds.completion_on_refresh`
-- `feeds.max_completion_retries`
-- `feeds.firecrawl_enabled`
-- `articles.image_url`
-- `articles.summary_status`
-- `articles.summary_generated_at`
-- `articles.ai_content_summary`
-- `articles.firecrawl_status`
-- `articles.firecrawl_content`
+## 具体数据链路示例
 
-同时数据库里还存在：
+下面这几条链路是当前代码里真实存在、而且最值得在阅读代码时重点跟的主线。
 
-- `ai_summary_queue`
-- `digest_configs`
+### 用例 1：自动刷新 feed -> 新文章入库
 
-所以后端文档必须把“内容处理链路”和“digest 子系统”当成正式能力，而不是边角说明。
+场景：用户给某个 feed 配了刷新间隔，或者手动触发 `/api/schedulers/auto_refresh/trigger`。
 
-## 当前状态和目标状态要分开写
+链路：
 
-### 当前状态
+1. `internal/jobs/auto_refresh.go` 扫描 `refresh_interval > 0` 的 feed
+2. 到点 feed 调用 `feeds.FeedService.RefreshFeed`
+3. `RefreshFeed` 通过 RSS parser 拉取源站内容并更新 feed 元信息
+4. 新 entry 去重后写入 `articles`
+5. `buildArticleFromEntry` 按 feed 配置初始化文章状态：
+   - 默认 `summary_status = complete`
+   - 如果 feed 开启 `firecrawl_enabled`，则文章先标记 `firecrawl_status = pending`
+   - 如果同时开启 `article_summary_enabled`，则文章再标记 `summary_status = incomplete`
+6. `cleanupOldArticles` 按 `max_articles` 清理旧文章（收藏文章跳过）
 
-当前已经落到 `app / platform / domain / jobs` 四层结构。
+这个链路的关键点是：feed 刷新不只是在“加文章”，它还会把后续 Firecrawl / 内容补全链路需要的状态位一起种进去。
 
-### 后续优化方向
+### 用例 2：Firecrawl 抓正文 -> 内容补全生成文章摘要
 
-目录目标已经落地，后续更像是边界清理：
+场景：某个 feed 开启了 Firecrawl，前面的刷新流程已经把文章打成 `firecrawl_status = pending`。
 
-```text
-backend-go/
-├── cmd/
-├── internal/
-│   ├── app/
-│   ├── platform/
-│   ├── domain/
-│   └── jobs/
-```
+链路：
 
-职责保持成这样：
+1. `jobs.FirecrawlScheduler` 轮询待抓取文章
+2. Firecrawl 成功后，文章被更新为：
+   - `firecrawl_status = completed`
+   - `firecrawl_content` 写入抓取正文
+   - `summary_status = incomplete`
+3. `jobs.ContentCompletionScheduler` 定时查询：
+   - `articles.firecrawl_status = completed`
+   - `articles.summary_status = incomplete`
+   - `feeds.article_summary_enabled = true`
+4. `contentprocessing.ContentCompletionService.CompleteArticle` 基于 Firecrawl 正文生成 `ai_content_summary`
+5. 文章最终更新为完成态，并记录失败次数、错误信息、最近处理文章等状态
+6. 前端可通过 `/api/content-completion/overview` 和 `/api/content-completion/articles/:article_id/status` 看到结果
 
-- `app/` - 服务装配、路由注册、启动流程、运行时
-- `platform/` - 配置、数据库、中间件、WebSocket
-- `domain/` - 按业务域收拢 handler、service、test，必要时共享 `models`
-- `jobs/` - 定时任务执行壳
+这条链路说明：运行时对外现在用 `content_completion` 作为规范 scheduler 名字，但仍兼容旧别名 `ai_summary`；它对应的是“文章级内容补全”，不是 `ai_summaries` 表里的 feed 聚合摘要。
 
-## 推荐的领域切分
+### 用例 3：自动摘要 -> 主题标签 -> 主题分析
 
-当前已经这样切：
+场景：某个 feed 开启了 `ai_summary_enabled`，系统按时间窗自动生成订阅摘要。
 
-- `categories`
-- `feeds`
-- `articles`
-- `summaries`
-- `preferences`
-- `contentprocessing`
-- `digest`
-- `topictypes` + `topicgraph` + `topicanalysis` + `topicextraction`
+链路：
 
-`firecrawl` 目前仍保留在 `contentprocessing`，因为它还是内容增强链路的一段，不是单独业务面。
+1. `jobs.AutoSummaryScheduler` 扫描 `ai_summary_enabled = true` 的 feed
+2. 按 `time_range` 取最近文章，并按最多 20 篇分 batch
+3. `summaries.NewAISummaryPromptBuilder` 结合偏好服务组装 prompt
+4. 通过 `airouter` 调用 summary capability 对应 provider
+5. 结果写入 `ai_summaries`
+6. 新摘要写入后调用：
+   - `topicextraction.TagSummary(&aiSummary)`
+   - `topicextraction.TagArticles(batch, feedName, categoryName)`
+7. topic extraction 产出的标签会继续驱动 `topicanalysis` 的分析任务
+8. 前端再通过 `/api/topic-graph/*` 和 `/api/topic-graph/analysis/*` 读取图谱和分析结果
 
-主题图谱已拆分为四个包：
-- `topictypes` - 共享类型，无依赖
-- `topicgraph` - 图谱查询展示
-- `topicanalysis` - 分析队列和 AI
-- `topicextraction` - 标签提取匹配
+这条链路把“摘要生成”和“主题图谱”真正串起来了：图谱并不是独立系统，而是建立在摘要和文章标签结果之上的展示与分析层。
 
-## 迁移原则
+### 用例 4：digest 预览 / 手动运行 / 定时输出
 
-- 先让文档说真话
-- 先保 API 路径不变
-- 先保入口和路由稳定
-- 再清理共享配置和 runtime 边界
-- 每次结构调整都同步更新 `docs/`
+场景：用户查看日报预览、手动执行日报，或者等系统到了定时点自动推送。
 
-## 建议阅读顺序
+链路：
+
+1. `/api/digest/preview/:type` 调用 `digest.buildPreview`
+2. `DigestGenerator` 按 daily / weekly 时间窗聚合 `ai_summaries`
+3. 后端组装：
+   - 分类视图数据
+   - markdown 预览正文
+   - 默认选中的分类和 summary
+4. `/api/digest/run/:type` 会在预览结果基础上继续执行输出：
+   - Feishu 推送
+   - Obsidian 导出
+   - Open Notebook 总结
+5. `DigestScheduler` 则按 `digest_configs` 中的 daily / weekly 配置走同一类生成逻辑
+6. `/api/schedulers/status` 已经会带上 digest 的统一状态视图，`/api/digest/status` 仍保留 digest 专用状态，`/api/digest/config` 和 `/api/digest/open-notebook/config` 返回配置状态
+
+这条链路的重点是：digest 不是简单拼 markdown，而是一个“聚合 + 预览 + 多出口分发”的完整运行链。
+
+## 当前边界上的真实问题
+
+当前问题已经不是“目录乱”，而是这些边界还在过渡：
+
+- `runtimeinfo` 仍是全局变量式共享引用，适合过渡，不适合长期扩展
+- `domain/models` 仍是共享模型桶，后续还可以继续收敛 ownership
+- `aisettings` 同时承担兼容旧配置和新配置落库，职责偏宽
+- `runtimeinfo` 仍是全局变量式共享引用，但当前至少已经把实际启动的 scheduler 全部挂进统一入口
+- `/api/tasks/status` 现在是聚合视图，不是通用任务编排系统；它反映的是 summary queue、内容补全、firecrawl 三类后台工作
+
+## 推荐阅读顺序
 
 - 先看 `docs/architecture/backend-runtime.md`
-- 再看 `docs/guides/content-processing.md`
-- 再看 `docs/guides/digest.md`
-- 最后回到具体源码目录
+- 再看 `backend-go/cmd/server/main.go`
+- 再看 `backend-go/internal/app/router.go`
+- 再看 `backend-go/internal/app/runtime.go`
+- 再按用例追具体域：`feeds` -> `contentprocessing` -> `summaries` -> `digest` -> `topic*`

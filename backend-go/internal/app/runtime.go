@@ -64,8 +64,11 @@ func StartRuntime() *Runtime {
 		contentprocessing.GetContentCompletionService(),
 		60,
 	)
-	runtime.ContentCompletion.Start()
-	log.Println("Content completion scheduler started successfully")
+	if err := runtime.ContentCompletion.Start(); err != nil {
+		log.Printf("Warning: Failed to start content completion scheduler: %v", err)
+	} else {
+		log.Println("Content completion scheduler started successfully")
+	}
 
 	runtime.Digest = digest.NewDigestScheduler()
 	if err := runtime.Digest.Start(); err != nil {
@@ -76,6 +79,7 @@ func StartRuntime() *Runtime {
 
 	runtimeinfo.AutoRefreshSchedulerInterface = runtime.AutoRefresh
 	runtimeinfo.AutoSummarySchedulerInterface = runtime.AutoSummary
+	runtimeinfo.PreferenceUpdateSchedulerInterface = runtime.PreferenceUpdate
 	runtimeinfo.AISummarySchedulerInterface = runtime.ContentCompletion
 	runtimeinfo.FirecrawlSchedulerInterface = runtime.Firecrawl
 	runtimeinfo.DigestSchedulerInterface = runtime.Digest

@@ -1,135 +1,247 @@
-# 后端运行与接口
+# 后端运行时与接口
 
-## 启动主线
+## 先看启动主线
 
-当前 Go 后端的真实启动顺序在 `backend-go/cmd/server/main.go`：
+当前 Go 后端真实启动顺序在 `backend-go/cmd/server/main.go`，顺序如下：
 
-1. 加载配置 `backend-go/internal/config/config.go`
-2. 初始化数据库 `backend-go/internal/platform/database/db.go`
-3. 执行 digest 迁移 `backend-go/internal/domain/digest`
-4. 创建 Gin 实例并挂载 CORS
-5. 注册路由 `backend-go/internal/app/router.go`
-6. 启动运行时 `backend-go/internal/app/runtime.go`
-7. 注册优雅退出
-8. 监听 `:5000`
+1. `config.LoadConfig("./configs")` 读取配置
+2. `database.InitDB(config.AppConfig)` 初始化 SQLite、建表和索引
+3. `digest.Migrate()` 执行 digest 相关迁移
+4. `airouter.EnsureLegacySummaryConfigMigrated()` 把旧摘要配置迁到 AI route 体系
+5. 根据配置切换 Gin `debug/release` 模式
+6. 创建 `gin.Engine`，挂载 CORS 与 Recovery
+7. `app.SetupRoutes(r)` 注册 HTTP 与 WebSocket 路由
+8. `app.StartRuntime()` 启动后台 scheduler 与内容补全服务
+9. `app.SetupGracefulShutdown(runtime)` 注册优雅退出
+10. `r.Run(:port)` 开始监听
 
-这说明 `cmd/server` 现在更像一个薄入口，真正的装配工作已经开始往 `internal/app/` 收口。
+所以 `cmd/server` 现在只是薄入口，真正的运行时装配已经集中在 `internal/app/`。
 
-## 当前运行时职责
+## Runtime 里实际启动了什么
 
-`backend-go/internal/app/runtime.go` 负责把后台任务真正拉起来，并把运行时实例写进 `backend-go/internal/app/runtimeinfo/`。
+`backend-go/internal/app/runtime.go` 里定义的 `Runtime` 目前会启动 6 类后台任务：
 
-当前会启动 6 类后台任务：
+- `AutoRefresh`：扫描到点 feed 并触发刷新
+- `AutoSummary`：按 feed 生成聚合摘要 `ai_summaries`
+- `PreferenceUpdate`：更新阅读偏好
+- `ContentCompletion`：基于 Firecrawl 正文生成文章级摘要
+- `Firecrawl`：抓取文章完整正文
+- `Digest`：daily / weekly digest cron
 
-- 自动刷新 `auto_refresh`
-- 自动摘要 `auto_summary`
-- 偏好更新 `preference_update`
-- 内容补全 `content_completion`
-- Firecrawl 抓取 `firecrawl`
-- digest 定时任务 `digest`
+对应启动逻辑也都在 `StartRuntime()` 里，不存在额外的隐藏入口。
 
-其中内容补全还会先初始化抓取服务地址，默认读取 `CRAWL_SERVICE_URL`，未设置时回落到 `http://localhost:11235`。
+## 运行时共享状态怎么暴露
 
-## 路由分层
+当前 runtime 不是通过依赖注入容器对外暴露，而是把运行中的 scheduler 引用写进 `backend-go/internal/app/runtimeinfo/schedulers.go`。
 
-当前 HTTP 与 WebSocket 接口主要集中在 `backend-go/internal/app/router.go`。
+现在真正挂进去的是这些：
 
-### 基础路由
+- `AutoRefreshSchedulerInterface`
+- `AutoSummarySchedulerInterface`
+- `PreferenceUpdateSchedulerInterface`
+- `AISummarySchedulerInterface`
+- `FirecrawlSchedulerInterface`
+- `DigestSchedulerInterface`
 
-- `GET /` - API 简要说明
-- `GET /health` - 健康检查
-- `GET /api/tasks/status` - 当前任务队列占位状态
-- `GET /ws` - WebSocket 连接入口
+这里仍有一个命名差异要讲清楚：
 
-### API 路由组
+- `AISummarySchedulerInterface` 这个名字对应的是 `ContentCompletionScheduler`，也就是文章级内容补全任务，不是 feed 级 `auto_summary`
 
-- `/api/categories` - 分类 CRUD
-- `/api/feeds` - 订阅 CRUD、单条查询、刷新、批量刷新、预览拉取
-- `/api/articles` - 文章列表、详情、统计、状态更新、批量更新
-- `/api/ai` - AI 设置、连通性测试、单篇摘要
-- `/api/summaries` - 摘要列表、详情、删除、队列提交、队列状态、任务查询
-- `/api/reading-behavior` - 阅读行为记录与统计
-- `/api/user-preferences` - 偏好查询与手动更新
-- `/api/content-completion` - 单文章补全、整 feed 补全、补全状态、总览
-- `/api/firecrawl` - 单文章抓取、feed 级启用、状态、配置保存
-- `/api/digest` - digest 配置、状态、预览、手动运行、飞书测试、Obsidian 测试
+## 启动参数与默认值
 
-## WebSocket 位置
+`StartRuntime()` 里目前写死了几组默认间隔：
 
-WebSocket 逻辑在 `backend-go/internal/platform/ws/hub.go`。
+- `auto_refresh`：60 秒检查一次
+- `auto_summary`：3600 秒检查一次
+- `preference_update`：1800 秒检查一次
+- `content_completion`：60 分钟检查一次
+- `digest`：按数据库里的 daily / weekly 时间配置生成 cron
 
-它现在属于一类明显的“平台能力”：
+同时内容补全服务会先读取 `CRAWL_SERVICE_URL`：
 
-- 给前端推送异步任务进度
-- 服务摘要和抓取类后台任务
-- 不属于某个单独业务域，但会被多个业务域复用
+- 有环境变量就用环境变量
+- 没有就回落到 `http://localhost:11235`
 
-这也是后续把它收进 `internal/platform/ws/` 的直接理由。
+## 当前路由面
 
-## 后台任务现状
+`backend-go/internal/app/router.go` 目前把后端接口分成这些入口。
 
-当前后台任务代码已经基本收进两层：
+### 基础入口
 
-- `backend-go/internal/jobs/` - 多数定时任务外壳和 scheduler handler
-- `backend-go/internal/domain/*` - 任务实际业务逻辑
-- `backend-go/internal/domain/digest/` - digest 自带生成器、导出器和调度器
+- `GET /`：API 概览
+- `GET /health`：健康检查
+- `GET /api/tasks/status`：聚合 summary queue、content completion、firecrawl 的实时任务概览
+- `GET /ws`：WebSocket 连接入口
 
-现在比之前顺了一些，但仍有几个过渡点：
+### 核心业务 API
 
-- `runtimeinfo` 还是过渡层，不是最终容器方案
-- scheduler handler 里仍有部分 placeholder 能力
-- `aisettings` 还是共享配置入口，边界不是最终形态
+- `/api/categories`：分类 CRUD
+- `/api/feeds`：订阅 CRUD、单 feed 刷新、批量刷新、feed 预览抓取
+- `/api/articles`：文章列表、详情、统计、单条/批量状态更新
+- `/api/summaries`：摘要列表、详情、删除、队列任务
+- `/api/reading-behavior`：阅读行为上报与统计
+- `/api/user-preferences`：偏好查询与手动更新
 
-## 现在能看到什么状态
+### AI 与内容处理 API
 
-`auto_refresh` 和 `auto_summary` 现在都会把最近一轮执行结果写回 `scheduler_tasks`。
+- `/api/ai/summarize`：单篇摘要
+- `/api/ai/settings`：旧摘要设置读写兼容入口
+- `/api/ai/providers`：AI provider 管理
+- `/api/ai/routes`：AI capability route 管理
+- `/api/content-completion`：文章级内容补全触发、状态与总览
+- `/api/firecrawl`：单文章抓取、feed Firecrawl 开关、状态、配置保存
+- `/api/auto-summary/status`：自动摘要状态
+- `/api/auto-summary/config`：自动摘要配置更新
 
-这几类信息可以直接从后端状态接口拿到：
+### 主题与 digest API
 
-- 上次执行时间
-- 执行耗时
-- 下次执行时间
-- 最近一轮摘要
-- 手动 trigger 是真的开始了，还是被拒绝了
+- `/api/topic-graph`：图谱、topic 详情、按分类聚合、topic 相关文章、相关 digest
+- `/api/topic-graph/analysis`：topic analysis 查询、状态、重建
+- `/api/digest/config`：digest 配置
+- `/api/digest/status`：digest scheduler 状态
+- `/api/digest/preview/:type`：daily / weekly 预览
+- `/api/digest/run/:type`：手动执行 digest 输出
+- `/api/digest/open-notebook/*`：Open Notebook 配置与发送
+- `/api/digest/test-feishu` / `/api/digest/test-obsidian`：输出链路测试
 
-其中：
+### Scheduler API
 
-- `auto_refresh` 会记录扫描了多少 feed、多少 feed 到点、真正触发了多少刷新、多少 feed 已经在刷新中
-- `auto_summary` 会记录这轮看了多少 feed、产出多少总结、跳过多少、失败多少
+统一入口在 `/api/schedulers`：
 
-## 当前限制
+- `GET /api/schedulers/status`
+- `GET /api/schedulers/:name/status`
+- `POST /api/schedulers/:name/trigger`
+- `POST /api/schedulers/:name/reset`
+- `PUT /api/schedulers/:name/interval`
 
-现在有几块必须在文档里讲清：
+这组 API 现在统一覆盖：
 
-- scheduler 接口不是全部完整实现
-- `ResetSchedulerStats` 还是 placeholder
-- `UpdateSchedulerInterval` 还是 placeholder
+- `auto_refresh`
+- `auto_summary`
+- `preference_update`
+- `content_completion`
+- `firecrawl`
+- `digest`
 
-已经补齐的部分：
+另外保留一个兼容别名：
 
-- `auto_summary` 的手动触发现在会真实启动一轮执行，或者明确返回为什么没启动
-- `auto_refresh` 的状态不再只是“看起来在跑”，而是会持续更新最近一轮执行摘要
+- `ai_summary` -> `content_completion`
 
-所以文档里不能再写“功能完全对等”或“全部能力已闭环”。
+但能力不是完全对称的：
 
-## 目录重组怎么落
+- `auto_refresh`、`auto_summary`、`preference_update`、`content_completion`、`firecrawl` 支持统一状态查询
+- `auto_refresh`、`auto_summary`、`preference_update`、`content_completion`、`firecrawl` 支持统一 trigger
+- `auto_refresh`、`auto_summary`、`preference_update`、`content_completion`、`firecrawl` 支持 `reset` / `interval`
+- `digest` 现在被纳入统一状态总线，但手动运行与配置变更仍以 `/api/digest/*` 为主，`trigger/reset/interval` 不作为主控制面
 
-当前推荐把后端重组理解成四层，而不是一次大搬家：
+## Scheduler 状态现在能看到什么
 
-- `internal/app/` - 装配、路由、运行时
-- `internal/platform/` - 配置、数据库、中间件、WebSocket
-- `internal/domain/` - 按业务域收拢 handler、service、model、test
-- `internal/jobs/` - 定时任务执行外壳
+当前 scheduler 状态主要来自两层：
 
-这套结构现在已经落地，后续重点不再是大搬家，而是继续压缩过渡层。
+### 进程内状态
+
+每个 scheduler 自己维护：
+
+- 是否已启动
+- 是否正在执行
+- 下次运行时间
+- 当前处理对象 / 最近处理对象（部分任务）
+
+### 数据库存档状态
+
+`auto_refresh`、`auto_summary`、`content_completion` 会把最近一轮执行结果写进 `scheduler_tasks`，包含：
+
+- `last_execution_time`
+- `next_execution_time`
+- `last_execution_duration`
+- `last_error`
+- `total_executions`
+- `successful_executions`
+- `failed_executions`
+- `last_execution_result`
+
+其中 `last_execution_result` 不是统一 schema，而是各 scheduler 自己的摘要 JSON。
+
+## 几条关键运行时链路
+
+### 链路 1：服务启动到定时任务进入运行态
+
+1. 进程启动后完成配置和数据库初始化
+2. `SetupRoutes` 先把所有 HTTP / WS 接口挂到 Gin
+3. `StartRuntime` 再启动 scheduler
+4. 每个 scheduler 在 `Start()` 阶段会初始化或修复自己的 `scheduler_tasks` 记录
+5. 前端随后就可以查 `/api/schedulers/status`，digest 兼容状态仍可从 `/api/digest/status` 读取
+
+这个顺序意味着：即使某个 scheduler 启动失败，HTTP API 仍然会起来，只是状态接口会暴露失败结果或缺失的 runtime 引用。
+
+### 链路 2：手动触发自动刷新
+
+1. 前端请求 `POST /api/schedulers/auto_refresh/trigger`
+2. `jobs.TriggerScheduler` 从 `runtimeinfo` 取到 `AutoRefreshScheduler`
+3. 如果实现了 `TriggerNow()`，就直接返回是否接受、是否真的触发、拒绝原因
+4. `AutoRefreshScheduler` 执行扫描，结果写回 `scheduler_tasks.last_execution_result`
+5. 前端再查 `/api/schedulers/auto_refresh/status` 就能看到最近一轮扫描摘要
+
+### 链路 3：自动摘要配置热更新
+
+1. 前端调用 `POST /api/auto-summary/config`
+2. `summaries.UpdateAutoSummaryConfig` 先写 `aisettings` 和 AI route 兼容配置
+3. 如果 runtime 里存在 `AutoSummarySchedulerInterface`，会直接调用 `SetAIConfig(...)`
+4. 新配置无需重启进程即可生效在下一轮 `auto_summary` 执行中
+
+### 链路 4：digest 配置更新后重载 cron
+
+1. 前端调用 `PUT /api/digest/config`
+2. `digest.UpdateDigestConfig` 校验时间格式和 weekday
+3. 配置写回数据库
+4. 如果 runtime 里存在 `DigestSchedulerInterface`，则立即调用 `Reload()`
+5. 新的 daily / weekly cron 表达式当场替换旧计划
+
+## 这次补上的闭环
+
+当前运行时已经补齐了这些缺口：
+
+- `/api/tasks/status` 不再是固定占位，而是聚合 `summary_queue`、`content_completion`、`firecrawl` 的实时工作量
+- `ResetSchedulerStats` 会真实清空支持调度器的统计状态；其中持久化调度器会同步重置 `scheduler_tasks`
+- `UpdateSchedulerInterval` 会真实更新运行中的调度器间隔，而不是只返回“重启后生效”文案
+- `PreferenceUpdateScheduler` 已挂入统一 runtime registry，也能从 `/api/schedulers/*` 查询和触发
+- `/api/schedulers/status` 现在包含 `digest` 状态，`/api/digest/status` 变成 digest 侧的兼容专用入口
+- 调度器对外使用 `content_completion` 作为规范名，同时继续兼容旧名 `ai_summary`
+
+还保留的边界主要有两点：
+
+- `runtimeinfo` 仍然是全局引用式共享，不是正式依赖注入容器
+- `AISummarySchedulerInterface` 这个变量名还没重命名，只是在 API 层做了规范名映射
+
+## 优雅退出怎么做
+
+`SetupGracefulShutdown(runtime)` 监听：
+
+- `SIGINT`
+- `SIGTERM`
+
+收到信号后会按顺序停止：
+
+- `AutoRefresh`
+- `AutoSummary`
+- `PreferenceUpdate`
+- `ContentCompletion`
+- `Firecrawl`
+- `Digest`
+
+最后直接 `os.Exit(0)`。当前没有额外的 HTTP server drain 或任务持久化恢复逻辑，所以更准确的说法是“基础优雅退出”，不是复杂的停机编排。
 
 ## 读代码建议
 
-如果你是第一次进这个后端，建议按这个顺序读：
+如果你想顺着运行时看代码，建议按这个顺序：
 
 1. `backend-go/cmd/server/main.go`
 2. `backend-go/internal/app/router.go`
 3. `backend-go/internal/app/runtime.go`
-4. `backend-go/internal/domain/*`
-5. `backend-go/internal/jobs/*`
-6. `backend-go/internal/platform/*`
+4. `backend-go/internal/jobs/handler.go`
+5. `backend-go/internal/jobs/auto_refresh.go`
+6. `backend-go/internal/jobs/auto_summary.go`
+7. `backend-go/internal/jobs/content_completion.go`
+8. `backend-go/internal/domain/digest/handler.go`
+
+再回到 `docs/architecture/backend-go.md` 看业务分层，会比较容易把“启动装配”和“业务链路”对上。

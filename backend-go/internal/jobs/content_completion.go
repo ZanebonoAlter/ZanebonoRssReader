@@ -69,6 +69,9 @@ func NewContentCompletionScheduler(completionService *contentprocessing.ContentC
 }
 
 func (s *ContentCompletionScheduler) Start() error {
+	if s.isRunning {
+		return fmt.Errorf("content completion scheduler already running")
+	}
 	s.cron.Start()
 	s.isRunning = true
 	log.Printf("AI summary scheduler started (interval: %v)", s.checkInterval)
@@ -77,9 +80,100 @@ func (s *ContentCompletionScheduler) Start() error {
 }
 
 func (s *ContentCompletionScheduler) Stop() {
+	if !s.isRunning {
+		return
+	}
 	s.cron.Stop()
 	s.isRunning = false
 	log.Println("AI summary scheduler stopped")
+}
+
+func (s *ContentCompletionScheduler) TriggerNow() map[string]interface{} {
+	s.mu.RLock()
+	isExecuting := s.isExecuting
+	s.mu.RUnlock()
+	if isExecuting {
+		return map[string]interface{}{
+			"accepted":    false,
+			"started":     false,
+			"reason":      "already_running",
+			"message":     "内容补全正在执行中，稍后再试。",
+			"status_code": 409,
+		}
+	}
+
+	go s.checkAndCompleteArticles()
+	return map[string]interface{}{
+		"accepted": true,
+		"started":  true,
+		"message":  "Content completion triggered",
+	}
+}
+
+func (s *ContentCompletionScheduler) UpdateInterval(interval int) error {
+	if interval <= 0 {
+		return fmt.Errorf("interval must be positive")
+	}
+
+	wasRunning := s.isRunning
+	if wasRunning {
+		s.Stop()
+	}
+
+	s.cron = cron.New()
+	s.checkInterval = time.Duration(interval) * time.Second
+	if _, err := s.cron.AddFunc(fmt.Sprintf("@every %ds", interval), s.checkAndCompleteArticles); err != nil {
+		return fmt.Errorf("failed to reschedule content completion: %w", err)
+	}
+
+	if wasRunning {
+		if err := s.Start(); err != nil {
+			return err
+		}
+	}
+
+	var task models.SchedulerTask
+	if err := database.DB.Where("name = ?", s.taskName).First(&task).Error; err == nil {
+		nextRun := time.Now().Add(s.checkInterval)
+		database.DB.Model(&task).Updates(map[string]interface{}{
+			"check_interval":      interval,
+			"next_execution_time": &nextRun,
+		})
+	}
+
+	return nil
+}
+
+func (s *ContentCompletionScheduler) ResetStats() error {
+	var task models.SchedulerTask
+	if err := database.DB.Where("name = ?", s.taskName).First(&task).Error; err != nil {
+		return err
+	}
+
+	nextRun := time.Now().Add(s.checkInterval)
+	updates := map[string]interface{}{
+		"status":                  "idle",
+		"last_error":              "",
+		"last_error_time":         nil,
+		"total_executions":        0,
+		"successful_executions":   0,
+		"failed_executions":       0,
+		"consecutive_failures":    0,
+		"last_execution_time":     nil,
+		"last_execution_duration": nil,
+		"last_execution_result":   "",
+		"next_execution_time":     &nextRun,
+	}
+
+	s.mu.Lock()
+	s.lastError = ""
+	s.lastExecutionTime = nil
+	s.lastProcessed = nil
+	s.currentArticle = nil
+	s.lastRunSummary = nil
+	s.mu.Unlock()
+
+	return database.DB.Model(&task).Updates(updates).Error
 }
 
 func (s *ContentCompletionScheduler) checkAndCompleteArticles() {

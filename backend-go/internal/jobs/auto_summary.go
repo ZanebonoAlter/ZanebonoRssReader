@@ -112,6 +112,59 @@ func (s *AutoSummaryScheduler) Stop() {
 	log.Println("Auto-summary scheduler stopped")
 }
 
+func (s *AutoSummaryScheduler) UpdateInterval(interval int) error {
+	if interval <= 0 {
+		return fmt.Errorf("interval must be positive")
+	}
+
+	wasRunning := s.isRunning
+	if wasRunning {
+		s.Stop()
+	}
+
+	s.cron = cron.New()
+	s.checkInterval = time.Duration(interval) * time.Second
+
+	if wasRunning {
+		return s.Start()
+	}
+
+	var task models.SchedulerTask
+	if err := database.DB.Where("name = ?", "auto_summary").First(&task).Error; err == nil {
+		nextRun := time.Now().Add(s.checkInterval)
+		database.DB.Model(&task).Updates(map[string]interface{}{
+			"check_interval":      interval,
+			"next_execution_time": &nextRun,
+		})
+	}
+
+	return nil
+}
+
+func (s *AutoSummaryScheduler) ResetStats() error {
+	var task models.SchedulerTask
+	if err := database.DB.Where("name = ?", "auto_summary").First(&task).Error; err != nil {
+		return err
+	}
+
+	nextRun := time.Now().Add(s.checkInterval)
+	updates := map[string]interface{}{
+		"status":                  "idle",
+		"last_error":              "",
+		"last_error_time":         nil,
+		"total_executions":        0,
+		"successful_executions":   0,
+		"failed_executions":       0,
+		"consecutive_failures":    0,
+		"last_execution_time":     nil,
+		"last_execution_duration": nil,
+		"last_execution_result":   "",
+		"next_execution_time":     &nextRun,
+	}
+
+	return database.DB.Model(&task).Updates(updates).Error
+}
+
 func (s *AutoSummaryScheduler) SetAIConfig(baseURL, apiKey, model string, timeRange int) error {
 	if timeRange <= 0 {
 		timeRange = 180

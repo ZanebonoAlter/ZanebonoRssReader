@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -37,6 +38,7 @@ func NewFirecrawlScheduler() *FirecrawlScheduler {
 }
 
 func (s *FirecrawlScheduler) Start() error {
+	s.stopChan = make(chan struct{})
 	s.wg.Add(1)
 	go s.run()
 	log.Printf("[Firecrawl] Scheduler started")
@@ -47,6 +49,34 @@ func (s *FirecrawlScheduler) Stop() {
 	close(s.stopChan)
 	s.wg.Wait()
 	log.Printf("[Firecrawl] Scheduler stopped")
+}
+
+func (s *FirecrawlScheduler) TriggerNow() map[string]interface{} {
+	go s.checkAndCrawl()
+	return map[string]interface{}{
+		"accepted": true,
+		"started":  true,
+		"message":  "Firecrawl scheduler triggered",
+	}
+}
+
+func (s *FirecrawlScheduler) ResetStats() error {
+	s.lastExecutionTime = nil
+	s.lastError = ""
+	s.status = "idle"
+	atomic.StoreInt32(&s.queueSize, 0)
+	atomic.StoreInt32(&s.processingCount, 0)
+	return nil
+}
+
+func (s *FirecrawlScheduler) UpdateInterval(interval int) error {
+	if interval <= 0 {
+		return fmt.Errorf("interval must be positive")
+	}
+
+	s.checkInterval = interval
+	s.Stop()
+	return s.Start()
 }
 
 func (s *FirecrawlScheduler) run() {
@@ -156,16 +186,16 @@ func (s *FirecrawlScheduler) checkAndCrawl() {
 			continue
 		}
 
-			now := time.Now()
-			updates := map[string]interface{}{
-				"firecrawl_status":     "completed",
-				"firecrawl_content":    result.Data.Markdown,
-				"firecrawl_crawled_at": now,
-			}
-			if feed.ArticleSummaryEnabled {
-				updates["summary_status"] = "incomplete"
-			}
-			database.DB.Model(&art).Updates(updates)
+		now := time.Now()
+		updates := map[string]interface{}{
+			"firecrawl_status":     "completed",
+			"firecrawl_content":    result.Data.Markdown,
+			"firecrawl_crawled_at": now,
+		}
+		if feed.ArticleSummaryEnabled {
+			updates["summary_status"] = "incomplete"
+		}
+		database.DB.Model(&art).Updates(updates)
 
 		completed++
 		s.broadcastProgress(batchID, "processing", len(articles), completed, failed, &ws.FirecrawlArticleProgress{

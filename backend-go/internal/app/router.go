@@ -43,16 +43,7 @@ func SetupRoutes(r *gin.Engine) {
 		})
 	})
 
-	r.GET("/api/tasks/status", func(c *gin.Context) {
-		c.JSON(200, gin.H{
-			"success": true,
-			"data": gin.H{
-				"queue_size":   0,
-				"active_tasks": 0,
-				"tasks":        []string{},
-			},
-		})
-	})
+	r.GET("/api/tasks/status", jobs.GetTasksStatus)
 
 	r.GET("/ws", ws.HandleWebSocket)
 
