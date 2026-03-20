@@ -1,10 +1,29 @@
 package feeds
 
 import (
+	"fmt"
 	"testing"
+	"time"
 
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
 	"my-robot-backend/internal/domain/models"
+	"my-robot-backend/internal/platform/database"
 )
+
+func setupFeedsTestDB(t *testing.T) {
+	t.Helper()
+
+	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+
+	database.DB = db
+	if err := database.DB.AutoMigrate(&models.Feed{}, &models.Article{}); err != nil {
+		t.Fatalf("migrate test db: %v", err)
+	}
+}
 
 func TestBuildArticleFromEntryTracksOnlyRunnableStates(t *testing.T) {
 	service := NewFeedService()
@@ -42,4 +61,56 @@ func TestBuildArticleFromEntryTracksOnlyRunnableStates(t *testing.T) {
 	if disabledArticle.SummaryStatus != "complete" {
 		t.Fatalf("disabled summary status = %q, want complete", disabledArticle.SummaryStatus)
 	}
+}
+
+func TestCleanupOldArticlesKeepsActiveCompletionArticles(t *testing.T) {
+	setupFeedsTestDB(t)
+
+	service := NewFeedService()
+	feed := models.Feed{
+		Title:                 "Feed",
+		URL:                   fmt.Sprintf("https://example.com/%s", t.Name()),
+		MaxArticles:           2,
+		FirecrawlEnabled:      true,
+		ArticleSummaryEnabled: true,
+	}
+	if err := database.DB.Create(&feed).Error; err != nil {
+		t.Fatalf("create feed: %v", err)
+	}
+
+	now := time.Now()
+	articles := []models.Article{
+		{FeedID: feed.ID, Title: "new complete", Link: "https://example.com/new", PubDate: ptrTime(now.Add(-1 * time.Hour)), SummaryStatus: "complete", FirecrawlStatus: "completed"},
+		{FeedID: feed.ID, Title: "middle complete", Link: "https://example.com/middle", PubDate: ptrTime(now.Add(-2 * time.Hour)), SummaryStatus: "complete", FirecrawlStatus: "completed"},
+		{FeedID: feed.ID, Title: "old incomplete", Link: "https://example.com/old", PubDate: ptrTime(now.Add(-3 * time.Hour)), SummaryStatus: "incomplete", FirecrawlStatus: "completed", FirecrawlContent: "ready"},
+	}
+	if err := database.DB.Create(&articles).Error; err != nil {
+		t.Fatalf("create articles: %v", err)
+	}
+
+	service.cleanupOldArticles(&feed)
+
+	var remaining []models.Article
+	if err := database.DB.Where("feed_id = ?", feed.ID).Order("pub_date DESC").Find(&remaining).Error; err != nil {
+		t.Fatalf("load remaining articles: %v", err)
+	}
+	if len(remaining) != 2 {
+		t.Fatalf("remaining articles = %d, want 2", len(remaining))
+	}
+
+	titles := map[string]bool{}
+	for _, article := range remaining {
+		titles[article.Title] = true
+	}
+
+	if !titles["old incomplete"] {
+		t.Fatalf("expected incomplete article to be preserved, remaining = %#v", titles)
+	}
+	if titles["middle complete"] {
+		t.Fatalf("expected oldest removable complete article to be deleted, remaining = %#v", titles)
+	}
+}
+
+func ptrTime(value time.Time) *time.Time {
+	return &value
 }

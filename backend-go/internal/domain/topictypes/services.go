@@ -1,7 +1,9 @@
 package topictypes
 
 import (
+	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"my-robot-backend/internal/domain/models"
@@ -49,10 +51,17 @@ func FetchArticlesForSummaries(summaries []models.AISummary) map[uint][]TopicArt
 		ArticleID uint
 	}
 
-	if len(summaryIDs) > 0 {
-		database.DB.Table("ai_summary_articles").
+	if len(summaryIDs) > 0 && database.DB.Migrator().HasTable("ai_summary_articles") {
+		err := database.DB.Table("ai_summary_articles").
 			Where("summary_id IN ?", summaryIDs).
-			Find(&links)
+			Find(&links).Error
+		if err != nil {
+			return resultFromLegacySummaryArticles(summaries)
+		}
+	}
+
+	if len(links) == 0 {
+		return resultFromLegacySummaryArticles(summaries)
 	}
 
 	articleIDs := make([]uint, 0, len(links))
@@ -87,4 +96,59 @@ func FetchArticlesForSummaries(summaries []models.AISummary) map[uint][]TopicArt
 		}
 	}
 	return result
+}
+
+func resultFromLegacySummaryArticles(summaries []models.AISummary) map[uint][]TopicArticleCard {
+	articleIDs := make([]uint, 0)
+	linkMap := make(map[uint][]uint)
+
+	for _, summary := range summaries {
+		if strings.TrimSpace(summary.Articles) == "" {
+			continue
+		}
+
+		var ids []uint
+		if err := json.Unmarshal([]byte(summary.Articles), &ids); err != nil {
+			continue
+		}
+
+		for _, articleID := range ids {
+			articleIDs = append(articleIDs, articleID)
+			linkMap[summary.ID] = append(linkMap[summary.ID], articleID)
+		}
+	}
+
+	articlesByID := loadTopicArticleCards(articleIDs)
+	result := make(map[uint][]TopicArticleCard)
+	for _, summary := range summaries {
+		for _, articleID := range linkMap[summary.ID] {
+			if card, ok := articlesByID[articleID]; ok {
+				result[summary.ID] = append(result[summary.ID], card)
+			}
+		}
+	}
+
+	return result
+}
+
+func loadTopicArticleCards(articleIDs []uint) map[uint]TopicArticleCard {
+	articlesByID := make(map[uint]TopicArticleCard)
+	if len(articleIDs) == 0 {
+		return articlesByID
+	}
+
+	var articles []struct {
+		ID    uint
+		Title string
+		Link  string
+	}
+	database.DB.Model(&models.Article{}).
+		Select("id, title, link").
+		Where("id IN ?", articleIDs).
+		Find(&articles)
+	for _, article := range articles {
+		articlesByID[article.ID] = TopicArticleCard{ID: article.ID, Title: article.Title, Link: article.Link}
+	}
+
+	return articlesByID
 }

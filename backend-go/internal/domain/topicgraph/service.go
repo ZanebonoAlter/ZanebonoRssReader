@@ -544,7 +544,7 @@ func BuildTopicsByCategory(kind string, anchor time.Time) (*topictypes.TopicsByC
 		Joins("JOIN topic_tags ON topic_tags.id = article_topic_tags.topic_tag_id").
 		Where("articles.created_at >= ? AND articles.created_at < ?", windowStart, windowEnd).
 		Where("article_topic_tags.source = ?", "llm").
-		Preload("topictypes.TopicTag").
+		Preload("TopicTag").
 		Find(&articleTags).Error
 	if err != nil {
 		return nil, err
@@ -637,7 +637,7 @@ func fetchArticleTagsData(start, end time.Time) ([]ArticleTagData, error) {
 		Joins("JOIN topic_tags ON topic_tags.id = article_topic_tags.topic_tag_id").
 		Where("articles.created_at >= ? AND articles.created_at < ?", start, end).
 		Where("article_topic_tags.source = ?", "llm").
-		Preload("topictypes.TopicTag").
+		Preload("TopicTag").
 		Preload("Article.Feed").
 		Find(&articleTags).Error
 	if err != nil {

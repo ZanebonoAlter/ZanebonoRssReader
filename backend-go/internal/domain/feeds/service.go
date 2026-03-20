@@ -126,6 +126,10 @@ func (s *FeedService) cleanupOldArticles(feed *models.Feed) {
 			continue
 		}
 
+		if article.FirecrawlStatus == "pending" || article.FirecrawlStatus == "processing" || article.SummaryStatus == "incomplete" || article.SummaryStatus == "pending" {
+			continue
+		}
+
 		database.DB.Delete(&article)
 		articlesToDelete--
 	}

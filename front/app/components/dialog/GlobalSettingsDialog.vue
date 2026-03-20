@@ -6,6 +6,16 @@ import type { ReadingStats, UserPreference } from '~/types/reading_behavior'
 import type { SchedulerStatus, SchedulerTriggerResult } from '~/types/scheduler'
 import { useFirecrawlApi, useSchedulerApi } from '~/api'
 import { useGlobalAutoRefresh } from '~/features/feeds/composables/useAutoRefresh'
+import {
+  getCurrentContentCompletionArticle,
+  getSchedulerColor,
+  getSchedulerDisplayName,
+  getSchedulerIcon,
+  getSchedulerStatusLabel,
+  isContentCompletionScheduler,
+  isHotScheduler,
+  shouldShowContentCompletionPanel,
+} from '~/utils/schedulerMeta'
 
 interface Props {
   show: boolean
@@ -325,7 +335,7 @@ function scheduleSchedulerPolling() {
   if (!props.show || activeTab.value !== 'schedulers') return
 
   const hasHotScheduler = schedulerStatuses.value.some(item => {
-    if (item.name === 'auto_refresh' || item.name === 'auto_summary' || item.name === 'ai_summary' || item.name === 'firecrawl') {
+    if (isHotScheduler(item.name)) {
       return item.is_executing === true
     }
     return false
@@ -429,36 +439,6 @@ function getAutoSummaryReasonLabel(reason: string | undefined): string {
     default:
       return '等下一轮状态回传。'
   }
-}
-
-function getSchedulerDisplayName(name: string): string {
-  const names: Record<string, string> = {
-    'auto_refresh': '后台刷新',
-    'auto_summary': '自动总结',
-    'ai_summary': '文章总结',
-    'firecrawl': '全文爬取',
-  }
-  return names[name] || name
-}
-
-function getSchedulerIcon(name: string): string {
-  const icons: Record<string, string> = {
-    'auto_refresh': 'mdi:refresh',
-    'auto_summary': 'mdi:brain',
-    'ai_summary': 'mdi:text-box-search-outline',
-    'firecrawl': 'mdi:spider-web',
-  }
-  return icons[name] || 'mdi:cog'
-}
-
-function getSchedulerColor(name: string): string {
-  const colors: Record<string, string> = {
-    'auto_refresh': 'from-blue-500 to-cyan-500',
-    'auto_summary': 'from-ink-500 to-amber-500',
-    'ai_summary': 'from-amber-500 to-orange-500',
-    'firecrawl': 'from-rose-500 to-orange-500',
-  }
-  return colors[name] || 'from-gray-500 to-gray-600'
 }
 
 function getStatusColor(status: string | undefined): string {
@@ -1133,9 +1113,9 @@ function formatNextRun(nextRun: string | null | undefined): string {
                       <h3 class="font-semibold text-gray-900">{{ getSchedulerDisplayName(scheduler.name) }}</h3>
                       <span
                         class="px-2 py-0.5 text-xs font-medium rounded-full text-white"
-                        :class="getStatusColor(scheduler.database_state?.status || scheduler.status)"
+                        :class="getStatusColor(getSchedulerStatusLabel(scheduler))"
                       >
-                        {{ scheduler.database_state?.status || scheduler.status || 'idle' }}
+                        {{ getSchedulerStatusLabel(scheduler) || 'idle' }}
                       </span>
                     </div>
                     <p class="text-xs text-gray-500 mt-0.5">
@@ -1282,7 +1262,7 @@ function formatNextRun(nextRun: string | null | undefined): string {
                 </div>
 
                 <div
-                  v-if="scheduler.name === 'ai_summary' && scheduler.overview"
+                  v-if="shouldShowContentCompletionPanel(scheduler)"
                   class="mt-4 rounded-2xl border border-amber-200 bg-gradient-to-br from-amber-50 via-orange-50 to-white p-4"
                 >
                   <div class="flex items-start justify-between gap-4">
@@ -1373,8 +1353,11 @@ function formatNextRun(nextRun: string | null | undefined): string {
                         <Icon icon="mdi:loading" width="14" height="14" :class="scheduler.is_executing ? 'animate-spin text-amber-600' : 'text-gray-400'" />
                         <span>当前处理</span>
                       </div>
-                      <div class="mt-2 font-medium text-gray-900">{{ formatArticleLabel(scheduler.current_article) }}</div>
-                      <div v-if="!scheduler.current_article && (scheduler.stale_processing_count || scheduler.overview?.stale_processing_count)" class="mt-1 text-[11px] text-stone-500">
+                      <div class="mt-2 font-medium text-gray-900">{{ formatArticleLabel(getCurrentContentCompletionArticle(scheduler)) }}</div>
+                      <div v-if="!scheduler.current_article && getCurrentContentCompletionArticle(scheduler)" class="mt-1 text-[11px] text-stone-500">
+                        当前没有活跃执行，这里展示的是遗留 pending 指向。
+                      </div>
+                      <div v-else-if="!scheduler.current_article && (scheduler.stale_processing_count || scheduler.overview?.stale_processing_count)" class="mt-1 text-[11px] text-stone-500">
                         当前进程没在跑，这更像遗留 pending。
                       </div>
                     </div>

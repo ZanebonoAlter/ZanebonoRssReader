@@ -413,11 +413,7 @@ func buildResolutionUserPrompt(req topictypes.TagResolutionRequest) string {
 }
 
 func parseExtractedTags(content string) ([]topictypes.ExtractedTag, error) {
-	content = strings.TrimSpace(content)
-	content = strings.TrimPrefix(content, "```json")
-	content = strings.TrimPrefix(content, "```")
-	content = strings.TrimSuffix(content, "```")
-	content = strings.TrimSpace(content)
+	content = normalizeStructuredResponse(content)
 
 	var raw []struct {
 		Label      string   `json:"label"`
@@ -427,7 +423,19 @@ func parseExtractedTags(content string) ([]topictypes.ExtractedTag, error) {
 		Evidence   string   `json:"evidence"`
 	}
 	if err := json.Unmarshal([]byte(content), &raw); err != nil {
-		return nil, fmt.Errorf("failed to parse tags: %w", err)
+		var wrapped struct {
+			Tags []struct {
+				Label      string   `json:"label"`
+				Category   string   `json:"category"`
+				Confidence float64  `json:"confidence"`
+				Aliases    []string `json:"aliases"`
+				Evidence   string   `json:"evidence"`
+			} `json:"tags"`
+		}
+		if wrappedErr := json.Unmarshal([]byte(content), &wrapped); wrappedErr != nil {
+			return nil, fmt.Errorf("failed to parse tags: %w", err)
+		}
+		raw = wrapped.Tags
 	}
 
 	result := make([]topictypes.ExtractedTag, 0, len(raw))
@@ -450,6 +458,32 @@ func parseExtractedTags(content string) ([]topictypes.ExtractedTag, error) {
 	}
 
 	return result, nil
+}
+
+func normalizeStructuredResponse(content string) string {
+	content = strings.TrimSpace(content)
+	content = strings.TrimPrefix(content, "```json")
+	content = strings.TrimPrefix(content, "```")
+	content = strings.TrimSuffix(content, "```")
+	content = strings.TrimSpace(content)
+
+	if strings.HasPrefix(content, "[") || strings.HasPrefix(content, "{") {
+		return content
+	}
+
+	arrayStart := strings.Index(content, "[")
+	arrayEnd := strings.LastIndex(content, "]")
+	if arrayStart >= 0 && arrayEnd > arrayStart {
+		return strings.TrimSpace(content[arrayStart : arrayEnd+1])
+	}
+
+	objectStart := strings.Index(content, "{")
+	objectEnd := strings.LastIndex(content, "}")
+	if objectStart >= 0 && objectEnd > objectStart {
+		return strings.TrimSpace(content[objectStart : objectEnd+1])
+	}
+
+	return content
 }
 
 func parseResolutionResponse(content string) (*topictypes.TagResolutionResponse, error) {

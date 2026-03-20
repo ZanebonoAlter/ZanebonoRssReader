@@ -52,6 +52,27 @@ func TestExtractTopicsFallsBackToFeedAndCategoryWhenTextIsSparse(t *testing.T) {
 	require.Contains(t, topicLabels(result), "Infra")
 }
 
+func TestParseExtractedTagsAcceptsWrappedTagsObject(t *testing.T) {
+	parsed, err := parseExtractedTags(`{"tags":[{"label":"OpenAI","category":"keyword","confidence":0.9,"aliases":["Open AI"]}]}`)
+
+	require.NoError(t, err)
+	require.Len(t, parsed, 1)
+	require.Equal(t, "OpenAI", parsed[0].Label)
+	require.Equal(t, "keyword", parsed[0].Category)
+	require.Equal(t, 0.9, parsed[0].Confidence)
+	require.Equal(t, []string{"Open AI"}, parsed[0].Aliases)
+}
+
+func TestParseExtractedTagsAcceptsSurroundingText(t *testing.T) {
+	parsed, err := parseExtractedTags("Here are the extracted tags:\n```json\n[{\"label\":\"AI Agent\",\"category\":\"keyword\",\"confidence\":0.8}]\n```\nThese are the best matches.")
+
+	require.NoError(t, err)
+	require.Len(t, parsed, 1)
+	require.Equal(t, "AI Agent", parsed[0].Label)
+	require.Equal(t, "keyword", parsed[0].Category)
+	require.Equal(t, 0.8, parsed[0].Confidence)
+}
+
 func topicLabels(items []topictypes.TopicTag) []string {
 	labels := make([]string, 0, len(items))
 	for _, item := range items {

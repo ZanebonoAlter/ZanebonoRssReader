@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/robfig/cron/v3"
+	"gorm.io/gorm"
 	"my-robot-backend/internal/domain/contentprocessing"
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/platform/database"
@@ -72,10 +74,12 @@ func (s *ContentCompletionScheduler) Start() error {
 	if s.isRunning {
 		return fmt.Errorf("content completion scheduler already running")
 	}
+	if err := s.reconcileSchedulerTask(); err != nil {
+		return fmt.Errorf("reconcile content completion scheduler task: %w", err)
+	}
 	s.cron.Start()
 	s.isRunning = true
 	log.Printf("AI summary scheduler started (interval: %v)", s.checkInterval)
-	s.initSchedulerTask()
 	return nil
 }
 
@@ -106,7 +110,7 @@ func (s *ContentCompletionScheduler) TriggerNow() map[string]interface{} {
 	return map[string]interface{}{
 		"accepted": true,
 		"started":  true,
-		"message":  "Content completion triggered",
+		"message":  "文章总结任务已触发",
 	}
 }
 
@@ -328,6 +332,96 @@ func (s *ContentCompletionScheduler) initSchedulerTask() {
 
 	database.DB.Create(&task)
 	log.Println("AI summary scheduler task initialized")
+}
+
+func (s *ContentCompletionScheduler) reconcileSchedulerTask() error {
+	const legacyTaskName = "content_completion"
+
+	var primary models.SchedulerTask
+	primaryErr := database.DB.Where("name = ?", s.taskName).First(&primary).Error
+	if primaryErr != nil && !errors.Is(primaryErr, gorm.ErrRecordNotFound) {
+		return primaryErr
+	}
+
+	var legacy models.SchedulerTask
+	legacyErr := database.DB.Where("name = ?", legacyTaskName).First(&legacy).Error
+	if legacyErr != nil && !errors.Is(legacyErr, gorm.ErrRecordNotFound) {
+		return legacyErr
+	}
+
+	hasPrimary := primaryErr == nil
+	hasLegacy := legacyErr == nil
+
+	if !hasPrimary && !hasLegacy {
+		s.initSchedulerTask()
+		return nil
+	}
+
+	if !hasPrimary && hasLegacy {
+		legacy.Name = s.taskName
+		primary = legacy
+		hasPrimary = true
+		hasLegacy = false
+	}
+
+	if hasLegacy {
+		if legacy.CheckInterval > 0 {
+			primary.CheckInterval = legacy.CheckInterval
+		}
+		if primary.Description == "" && legacy.Description != "" {
+			primary.Description = legacy.Description
+		}
+		if primary.LastExecutionResult == "" && legacy.LastExecutionResult != "" {
+			primary.LastExecutionResult = legacy.LastExecutionResult
+		}
+		if err := database.DB.Delete(&legacy).Error; err != nil {
+			return err
+		}
+	}
+
+	if primary.CheckInterval <= 0 {
+		primary.CheckInterval = int(s.checkInterval.Seconds())
+	}
+	if err := s.reschedule(primary.CheckInterval); err != nil {
+		return err
+	}
+
+	if primary.Status == "running" {
+		nextRun := time.Now().In(time.FixedZone("CST", 8*3600)).Add(s.checkInterval)
+		primary.Status = "idle"
+		primary.NextExecutionTime = &nextRun
+	}
+
+	if hasPrimary && primary.ID != 0 {
+		return database.DB.Model(&models.SchedulerTask{}).Where("id = ?", primary.ID).Updates(map[string]interface{}{
+			"name":                primary.Name,
+			"description":         primary.Description,
+			"check_interval":      primary.CheckInterval,
+			"status":              primary.Status,
+			"next_execution_time": primary.NextExecutionTime,
+		}).Error
+	}
+
+	return database.DB.Create(&primary).Error
+}
+
+func (s *ContentCompletionScheduler) reschedule(intervalSeconds int) error {
+	if intervalSeconds <= 0 {
+		return nil
+	}
+
+	if s.checkInterval == time.Duration(intervalSeconds)*time.Second {
+		return nil
+	}
+
+	rescheduled := cron.New()
+	if _, err := rescheduled.AddFunc(fmt.Sprintf("@every %ds", intervalSeconds), s.checkAndCompleteArticles); err != nil {
+		return err
+	}
+
+	s.cron = rescheduled
+	s.checkInterval = time.Duration(intervalSeconds) * time.Second
+	return nil
 }
 
 func (s *ContentCompletionScheduler) GetStatus() map[string]interface{} {

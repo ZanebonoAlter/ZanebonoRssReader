@@ -110,7 +110,7 @@ func TagArticles(articles []models.Article, feedName, categoryName string) error
 func GetArticleTags(articleID uint) ([]topictypes.TopicTag, error) {
 	var links []models.ArticleTopicTag
 	err := database.DB.Where("article_id = ?", articleID).
-		Preload("topictypes.TopicTag").
+		Preload("TopicTag").
 		Find(&links).Error
 	if err != nil {
 		return nil, err

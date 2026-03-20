@@ -481,9 +481,9 @@ onMounted(loadDashboard)
         <Icon icon="mdi:loading" width="44" class="animate-spin text-ink-medium" />
       </div>
 
-      <main v-else class="grid gap-5 xl:grid-cols-[260px_360px_minmax(0,1fr)]">
-        <aside class="digest-panel paper-card rounded-[34px] px-5 py-6 md:px-6">
-          <div class="space-y-5">
+      <main v-else class="digest-main-grid grid min-h-0 gap-5 xl:h-[calc(100vh-18rem)] xl:grid-cols-[260px_360px_minmax(0,1fr)]">
+        <aside class="digest-column digest-column--meta digest-panel paper-card rounded-[34px] px-5 py-6 md:px-6 xl:flex xl:min-h-0 xl:flex-col xl:overflow-hidden">
+          <div class="digest-column__scroll space-y-5 xl:min-h-0 xl:overflow-y-auto xl:pr-1">
             <section class="space-y-3">
               <p class="text-xs uppercase tracking-[0.3em] text-ink-light">{{ activeMeta.short }}</p>
               <div>
@@ -540,8 +540,8 @@ onMounted(loadDashboard)
           </div>
         </aside>
 
-        <section class="digest-panel paper-card rounded-[34px] px-5 py-6 md:px-6">
-          <div class="space-y-4">
+        <section class="digest-column digest-column--list digest-panel paper-card rounded-[34px] px-5 py-6 md:px-6 xl:flex xl:min-h-0 xl:flex-col xl:overflow-hidden">
+          <div class="digest-column__scroll space-y-4 xl:min-h-0 xl:overflow-y-auto xl:pr-1">
             <div>
               <p class="text-xs uppercase tracking-[0.28em] text-ink-light">AI 总结列表</p>
               <h2 class="mt-2 text-2xl font-black text-ink-dark">{{ activeCategory?.name || '还没选分类' }}</h2>

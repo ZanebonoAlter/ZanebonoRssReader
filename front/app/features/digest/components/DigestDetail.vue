@@ -157,57 +157,26 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="digest-detail-shell min-h-[760px] overflow-hidden rounded-[36px] border border-[var(--color-border-medium)] bg-[rgba(255,255,255,0.82)] shadow-[0_24px_60px_rgba(18,24,30,0.08)]">
-    <div v-if="summary" class="flex h-full flex-col">
-      <header class="border-b border-[var(--color-border-subtle)] px-6 py-5 md:px-7">
+  <section class="digest-detail-shell min-h-0 h-full overflow-hidden rounded-[36px] border border-[var(--color-border-medium)] bg-[rgba(255,255,255,0.82)] shadow-[0_24px_60px_rgba(18,24,30,0.08)] xl:min-h-[760px]">
+    <div v-if="summary" class="flex h-full min-h-0 flex-col">
+      <header class="shrink-0 border-b border-[var(--color-border-subtle)] px-6 py-3.5 md:px-7">
         <div class="flex flex-wrap items-start justify-between gap-4">
-          <div class="max-w-5xl">
+          <div class="min-w-0 flex-1 xl:pr-4">
             <p class="text-xs uppercase tracking-[0.32em] text-ink-light">{{ activeTypeLabel }} Summary</p>
-<div class="mt-3 flex flex-wrap items-center gap-3">
-              <div class="digest-feed-badge">
-                <Icon :icon="summary.feed_icon || 'mdi:rss'" width="16" :style="{ color: summary.feed_color || '#3b6b87' }" />
-                <span :style="{ color: summary.feed_color || '#3b6b87' }">{{ summary.feed_name }}</span>
-              </div>
-              <span class="digest-meta-chip">{{ summary.category_name }}</span>
-            </div>
-            <div v-if="summary.topics?.length" class="mt-3 flex flex-wrap items-center gap-2">
-              <span class="text-xs uppercase tracking-[0.2em] text-ink-light">话题</span>
-              <button
-                v-for="topic in summary.topics"
-                :key="topic.slug"
-                class="digest-topic-tag"
-                :style="{ borderColor: getTopicCategoryMeta(topic.category).color + '40', backgroundColor: getTopicCategoryMeta(topic.category).color + '12' }"
-                type="button"
-              >
-                <Icon
-                  :icon="topic.icon || getTopicCategoryMeta(topic.category).defaultIcon"
-                  width="14"
-                  :style="{ color: getTopicCategoryMeta(topic.category).color }"
-                />
-                <span :style="{ color: getTopicCategoryMeta(topic.category).color }">{{ topic.label }}</span>
-              </button>
-            </div>
-            <h2 class="mt-4 max-w-[16ch] text-3xl font-black leading-none text-ink-dark md:text-5xl">{{ summary.feed_name }}</h2>
-            <p class="mt-3 max-w-[44rem] text-sm leading-7 text-ink-medium md:text-base">这条是 feed 级 AI 总结。点下面文章，会弹出来直接读。</p>
-          </div>
-
-          <div class="grid gap-2 sm:grid-cols-3">
-            <article v-for="fact in metaFacts" :key="fact.label" class="digest-fact-chip">
-              <p class="text-[11px] uppercase tracking-[0.24em] text-ink-light">{{ fact.label }}</p>
-              <p class="mt-2 text-sm font-bold text-ink-dark">{{ fact.value }}</p>
-            </article>
+            
+            <h2 class="mt-2.5 max-w-none text-[1.75rem] font-black leading-tight text-ink-dark md:text-[2rem]">{{ summary.feed_name }}</h2>
           </div>
         </div>
       </header>
 
-      <div class="grid flex-1 gap-0 xl:grid-cols-[minmax(0,1fr)_380px] 2xl:grid-cols-[minmax(0,1fr)_440px]">
-        <div class="border-b border-[var(--color-border-subtle)] px-6 py-6 md:px-7 xl:border-b-0 xl:border-r">
+      <div class="digest-detail-main grid flex-1 min-h-0 gap-0 xl:grid-cols-[minmax(0,1fr)_380px] 2xl:grid-cols-[minmax(0,1fr)_440px]">
+        <div class="digest-detail-scroll digest-detail-scroll--summary min-h-0 border-b border-[var(--color-border-subtle)] px-6 py-6 md:px-7 xl:overflow-y-auto xl:border-b-0 xl:border-r">
           <div class="digest-summary-surface" @click.capture="handleArticleLinkClick">
             <div class="digest-summary-content max-w-none" v-html="renderedSummary" />
           </div>
         </div>
 
-        <aside class="bg-[rgba(247,241,230,0.72)] px-5 py-6 md:px-6">
+        <aside class="digest-detail-scroll digest-detail-scroll--articles min-h-0 bg-[rgba(247,241,230,0.72)] px-5 py-6 md:px-6 xl:overflow-y-auto">
           <div class="space-y-4">
             <div>
               <p class="text-xs uppercase tracking-[0.28em] text-ink-light">关联文章</p>
@@ -326,7 +295,7 @@ onBeforeUnmount(() => {
   min-width: 108px;
   border-radius: 20px;
   background: rgba(255,255,255,0.72);
-  padding: 0.85rem 1rem;
+  padding: 0.7rem 0.9rem;
 }
 
 .digest-summary-surface {

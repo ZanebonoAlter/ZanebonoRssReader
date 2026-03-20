@@ -80,7 +80,7 @@ func (c *openAICompatibleClient) Chat(ctx context.Context, provider models.AIPro
 		"max_tokens":  maxTokens,
 	}
 	if provider.ProviderType == ProviderTypeOllama {
-		payload["think"] = false
+		payload["reasoning_effort"] = "none"
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
