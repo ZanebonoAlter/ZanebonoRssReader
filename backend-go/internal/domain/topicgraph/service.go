@@ -9,13 +9,13 @@ import (
 	"time"
 
 	"my-robot-backend/internal/domain/models"
+	"my-robot-backend/internal/domain/topicextraction"
+	"my-robot-backend/internal/domain/topictypes"
 	"my-robot-backend/internal/platform/database"
 )
 
-var topicGraphCST = time.FixedZone("CST", 8*3600)
-
-func BuildTopicGraph(kind string, anchor time.Time) (*TopicGraphResponse, error) {
-	windowStart, windowEnd, periodLabel, err := resolveWindow(kind, anchor)
+func BuildTopicGraph(kind string, anchor time.Time) (*topictypes.TopicGraphResponse, error) {
+	windowStart, windowEnd, periodLabel, err := topictypes.ResolveWindow(kind, anchor)
 	if err != nil {
 		return nil, err
 	}
@@ -33,7 +33,7 @@ func BuildTopicGraph(kind string, anchor time.Time) (*TopicGraphResponse, error)
 		}
 	}
 
-	return &TopicGraphResponse{
+	return &topictypes.TopicGraphResponse{
 		Type:         kind,
 		AnchorDate:   windowStart.Format("2006-01-02"),
 		PeriodLabel:  periodLabel,
@@ -46,8 +46,8 @@ func BuildTopicGraph(kind string, anchor time.Time) (*TopicGraphResponse, error)
 	}, nil
 }
 
-func BuildTopicDetail(kind string, slug string, anchor time.Time) (*TopicDetail, error) {
-	windowStart, windowEnd, _, err := resolveWindow(kind, anchor)
+func BuildTopicDetail(kind string, slug string, anchor time.Time) (*topictypes.TopicDetail, error) {
+	windowStart, windowEnd, _, err := topictypes.ResolveWindow(kind, anchor)
 	if err != nil {
 		return nil, err
 	}
@@ -85,9 +85,9 @@ func BuildTopicDetail(kind string, slug string, anchor time.Time) (*TopicDetail,
 	}
 
 	matchedSourceSummaries := make([]models.AISummary, 0)
-	matchingSummaries := make([]TopicSummaryCard, 0)
-	relatedScores := map[string]TopicTag{}
-	var canonical TopicTag
+	matchingSummaries := make([]topictypes.TopicSummaryCard, 0)
+	relatedScores := map[string]topictypes.TopicTag{}
+	var canonical topictypes.TopicTag
 
 	for _, summary := range summaries {
 		topics := summaryTopics(summary)
@@ -109,10 +109,10 @@ func BuildTopicDetail(kind string, slug string, anchor time.Time) (*TopicDetail,
 	}
 
 	if canonical.Slug == "" {
-		canonical = TopicTag{ID: topic.ID, Label: topic.Label, Slug: topic.Slug, Category: normalizeDisplayCategory(topic.Kind, topic.Category), Icon: topic.Icon, Kind: normalizeTopicKind(topic.Kind, topic.Category), Score: 0}
+		canonical = topictypes.TopicTag{ID: topic.ID, Label: topic.Label, Slug: topic.Slug, Category: topictypes.NormalizeDisplayCategory(topic.Kind, topic.Category), Icon: topic.Icon, Kind: topictypes.NormalizeTopicKind(topic.Kind, topic.Category), Score: 0}
 	}
 
-	articlesBySummary := fetchArticlesForSummaries(matchedSourceSummaries)
+	articlesBySummary := topictypes.FetchArticlesForSummaries(matchedSourceSummaries)
 	for _, summary := range matchedSourceSummaries {
 		matchingSummaries = append(matchingSummaries, mapSummaryCard(summary, summaryTopics(summary), articlesBySummary[summary.ID]))
 	}
@@ -126,7 +126,7 @@ func BuildTopicDetail(kind string, slug string, anchor time.Time) (*TopicDetail,
 		return matchingSummaries[i].CreatedAt > matchingSummaries[j].CreatedAt
 	})
 
-	related := make([]TopicTag, 0, len(relatedScores))
+	related := make([]topictypes.TopicTag, 0, len(relatedScores))
 	for _, topic := range relatedScores {
 		related = append(related, topic)
 	}
@@ -140,7 +140,7 @@ func BuildTopicDetail(kind string, slug string, anchor time.Time) (*TopicDetail,
 		related = related[:8]
 	}
 
-	return &TopicDetail{
+	return &topictypes.TopicDetail{
 		Topic:         canonical,
 		Articles:      articles,
 		TotalArticles: total,
@@ -160,7 +160,7 @@ func BuildTopicDetail(kind string, slug string, anchor time.Time) (*TopicDetail,
 }
 
 // getTopicArticles retrieves articles directly associated with a topic tag
-func getTopicArticles(topicID uint, startDate, endDate time.Time, page, pageSize int) ([]TopicArticleCard, int64, error) {
+func getTopicArticles(topicID uint, startDate, endDate time.Time, page, pageSize int) ([]topictypes.TopicArticleCard, int64, error) {
 	var articles []models.Article
 	var total int64
 
@@ -190,9 +190,9 @@ func getTopicArticles(topicID uint, startDate, endDate time.Time, page, pageSize
 	}
 
 	// Convert to cards
-	cards := make([]TopicArticleCard, 0, len(articles))
+	cards := make([]topictypes.TopicArticleCard, 0, len(articles))
 	for _, article := range articles {
-		cards = append(cards, TopicArticleCard{
+		cards = append(cards, topictypes.TopicArticleCard{
 			ID:    article.ID,
 			Title: article.Title,
 			Link:  article.Link,
@@ -203,8 +203,8 @@ func getTopicArticles(topicID uint, startDate, endDate time.Time, page, pageSize
 }
 
 // getRelatedTags retrieves tags that co-occur with the given topic
-func getRelatedTags(topicID uint, limit int) ([]RelatedTag, error) {
-	var relatedTags []RelatedTag
+func getRelatedTags(topicID uint, limit int) ([]topictypes.RelatedTag, error) {
+	var relatedTags []topictypes.RelatedTag
 
 	// Query tags that co-occur with the current topic in articles
 	// Ordered by co-occurrence count
@@ -231,16 +231,16 @@ func getRelatedTags(topicID uint, limit int) ([]RelatedTag, error) {
 	}
 
 	for i := range relatedTags {
-		relatedTags[i].Category = normalizeDisplayCategory(relatedTags[i].Kind, relatedTags[i].Category)
-		relatedTags[i].Kind = normalizeTopicKind(relatedTags[i].Kind, relatedTags[i].Category)
+		relatedTags[i].Category = topictypes.NormalizeDisplayCategory(relatedTags[i].Kind, relatedTags[i].Category)
+		relatedTags[i].Kind = topictypes.NormalizeTopicKind(relatedTags[i].Kind, relatedTags[i].Category)
 	}
 
 	return relatedTags, nil
 }
 
 // FetchTopicArticles is the public API for fetching topic articles with pagination
-func FetchTopicArticles(slug string, kind string, anchor time.Time, page, pageSize int) ([]TopicArticleCard, int64, error) {
-	windowStart, windowEnd, _, err := resolveWindow(kind, anchor)
+func FetchTopicArticles(slug string, kind string, anchor time.Time, page, pageSize int) ([]topictypes.TopicArticleCard, int64, error) {
+	windowStart, windowEnd, _, err := topictypes.ResolveWindow(kind, anchor)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -255,23 +255,6 @@ func FetchTopicArticles(slug string, kind string, anchor time.Time, page, pageSi
 	return getTopicArticles(topic.ID, windowStart, windowEnd, page, pageSize)
 }
 
-func resolveWindow(kind string, anchor time.Time) (time.Time, time.Time, string, error) {
-	current := anchor.In(topicGraphCST)
-	dayStart := time.Date(current.Year(), current.Month(), current.Day(), 0, 0, 0, 0, topicGraphCST)
-
-	switch kind {
-	case "daily":
-		return dayStart, dayStart.AddDate(0, 0, 1), fmt.Sprintf("%s 当日", dayStart.Format("2006-01-02")), nil
-	case "weekly":
-		daysSinceMonday := (int(current.Weekday()) + 6) % 7
-		weekStart := dayStart.AddDate(0, 0, -daysSinceMonday)
-		weekEnd := weekStart.AddDate(0, 0, 7)
-		return weekStart, weekEnd, fmt.Sprintf("%s - %s", weekStart.Format("01-02"), weekEnd.AddDate(0, 0, -1).Format("01-02")), nil
-	default:
-		return time.Time{}, time.Time{}, "", fmt.Errorf("unsupported topic graph type: %s", kind)
-	}
-}
-
 func fetchSummaries(start time.Time, end time.Time) ([]models.AISummary, error) {
 	var summaries []models.AISummary
 	err := database.DB.Where("created_at >= ? AND created_at < ?", start, end).
@@ -283,17 +266,17 @@ func fetchSummaries(start time.Time, end time.Time) ([]models.AISummary, error) 
 	return summaries, err
 }
 
-func buildGraphPayload(summaries []models.AISummary) ([]GraphNode, []GraphEdge, []TopicTag) {
-	topicNodes := map[string]*GraphNode{}
-	feedNodes := map[string]*GraphNode{}
-	edgeMap := map[string]*GraphEdge{}
-	topicScores := map[string]TopicTag{}
+func buildGraphPayload(summaries []models.AISummary) ([]topictypes.GraphNode, []topictypes.GraphEdge, []topictypes.TopicTag) {
+	topicNodes := map[string]*topictypes.GraphNode{}
+	feedNodes := map[string]*topictypes.GraphNode{}
+	edgeMap := map[string]*topictypes.GraphEdge{}
+	topicScores := map[string]topictypes.TopicTag{}
 
 	for _, summary := range summaries {
 		topics := summaryTopics(summary)
 		feedNodeID := feedNodeID(summary)
 		if _, exists := feedNodes[feedNodeID]; !exists {
-			feedNodes[feedNodeID] = &GraphNode{
+			feedNodes[feedNodeID] = &topictypes.GraphNode{
 				ID:           feedNodeID,
 				Label:        feedLabel(summary),
 				Kind:         "feed",
@@ -307,7 +290,7 @@ func buildGraphPayload(summaries []models.AISummary) ([]GraphNode, []GraphEdge, 
 
 		for _, topic := range topics {
 			if _, exists := topicNodes[topic.Slug]; !exists {
-				topicNodes[topic.Slug] = &GraphNode{
+				topicNodes[topic.Slug] = &topictypes.GraphNode{
 					ID:           topic.Slug,
 					Label:        topic.Label,
 					Slug:         topic.Slug,
@@ -329,7 +312,7 @@ func buildGraphPayload(summaries []models.AISummary) ([]GraphNode, []GraphEdge, 
 
 			edgeKey := topic.Slug + "::" + feedNodeID
 			if _, exists := edgeMap[edgeKey]; !exists {
-				edgeMap[edgeKey] = &GraphEdge{ID: edgeKey, Source: topic.Slug, Target: feedNodeID, Kind: "topic_feed", Weight: 0}
+				edgeMap[edgeKey] = &topictypes.GraphEdge{ID: edgeKey, Source: topic.Slug, Target: feedNodeID, Kind: "topic_feed", Weight: 0}
 			}
 			edgeMap[edgeKey].Weight += topic.Score
 		}
@@ -347,14 +330,14 @@ func buildGraphPayload(summaries []models.AISummary) ([]GraphNode, []GraphEdge, 
 				}
 				edgeKey := left + "::" + right
 				if _, exists := edgeMap[edgeKey]; !exists {
-					edgeMap[edgeKey] = &GraphEdge{ID: edgeKey, Source: left, Target: right, Kind: "topic_topic", Weight: 0}
+					edgeMap[edgeKey] = &topictypes.GraphEdge{ID: edgeKey, Source: left, Target: right, Kind: "topic_topic", Weight: 0}
 				}
 				edgeMap[edgeKey].Weight += (a.Score + b.Score) / 2
 			}
 		}
 	}
 
-	nodes := make([]GraphNode, 0, len(topicNodes)+len(feedNodes))
+	nodes := make([]topictypes.GraphNode, 0, len(topicNodes)+len(feedNodes))
 	for _, node := range topicNodes {
 		nodes = append(nodes, *node)
 	}
@@ -368,13 +351,13 @@ func buildGraphPayload(summaries []models.AISummary) ([]GraphNode, []GraphEdge, 
 		return nodes[i].Weight > nodes[j].Weight
 	})
 
-	edges := make([]GraphEdge, 0, len(edgeMap))
+	edges := make([]topictypes.GraphEdge, 0, len(edgeMap))
 	for _, edge := range edgeMap {
 		edges = append(edges, *edge)
 	}
 	sort.SliceStable(edges, func(i, j int) bool { return edges[i].Weight > edges[j].Weight })
 
-	topTopics := make([]TopicTag, 0, len(topicScores))
+	topTopics := make([]topictypes.TopicTag, 0, len(topicScores))
 	for _, topic := range topicScores {
 		topTopics = append(topTopics, topic)
 	}
@@ -388,8 +371,8 @@ func buildGraphPayload(summaries []models.AISummary) ([]GraphNode, []GraphEdge, 
 	return nodes, edges, topTopics
 }
 
-func buildTopicHistory(kind string, slug string, anchor time.Time) ([]TopicHistoryPoint, error) {
-	history := make([]TopicHistoryPoint, 0, 7)
+func buildTopicHistory(kind string, slug string, anchor time.Time) ([]topictypes.TopicHistoryPoint, error) {
+	history := make([]topictypes.TopicHistoryPoint, 0, 7)
 	for i := 6; i >= 0; i-- {
 		var pointAnchor time.Time
 		if kind == "weekly" {
@@ -398,7 +381,7 @@ func buildTopicHistory(kind string, slug string, anchor time.Time) ([]TopicHisto
 			pointAnchor = anchor.AddDate(0, 0, -i)
 		}
 
-		start, end, label, err := resolveWindow(kind, pointAnchor)
+		start, end, label, err := topictypes.ResolveWindow(kind, pointAnchor)
 		if err != nil {
 			return nil, err
 		}
@@ -417,7 +400,7 @@ func buildTopicHistory(kind string, slug string, anchor time.Time) ([]TopicHisto
 		}
 		count = len(articleSet)
 
-		history = append(history, TopicHistoryPoint{
+		history = append(history, topictypes.TopicHistoryPoint{
 			AnchorDate: start.Format("2006-01-02"),
 			Count:      count,
 			Label:      label,
@@ -427,30 +410,30 @@ func buildTopicHistory(kind string, slug string, anchor time.Time) ([]TopicHisto
 	return history, nil
 }
 
-func summaryTopics(summary models.AISummary) []TopicTag {
+func summaryTopics(summary models.AISummary) []topictypes.TopicTag {
 	if len(summary.SummaryTopics) > 0 {
-		result := make([]TopicTag, 0, len(summary.SummaryTopics))
+		result := make([]topictypes.TopicTag, 0, len(summary.SummaryTopics))
 		for _, link := range summary.SummaryTopics {
 			if link.TopicTag == nil {
 				continue
 			}
-			result = append(result, TopicTag{
+			result = append(result, topictypes.TopicTag{
 				ID:       link.TopicTag.ID,
 				Label:    link.TopicTag.Label,
 				Slug:     link.TopicTag.Slug,
-				Category: normalizeDisplayCategory(link.TopicTag.Kind, link.TopicTag.Category),
+				Category: topictypes.NormalizeDisplayCategory(link.TopicTag.Kind, link.TopicTag.Category),
 				Icon:     link.TopicTag.Icon,
 				Aliases:  parseAliasesFromJSON(link.TopicTag.Aliases),
-				Kind:     normalizeTopicKind(link.TopicTag.Kind, link.TopicTag.Category),
+				Kind:     topictypes.NormalizeTopicKind(link.TopicTag.Kind, link.TopicTag.Category),
 				Score:    link.Score,
 			})
 		}
 		if len(result) > 0 {
-			return dedupeTopics(result)
+			return topicextraction.DedupeTopics(result)
 		}
 	}
 
-	return ExtractTopics(ExtractionInput{
+	return topicextraction.ExtractTopics(topictypes.ExtractionInput{
 		Title:        summary.Title,
 		Summary:      summary.Summary,
 		FeedName:     feedLabel(summary),
@@ -458,8 +441,8 @@ func summaryTopics(summary models.AISummary) []TopicTag {
 	})
 }
 
-func mapSummaryCard(summary models.AISummary, topics []TopicTag, articles []TopicArticleCard) TopicSummaryCard {
-	return TopicSummaryCard{
+func mapSummaryCard(summary models.AISummary, topics []topictypes.TopicTag, articles []topictypes.TopicArticleCard) topictypes.TopicSummaryCard {
+	return topictypes.TopicSummaryCard{
 		ID:           summary.ID,
 		Title:        summary.Title,
 		Summary:      summary.Summary,
@@ -467,61 +450,13 @@ func mapSummaryCard(summary models.AISummary, topics []TopicTag, articles []Topi
 		FeedColor:    feedColor(summary),
 		CategoryName: categoryLabel(summary),
 		ArticleCount: summary.ArticleCount,
-		CreatedAt:    summary.CreatedAt.In(topicGraphCST).Format(time.RFC3339),
+		CreatedAt:    summary.CreatedAt.In(topictypes.TopicGraphCST).Format(time.RFC3339),
 		Topics:       topics,
 		Articles:     articles,
 	}
 }
 
-func fetchArticlesForSummaries(summaries []models.AISummary) map[uint][]TopicArticleCard {
-	result := make(map[uint][]TopicArticleCard, len(summaries))
-	articleIDs := make([]uint, 0)
-	summaryArticleIDs := make(map[uint][]uint, len(summaries))
-
-	for _, summary := range summaries {
-		if strings.TrimSpace(summary.Articles) == "" {
-			continue
-		}
-
-		var ids []uint
-		if err := json.Unmarshal([]byte(summary.Articles), &ids); err != nil || len(ids) == 0 {
-			continue
-		}
-
-		summaryArticleIDs[summary.ID] = ids
-		articleIDs = append(articleIDs, ids...)
-	}
-
-	if len(articleIDs) == 0 {
-		return result
-	}
-
-	var articles []models.Article
-	if err := database.DB.Where("id IN ?", articleIDs).Find(&articles).Error; err != nil {
-		return result
-	}
-
-	articleMap := make(map[uint]models.Article, len(articles))
-	for _, article := range articles {
-		articleMap[article.ID] = article
-	}
-
-	for summaryID, ids := range summaryArticleIDs {
-		cards := make([]TopicArticleCard, 0, len(ids))
-		for _, articleID := range ids {
-			article, ok := articleMap[articleID]
-			if !ok {
-				continue
-			}
-			cards = append(cards, TopicArticleCard{ID: article.ID, Title: article.Title, Link: article.Link})
-		}
-		result[summaryID] = cards
-	}
-
-	return result
-}
-
-func containsTopic(items []TopicTag, slug string) bool {
+func containsTopic(items []topictypes.TopicTag, slug string) bool {
 	for _, item := range items {
 		if item.Slug == slug {
 			return true
@@ -530,13 +465,13 @@ func containsTopic(items []TopicTag, slug string) bool {
 	return false
 }
 
-func pickTopic(items []TopicTag, slug string) TopicTag {
+func pickTopic(items []topictypes.TopicTag, slug string) topictypes.TopicTag {
 	for _, item := range items {
 		if item.Slug == slug {
 			return item
 		}
 	}
-	return TopicTag{}
+	return topictypes.TopicTag{}
 }
 
 func feedNodeID(summary models.AISummary) string {
@@ -593,17 +528,10 @@ func parseAliasesFromJSON(aliases string) []string {
 	return result
 }
 
-// TopicsByCategoryResult holds tags grouped by category
-type TopicsByCategoryResult struct {
-	Events   []TopicTag `json:"events"`
-	People   []TopicTag `json:"people"`
-	Keywords []TopicTag `json:"keywords"`
-}
-
 // BuildTopicsByCategory builds topic lists grouped by category from article tags
 // Only includes tags extracted by LLM (not heuristic feed/category names)
-func BuildTopicsByCategory(kind string, anchor time.Time) (*TopicsByCategoryResult, error) {
-	windowStart, windowEnd, _, err := resolveWindow(kind, anchor)
+func BuildTopicsByCategory(kind string, anchor time.Time) (*topictypes.TopicsByCategoryResult, error) {
+	windowStart, windowEnd, _, err := topictypes.ResolveWindow(kind, anchor)
 	if err != nil {
 		return nil, err
 	}
@@ -616,29 +544,29 @@ func BuildTopicsByCategory(kind string, anchor time.Time) (*TopicsByCategoryResu
 		Joins("JOIN topic_tags ON topic_tags.id = article_topic_tags.topic_tag_id").
 		Where("articles.created_at >= ? AND articles.created_at < ?", windowStart, windowEnd).
 		Where("article_topic_tags.source = ?", "llm").
-		Preload("TopicTag").
+		Preload("topictypes.TopicTag").
 		Find(&articleTags).Error
 	if err != nil {
 		return nil, err
 	}
 
 	// Group tags by category and aggregate scores
-	eventScores := make(map[string]*TopicTag)
-	personScores := make(map[string]*TopicTag)
-	keywordScores := make(map[string]*TopicTag)
+	eventScores := make(map[string]*topictypes.TopicTag)
+	personScores := make(map[string]*topictypes.TopicTag)
+	keywordScores := make(map[string]*topictypes.TopicTag)
 
 	for _, at := range articleTags {
 		if at.TopicTag == nil {
 			continue
 		}
 
-		tag := TopicTag{
+		tag := topictypes.TopicTag{
 			ID:       at.TopicTag.ID,
 			Label:    at.TopicTag.Label,
 			Slug:     at.TopicTag.Slug,
-			Category: normalizeDisplayCategory(at.TopicTag.Kind, at.TopicTag.Category),
+			Category: topictypes.NormalizeDisplayCategory(at.TopicTag.Kind, at.TopicTag.Category),
 			Icon:     at.TopicTag.Icon,
-			Kind:     normalizeTopicKind(at.TopicTag.Kind, at.TopicTag.Category),
+			Kind:     topictypes.NormalizeTopicKind(at.TopicTag.Kind, at.TopicTag.Category),
 			Score:    at.Score,
 		}
 
@@ -665,7 +593,7 @@ func BuildTopicsByCategory(kind string, anchor time.Time) (*TopicsByCategoryResu
 	}
 
 	// Convert maps to slices and sort by score
-	result := &TopicsByCategoryResult{
+	result := &topictypes.TopicsByCategoryResult{
 		Events:   sortTagsByScoreMap(eventScores),
 		People:   sortTagsByScoreMap(personScores),
 		Keywords: sortTagsByScoreMap(keywordScores),
@@ -675,8 +603,8 @@ func BuildTopicsByCategory(kind string, anchor time.Time) (*TopicsByCategoryResu
 }
 
 // sortTagsByScoreMap converts a map of tags to a sorted slice
-func sortTagsByScoreMap(tagMap map[string]*TopicTag) []TopicTag {
-	result := make([]TopicTag, 0, len(tagMap))
+func sortTagsByScoreMap(tagMap map[string]*topictypes.TopicTag) []topictypes.TopicTag {
+	result := make([]topictypes.TopicTag, 0, len(tagMap))
 	for _, tag := range tagMap {
 		result = append(result, *tag)
 	}
@@ -709,7 +637,7 @@ func fetchArticleTagsData(start, end time.Time) ([]ArticleTagData, error) {
 		Joins("JOIN topic_tags ON topic_tags.id = article_topic_tags.topic_tag_id").
 		Where("articles.created_at >= ? AND articles.created_at < ?", start, end).
 		Where("article_topic_tags.source = ?", "llm").
-		Preload("TopicTag").
+		Preload("topictypes.TopicTag").
 		Preload("Article.Feed").
 		Find(&articleTags).Error
 	if err != nil {
@@ -745,11 +673,11 @@ func fetchArticleTagsData(start, end time.Time) ([]ArticleTagData, error) {
 }
 
 // buildGraphPayloadFromArticles builds graph nodes and edges from article tag data
-func buildGraphPayloadFromArticles(data []ArticleTagData) ([]GraphNode, []GraphEdge, []TopicTag, int) {
-	topicNodes := map[string]*GraphNode{}
-	feedNodes := map[string]*GraphNode{}
-	edgeMap := map[string]*GraphEdge{}
-	topicScores := map[string]TopicTag{}
+func buildGraphPayloadFromArticles(data []ArticleTagData) ([]topictypes.GraphNode, []topictypes.GraphEdge, []topictypes.TopicTag, int) {
+	topicNodes := map[string]*topictypes.GraphNode{}
+	feedNodes := map[string]*topictypes.GraphNode{}
+	edgeMap := map[string]*topictypes.GraphEdge{}
+	topicScores := map[string]topictypes.TopicTag{}
 	articleSet := make(map[uint]bool)
 
 	for _, item := range data {
@@ -757,7 +685,7 @@ func buildGraphPayloadFromArticles(data []ArticleTagData) ([]GraphNode, []GraphE
 
 		feedNodeID := fmt.Sprintf("feed-%d", item.FeedID)
 		if _, exists := feedNodes[feedNodeID]; !exists {
-			feedNodes[feedNodeID] = &GraphNode{
+			feedNodes[feedNodeID] = &topictypes.GraphNode{
 				ID:       feedNodeID,
 				Label:    item.FeedTitle,
 				Kind:     "feed",
@@ -770,10 +698,10 @@ func buildGraphPayloadFromArticles(data []ArticleTagData) ([]GraphNode, []GraphE
 
 		topicSlug := item.TopicTag.Slug
 		topicLabel := item.TopicTag.Label
-		topicCategory := normalizeDisplayCategory(item.TopicTag.Kind, item.TopicTag.Category)
+		topicCategory := topictypes.NormalizeDisplayCategory(item.TopicTag.Kind, item.TopicTag.Category)
 
 		if _, exists := topicNodes[topicSlug]; !exists {
-			topicNodes[topicSlug] = &GraphNode{
+			topicNodes[topicSlug] = &topictypes.GraphNode{
 				ID:           topicSlug,
 				Label:        topicLabel,
 				Slug:         topicSlug,
@@ -790,20 +718,20 @@ func buildGraphPayloadFromArticles(data []ArticleTagData) ([]GraphNode, []GraphE
 
 		merged := topicScores[topicSlug]
 		if merged.Label == "" || merged.Score < item.Score {
-			topicScores[topicSlug] = TopicTag{
+			topicScores[topicSlug] = topictypes.TopicTag{
 				ID:       item.TopicTag.ID,
 				Label:    topicLabel,
 				Slug:     topicSlug,
 				Category: topicCategory,
 				Icon:     item.TopicTag.Icon,
-				Kind:     normalizeTopicKind(item.TopicTag.Kind, item.TopicTag.Category),
+				Kind:     topictypes.NormalizeTopicKind(item.TopicTag.Kind, item.TopicTag.Category),
 				Score:    item.Score,
 			}
 		}
 
 		edgeKey := topicSlug + "::" + feedNodeID
 		if _, exists := edgeMap[edgeKey]; !exists {
-			edgeMap[edgeKey] = &GraphEdge{ID: edgeKey, Source: topicSlug, Target: feedNodeID, Kind: "topic_feed", Weight: 0}
+			edgeMap[edgeKey] = &topictypes.GraphEdge{ID: edgeKey, Source: topicSlug, Target: feedNodeID, Kind: "topic_feed", Weight: 0}
 		}
 		edgeMap[edgeKey].Weight += item.Score
 	}
@@ -825,14 +753,14 @@ func buildGraphPayloadFromArticles(data []ArticleTagData) ([]GraphNode, []GraphE
 				}
 				edgeKey := left + "::" + right
 				if _, exists := edgeMap[edgeKey]; !exists {
-					edgeMap[edgeKey] = &GraphEdge{ID: edgeKey, Source: left, Target: right, Kind: "topic_topic", Weight: 0}
+					edgeMap[edgeKey] = &topictypes.GraphEdge{ID: edgeKey, Source: left, Target: right, Kind: "topic_topic", Weight: 0}
 				}
 				edgeMap[edgeKey].Weight += 0.5
 			}
 		}
 	}
 
-	nodes := make([]GraphNode, 0, len(topicNodes)+len(feedNodes))
+	nodes := make([]topictypes.GraphNode, 0, len(topicNodes)+len(feedNodes))
 	for _, node := range topicNodes {
 		nodes = append(nodes, *node)
 	}
@@ -846,13 +774,13 @@ func buildGraphPayloadFromArticles(data []ArticleTagData) ([]GraphNode, []GraphE
 		return nodes[i].Weight > nodes[j].Weight
 	})
 
-	edges := make([]GraphEdge, 0, len(edgeMap))
+	edges := make([]topictypes.GraphEdge, 0, len(edgeMap))
 	for _, edge := range edgeMap {
 		edges = append(edges, *edge)
 	}
 	sort.SliceStable(edges, func(i, j int) bool { return edges[i].Weight > edges[j].Weight })
 
-	topTopics := make([]TopicTag, 0, len(topicScores))
+	topTopics := make([]topictypes.TopicTag, 0, len(topicScores))
 	for _, topic := range topicScores {
 		topic.Score = topicNodes[topic.Slug].Weight
 		topTopics = append(topTopics, topic)

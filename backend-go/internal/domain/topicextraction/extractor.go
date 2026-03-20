@@ -1,9 +1,11 @@
-package topicgraph
+package topicextraction
 
 import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"my-robot-backend/internal/domain/topictypes"
 )
 
 type topicRule struct {
@@ -27,9 +29,9 @@ var topicRules = []topicRule{
 var productTokenPattern = regexp.MustCompile(`\b(?:GPT-\d+(?:\.\d+)?|Claude\s?\d+(?:\.\d+)?|Gemini\s?[A-Z0-9.-]+|Llama\s?\d+(?:\.\d+)?)\b`)
 var punctuationPattern = regexp.MustCompile(`[\s\p{P}]+`)
 
-func ExtractTopics(input ExtractionInput) []TopicTag {
+func ExtractTopics(input topictypes.ExtractionInput) []topictypes.TopicTag {
 	combined := strings.ToLower(strings.Join([]string{input.Title, input.Summary, input.FeedName, input.CategoryName}, " "))
-	scores := make(map[string]TopicTag)
+	scores := make(map[string]topictypes.TopicTag)
 
 	for _, rule := range topicRules {
 		matches := 0
@@ -40,7 +42,7 @@ func ExtractTopics(input ExtractionInput) []TopicTag {
 			continue
 		}
 
-		scores[rule.Slug] = TopicTag{
+		scores[rule.Slug] = topictypes.TopicTag{
 			Label: rule.Label,
 			Slug:  rule.Slug,
 			Kind:  rule.Kind,
@@ -56,7 +58,7 @@ func ExtractTopics(input ExtractionInput) []TopicTag {
 		}
 		current, ok := scores[slug]
 		if !ok || current.Score < 1.15 {
-			scores[slug] = TopicTag{Label: label, Slug: slug, Kind: "entity", Score: 1.15}
+			scores[slug] = topictypes.TopicTag{Label: label, Slug: slug, Kind: "entity", Score: 1.15}
 		}
 	}
 
@@ -72,12 +74,12 @@ func ExtractTopics(input ExtractionInput) []TopicTag {
 		slug := slugify(category)
 		if slug != "" {
 			if _, exists := scores[slug]; !exists {
-				scores[slug] = TopicTag{Label: category, Slug: slug, Kind: "topic", Score: 0.65}
+				scores[slug] = topictypes.TopicTag{Label: category, Slug: slug, Kind: "topic", Score: 0.65}
 			}
 		}
 	}
 
-	result := make([]TopicTag, 0, len(scores))
+	result := make([]topictypes.TopicTag, 0, len(scores))
 	for _, topic := range scores {
 		result = append(result, topic)
 	}
@@ -96,7 +98,7 @@ func ExtractTopics(input ExtractionInput) []TopicTag {
 	return result
 }
 
-func extractFeedEntity(feedName string) *TopicTag {
+func extractFeedEntity(feedName string) *topictypes.TopicTag {
 	clean := strings.TrimSpace(feedName)
 	if clean == "" {
 		return nil
@@ -107,7 +109,7 @@ func extractFeedEntity(feedName string) *TopicTag {
 		return nil
 	}
 
-	return &TopicTag{
+	return &topictypes.TopicTag{
 		Label: upper,
 		Slug:  slugify(upper),
 		Kind:  "entity",

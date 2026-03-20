@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -12,9 +14,10 @@ import (
 	"sync"
 	"time"
 
+	"gorm.io/gorm"
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/domain/preferences"
-	"my-robot-backend/internal/domain/topicgraph"
+	"my-robot-backend/internal/domain/topicextraction"
 	"my-robot-backend/internal/platform/airouter"
 	"my-robot-backend/internal/platform/database"
 	"my-robot-backend/internal/platform/ws"
@@ -309,6 +312,8 @@ func (q *SummaryQueue) processJob(job *SummaryJob, config AIConfig) {
 	q.broadcastProgress(job)
 }
 
+const maxQueueArticlesPerSummary = 10
+
 func (q *SummaryQueue) generateSummaryForFeed(feedID *uint, categoryID *uint, feedName string, categoryName string, config AIConfig) (*models.AISummary, error) {
 	timeRange := config.TimeRange
 	if timeRange == 0 {
@@ -330,76 +335,119 @@ func (q *SummaryQueue) generateSummaryForFeed(feedID *uint, categoryID *uint, fe
 		return nil, &SummaryError{Code: "NO_ARTICLES", Message: "该订阅源下没有找到文章"}
 	}
 
-	articleTexts := make([]string, 0, len(articles))
-	for i, article := range articles {
-		if i >= 80 {
-			break
-		}
-
-		articleTexts = append(articleTexts, buildQueueArticleText(article))
-	}
+	log.Printf("Found %d articles for feed %d", len(articles), *feedID)
 
 	displayName := feedName
 	if displayName == "" {
 		displayName = "未知订阅源"
 	}
 
-	title := displayName + " - " + time.Now().Format("2006-01-02 15:04") + " 新闻汇总"
-	articlesText := joinStrings(articleTexts, "\n---\n")
+	batches := chunkQueueArticles(articles, maxQueueArticlesPerSummary)
+	totalBatches := len(batches)
+	var lastSummary *models.AISummary
 
-	preferenceService := preferences.NewPreferenceService(database.DB)
-	promptBuilder := NewAISummaryPromptBuilder(preferenceService, database.DB)
-	summaryPrompt, promptContext, err := promptBuilder.BuildPersonalizedPrompt(displayName, categoryName, articlesText, len(articles), "zh")
-	if err != nil {
-		return nil, &SummaryError{Code: "PROMPT_BUILD_FAILED", Message: "构建总结提示词失败: " + err.Error()}
+	for batchIndex, batch := range batches {
+		batchNum := batchIndex + 1
+		log.Printf("Processing queue batch %d/%d with %d articles for feed %d", batchNum, totalBatches, len(batch), *feedID)
+
+		articleTexts := make([]string, 0, len(batch))
+		batchArticleIDs := make([]uint, len(batch))
+		for _, article := range batch {
+			articleTexts = append(articleTexts, buildQueueArticleText(article))
+		}
+		for i, article := range batch {
+			batchArticleIDs[i] = article.ID
+		}
+		articleIDsJSON, _ := json.Marshal(batchArticleIDs)
+
+		existingSummary, err := findQueueSummaryBatch(feedID, string(articleIDsJSON))
+		if err != nil {
+			return nil, &SummaryError{Code: "DB_ERROR", Message: "检查已有总结失败: " + err.Error()}
+		}
+		if existingSummary != nil {
+			log.Printf("Skipping existing queue summary for feed %d batch %d/%d (ID: %d)", *feedID, batchNum, totalBatches, existingSummary.ID)
+			if err := topicextraction.TagSummary(existingSummary); err != nil {
+				log.Printf("[WARN] Failed to backfill tags for existing summary %d: %v", existingSummary.ID, err)
+			}
+			if err := topicextraction.TagArticles(batch, displayName, categoryName); err != nil {
+				log.Printf("[WARN] Failed to tag articles for existing feed %d batch %d: %v", *feedID, batchNum, err)
+			}
+			lastSummary = existingSummary
+			continue
+		}
+
+		title := displayName + " - " + time.Now().Format("2006-01-02 15:04")
+		if totalBatches > 1 {
+			title = fmt.Sprintf("%s (第%d/%d部分)", title, batchNum, totalBatches)
+		}
+		title = title + " 新闻汇总"
+
+		articlesText := joinStrings(articleTexts, "\n---\n")
+
+		preferenceService := preferences.NewPreferenceService(database.DB)
+		promptBuilder := NewAISummaryPromptBuilder(preferenceService, database.DB)
+		summaryPrompt, promptContext, err := promptBuilder.BuildPersonalizedPrompt(displayName, categoryName, articlesText, len(batch), "zh")
+		if err != nil {
+			return nil, &SummaryError{Code: "PROMPT_BUILD_FAILED", Message: "构建总结提示词失败: " + err.Error()}
+		}
+
+		log.Printf(
+			"Queue summary prompt built for feed=%s batch=%d/%d personalized=%t preferred_feeds=%d preferred_categories=%d",
+			displayName, batchNum, totalBatches,
+			promptContext.Personalized,
+			promptContext.FeedCount,
+			promptContext.CategoryCount,
+		)
+
+		summaryText, err := callQueueSummaryModel(config, summaryPrompt, buildQueueSummaryRequestMeta(feedID, displayName, categoryName, timeRange, batchNum, totalBatches, batchArticleIDs))
+		if err != nil {
+			return nil, err
+		}
+
+		aiSummary := models.AISummary{
+			FeedID:       feedID,
+			CategoryID:   categoryID,
+			Title:        title,
+			Summary:      summaryText,
+			Articles:     string(articleIDsJSON),
+			ArticleCount: len(batch),
+			TimeRange:    timeRange,
+		}
+
+		if err := database.DB.Create(&aiSummary).Error; err != nil {
+			return nil, &SummaryError{Code: "DB_ERROR", Message: "保存总结失败: " + err.Error()}
+		}
+
+		if err := topicextraction.TagSummary(&aiSummary); err != nil {
+			log.Printf("[WARN] Failed to tag summary %d: %v", aiSummary.ID, err)
+		}
+
+		if err := topicextraction.TagArticles(batch, displayName, categoryName); err != nil {
+			log.Printf("[WARN] Failed to tag articles for feed %d batch %d: %v", *feedID, batchNum, err)
+		}
+
+		lastSummary = &aiSummary
+		log.Printf("Successfully generated queue summary for feed %d batch %d/%d (ID: %d)", *feedID, batchNum, totalBatches, aiSummary.ID)
 	}
 
-	log.Printf(
-		"Queue summary prompt built for feed=%s personalized=%t preferred_feeds=%d preferred_categories=%d",
-		displayName,
-		promptContext.Personalized,
-		promptContext.FeedCount,
-		promptContext.CategoryCount,
-	)
+	log.Printf("Completed %d summary batches for feed %d, total %d articles", totalBatches, *feedID, len(articles))
+	return lastSummary, nil
+}
 
-	summaryText, err := callQueueSummaryModel(config, summaryPrompt, map[string]any{
-		"feed_name":     displayName,
-		"category_name": categoryName,
-		"article_count": len(articles),
-	})
-	if err != nil {
-		return nil, err
+func chunkQueueArticles(articles []models.Article, chunkSize int) [][]models.Article {
+	if len(articles) <= chunkSize {
+		return [][]models.Article{articles}
 	}
 
-	articleIDs := make([]uint, len(articles))
-	for i, article := range articles {
-		articleIDs[i] = article.ID
+	chunks := make([][]models.Article, 0, (len(articles)+chunkSize-1)/chunkSize)
+	for i := 0; i < len(articles); i += chunkSize {
+		end := i + chunkSize
+		if end > len(articles) {
+			end = len(articles)
+		}
+		chunks = append(chunks, articles[i:end])
 	}
-	articleIDsJSON, _ := json.Marshal(articleIDs)
-
-	aiSummary := models.AISummary{
-		FeedID:       feedID,
-		CategoryID:   categoryID,
-		Title:        title,
-		Summary:      summaryText,
-		Articles:     string(articleIDsJSON),
-		ArticleCount: len(articles),
-		TimeRange:    timeRange,
-	}
-
-	if err := database.DB.Create(&aiSummary).Error; err != nil {
-		return nil, &SummaryError{Code: "DB_ERROR", Message: "保存总结失败: " + err.Error()}
-	}
-
-	if err := topicgraph.TagSummary(&aiSummary); err != nil {
-		log.Printf("[WARN] Failed to tag summary %d: %v", aiSummary.ID, err)
-	}
-
-	if err := topicgraph.EnqueueTopicAnalysisForSummary(uint64(aiSummary.ID), topicgraph.AnalysisPriorityMedium, database.DB); err != nil {
-		log.Printf("[WARN] Failed to enqueue topic analysis for summary %d: %v", aiSummary.ID, err)
-	}
-
-	return &aiSummary, nil
+	return chunks
 }
 
 func buildQueueArticleText(article models.Article) string {
@@ -425,6 +473,40 @@ func truncateQueueArticleText(text string, limit int) string {
 		return text
 	}
 	return text[:limit]
+}
+
+func buildQueueSummaryRequestMeta(feedID *uint, feedName string, categoryName string, timeRange int, batchNum int, totalBatches int, articleIDs []uint) map[string]any {
+	meta := map[string]any{
+		"article_count": len(articleIDs),
+		"article_ids":   articleIDs,
+		"batch_num":     batchNum,
+		"category_name": categoryName,
+		"feed_name":     feedName,
+		"source":        "summary_queue",
+		"time_range":    timeRange,
+		"total_batches": totalBatches,
+	}
+	if feedID != nil {
+		meta["feed_id"] = *feedID
+	}
+	return meta
+}
+
+func findQueueSummaryBatch(feedID *uint, articleIDsJSON string) (*models.AISummary, error) {
+	if feedID == nil || articleIDsJSON == "" {
+		return nil, nil
+	}
+
+	var summary models.AISummary
+	err := database.DB.Where("feed_id = ? AND articles = ?", *feedID, articleIDsJSON).Order("id DESC").First(&summary).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	return &summary, nil
 }
 
 type SummaryError struct {

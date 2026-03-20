@@ -132,7 +132,7 @@ ArticleContentView
   -> useFirecrawlApi.crawlArticle(articleId)
   -> 后端执行抓取
   -> 再次查询 completion status
-  -> 更新 article.firecrawlContent / firecrawlStatus
+  -> 更新 article.firecrawlContent / firecrawlStatus / summaryStatus
 ```
 
 ### 手动生成整理稿
@@ -141,6 +141,7 @@ ArticleContentView
 ArticleContentView
   -> completeArticle(articleId, { force: true })
   -> 后端生成 ai_content_summary
+  -> 更新 summary_status / summary_generated_at
   -> 再次查询 completion status
   -> UI 渲染整理稿
 ```

@@ -2,7 +2,6 @@ export type ArticleContentSource = 'firecrawl' | 'original'
 
 interface ArticleContentInput {
   firecrawlContent?: string
-  fullContent?: string
   content?: string
 }
 
@@ -19,7 +18,7 @@ function cleanContent(content?: string): string {
 
 export function getArticleContentSources(input: ArticleContentInput): ArticleContentSources {
   const firecrawlContent = cleanContent(input.firecrawlContent)
-  const originalContent = cleanContent(input.fullContent) || cleanContent(input.content)
+  const originalContent = cleanContent(input.content)
 
   const available: ArticleContentSource[] = []
 

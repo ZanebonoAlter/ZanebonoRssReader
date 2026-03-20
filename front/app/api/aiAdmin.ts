@@ -16,8 +16,9 @@ export function useAIAdminApi() {
 
   async function testConnection(data: {
     base_url: string
-    api_key: string
+    api_key?: string
     model: string
+    provider_type?: string
   }): Promise<ApiResponse<void>> {
     return apiClient.post('/ai/test', data)
   }

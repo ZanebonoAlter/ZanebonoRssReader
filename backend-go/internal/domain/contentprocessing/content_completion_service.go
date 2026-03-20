@@ -63,7 +63,7 @@ func (s *ContentCompletionService) SetCrawlAPIToken(token string) {
 }
 
 func (s *ContentCompletionService) IsContentIncomplete(article *models.Article) bool {
-	if article.ContentStatus == "complete" || article.ContentStatus == "failed" {
+	if article.SummaryStatus == "complete" || article.SummaryStatus == "failed" {
 		return false
 	}
 
@@ -92,7 +92,7 @@ func (s *ContentCompletionService) CompleteArticleWithForce(articleID uint, forc
 		return fmt.Errorf("failed to fetch article: %w", err)
 	}
 
-	if article.ContentStatus == "complete" && !force {
+	if article.SummaryStatus == "complete" && !force {
 		return nil
 	}
 
@@ -101,7 +101,7 @@ func (s *ContentCompletionService) CompleteArticleWithForce(articleID uint, forc
 		return fmt.Errorf("failed to fetch feed: %w", err)
 	}
 
-	if !feed.ContentCompletionEnabled {
+	if !feed.ArticleSummaryEnabled {
 		return fmt.Errorf("AI summary not enabled for this feed")
 	}
 
@@ -109,8 +109,8 @@ func (s *ContentCompletionService) CompleteArticleWithForce(articleID uint, forc
 		return fmt.Errorf("firecrawl not completed for this article")
 	}
 
-	if article.CompletionAttempts >= feed.MaxCompletionRetries && !force {
-		article.ContentStatus = "failed"
+	if article.CompletionAttempts >= completionRetryLimit(&feed) && !force {
+		article.SummaryStatus = "failed"
 		article.CompletionError = "Max retries exceeded"
 		database.DB.Save(&article)
 		return fmt.Errorf("max completion retries exceeded")
@@ -118,44 +118,44 @@ func (s *ContentCompletionService) CompleteArticleWithForce(articleID uint, forc
 
 	if force {
 		article.AIContentSummary = ""
-		article.ContentFetchedAt = nil
+		article.SummaryGeneratedAt = nil
 	}
 
-	article.ContentStatus = "pending"
+	article.SummaryStatus = "pending"
 	article.CompletionAttempts++
 	article.CompletionError = ""
 	database.DB.Save(&article)
 
 	if s.aiService == nil || s.aiService.BaseURL == "" || s.aiService.APIKey == "" {
 		if !s.hasRouteConfig() {
-			article.ContentStatus = "failed"
-			article.CompletionError = "AI service not configured"
-			database.DB.Save(&article)
+			if err := s.persistCompletionFailure(&article, &feed, "AI service not configured"); err != nil {
+				return fmt.Errorf("persist completion failure: %w", err)
+			}
 			return fmt.Errorf("AI service not configured")
 		}
 	}
 
 	contentToSummarize := article.FirecrawlContent
 	if contentToSummarize == "" {
-		article.ContentStatus = "failed"
-		article.CompletionError = "No firecrawl content available"
-		database.DB.Save(&article)
+		if err := s.persistCompletionFailure(&article, &feed, "No firecrawl content available"); err != nil {
+			return fmt.Errorf("persist completion failure: %w", err)
+		}
 		return fmt.Errorf("no firecrawl content available")
 	}
 
-	summary, err := s.summarizeContent(article.Title, contentToSummarize)
+	summary, err := s.summarizeContent(article.ID, article.FeedID, article.Title, contentToSummarize)
 	if err != nil {
-		article.ContentStatus = "failed"
-		article.CompletionError = err.Error()
-		database.DB.Save(&article)
+		if err := s.persistCompletionFailure(&article, &feed, err.Error()); err != nil {
+			return fmt.Errorf("persist completion failure: %w", err)
+		}
 		return fmt.Errorf("AI summarization failed: %w", err)
 	}
 
 	now := time.Now().In(time.FixedZone("CST", 8*3600))
 	article.AIContentSummary = formatAISummary(summary)
-	article.ContentStatus = "complete"
+	article.SummaryStatus = "complete"
 	article.CompletionError = ""
-	article.ContentFetchedAt = &now
+	article.SummaryGeneratedAt = &now
 
 	if err := database.DB.Save(&article).Error; err != nil {
 		return fmt.Errorf("failed to save article: %w", err)
@@ -169,8 +169,8 @@ func (s *ContentCompletionService) AutoCompletePendingArticles(limit int) ([]uin
 
 	err := database.DB.
 		Joins("JOIN feeds ON feeds.id = articles.feed_id").
-		Where("articles.firecrawl_status = ? AND articles.content_status = ?", "completed", "incomplete").
-		Where("feeds.content_completion_enabled = ?", true).
+		Where("articles.firecrawl_status = ? AND articles.summary_status = ?", "completed", "incomplete").
+		Where("feeds.article_summary_enabled = ?", true).
 		Preload("Feed").
 		Limit(limit).
 		Find(&articles).Error
@@ -205,8 +205,8 @@ func (s *ContentCompletionService) CheckAndMarkIncompleteArticles(feedID uint) (
 
 	count := 0
 	for _, article := range articles {
-		if s.IsContentIncomplete(&article) && article.ContentStatus != "failed" {
-			article.ContentStatus = "incomplete"
+		if s.IsContentIncomplete(&article) && article.SummaryStatus != "failed" {
+			article.SummaryStatus = "incomplete"
 			database.DB.Save(&article)
 			count++
 		}
@@ -228,26 +228,26 @@ func (s *ContentCompletionService) GetOverview() (*ContentCompletionOverview, er
 			query: func(db *gorm.DB) *gorm.DB {
 				return db.Model(&models.Article{}).
 					Joins("JOIN feeds ON feeds.id = articles.feed_id").
-					Where("articles.firecrawl_status = ? AND articles.content_status = ?", "completed", "incomplete").
-					Where("feeds.content_completion_enabled = ?", true)
+					Where("articles.firecrawl_status = ? AND articles.summary_status = ?", "completed", "incomplete").
+					Where("feeds.article_summary_enabled = ?", true)
 			},
 		},
 		{
 			assign: func(count int64) { overview.ProcessingCount = int(count) },
 			query: func(db *gorm.DB) *gorm.DB {
-				return db.Model(&models.Article{}).Where("content_status = ?", "pending")
+				return db.Model(&models.Article{}).Where("summary_status = ?", "pending")
 			},
 		},
 		{
 			assign: func(count int64) { overview.CompletedCount = int(count) },
 			query: func(db *gorm.DB) *gorm.DB {
-				return db.Model(&models.Article{}).Where("content_status = ?", "complete")
+				return db.Model(&models.Article{}).Where("summary_status = ?", "complete")
 			},
 		},
 		{
 			assign: func(count int64) { overview.FailedCount = int(count) },
 			query: func(db *gorm.DB) *gorm.DB {
-				return db.Model(&models.Article{}).Where("content_status = ?", "failed")
+				return db.Model(&models.Article{}).Where("summary_status = ?", "failed")
 			},
 		},
 		{
@@ -255,8 +255,8 @@ func (s *ContentCompletionService) GetOverview() (*ContentCompletionOverview, er
 			query: func(db *gorm.DB) *gorm.DB {
 				return db.Model(&models.Article{}).
 					Joins("JOIN feeds ON feeds.id = articles.feed_id").
-					Where("articles.content_status = ?", "incomplete").
-					Where("articles.firecrawl_status <> ? OR feeds.content_completion_enabled = ?", "completed", false)
+					Where("articles.summary_status = ?", "incomplete").
+					Where("articles.firecrawl_status <> ? OR feeds.article_summary_enabled = ?", "completed", false)
 			},
 		},
 		{
@@ -279,7 +279,7 @@ func (s *ContentCompletionService) GetOverview() (*ContentCompletionOverview, er
 	overview.LiveProcessingCount = 0
 
 	var staleArticle models.Article
-	if err := database.DB.Where("content_status = ?", "pending").Order("created_at ASC").First(&staleArticle).Error; err == nil {
+	if err := database.DB.Where("summary_status = ?", "pending").Order("created_at ASC").First(&staleArticle).Error; err == nil {
 		overview.StaleProcessingArticle = ToArticleRef(staleArticle)
 	}
 
@@ -292,8 +292,8 @@ func (s *ContentCompletionService) GetOverview() (*ContentCompletionOverview, er
 			query: func(db *gorm.DB) *gorm.DB {
 				return db.Model(&models.Article{}).
 					Joins("JOIN feeds ON feeds.id = articles.feed_id").
-					Where("articles.content_status = ?", "incomplete").
-					Where("feeds.content_completion_enabled = ?", true).
+					Where("articles.summary_status = ?", "incomplete").
+					Where("feeds.article_summary_enabled = ?", true).
 					Where("articles.firecrawl_status <> ?", "completed")
 			},
 		},
@@ -302,8 +302,8 @@ func (s *ContentCompletionService) GetOverview() (*ContentCompletionOverview, er
 			query: func(db *gorm.DB) *gorm.DB {
 				return db.Model(&models.Article{}).
 					Joins("JOIN feeds ON feeds.id = articles.feed_id").
-					Where("articles.content_status = ?", "incomplete").
-					Where("feeds.content_completion_enabled = ?", false)
+					Where("articles.summary_status = ?", "incomplete").
+					Where("feeds.article_summary_enabled = ?", false)
 			},
 		},
 		{
@@ -311,8 +311,8 @@ func (s *ContentCompletionService) GetOverview() (*ContentCompletionOverview, er
 			query: func(db *gorm.DB) *gorm.DB {
 				return db.Model(&models.Article{}).
 					Joins("JOIN feeds ON feeds.id = articles.feed_id").
-					Where("articles.firecrawl_status = ? AND articles.content_status = ?", "completed", "incomplete").
-					Where("feeds.content_completion_enabled = ?", true).
+					Where("articles.firecrawl_status = ? AND articles.summary_status = ?", "completed", "incomplete").
+					Where("feeds.article_summary_enabled = ?", true).
 					Where("TRIM(COALESCE(articles.firecrawl_content, '')) = ''")
 			},
 		},
@@ -341,7 +341,7 @@ func (s *ContentCompletionService) hasRouteConfig() bool {
 	return err == nil && provider != nil && strings.TrimSpace(provider.APIKey) != ""
 }
 
-func (s *ContentCompletionService) summarizeContent(title, content string) (*platformai.AISummaryResponse, error) {
+func (s *ContentCompletionService) summarizeContent(articleID uint, feedID uint, title, content string) (*platformai.AISummaryResponse, error) {
 	if s.router != nil {
 		maxTokens := 16000
 		result, err := s.router.Chat(context.Background(), airouter.ChatRequest{
@@ -352,7 +352,9 @@ func (s *ContentCompletionService) summarizeContent(title, content string) (*pla
 			},
 			MaxTokens: &maxTokens,
 			Metadata: map[string]any{
-				"title": title,
+				"article_id": articleID,
+				"feed_id":    feedID,
+				"title":      title,
 			},
 		})
 		if err == nil {
@@ -364,6 +366,23 @@ func (s *ContentCompletionService) summarizeContent(title, content string) (*pla
 	}
 
 	return s.aiService.SummarizeArticle(title, content, "zh")
+}
+
+func (s *ContentCompletionService) persistCompletionFailure(article *models.Article, feed *models.Feed, message string) error {
+	article.CompletionError = message
+	if article.CompletionAttempts >= completionRetryLimit(feed) {
+		article.SummaryStatus = "failed"
+	} else {
+		article.SummaryStatus = "incomplete"
+	}
+	return database.DB.Save(article).Error
+}
+
+func completionRetryLimit(feed *models.Feed) int {
+	if feed == nil || feed.MaxCompletionRetries <= 0 {
+		return 1
+	}
+	return feed.MaxCompletionRetries
 }
 
 func ToArticleRef(article models.Article) *ContentCompletionArticleRef {

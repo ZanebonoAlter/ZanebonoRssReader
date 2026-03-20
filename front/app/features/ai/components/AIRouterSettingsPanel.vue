@@ -233,6 +233,11 @@ async function savePrimaryProvider() {
     return
   }
 
+  const isOllama = primaryProviderForm.provider_type === 'ollama'
+  if (!isOllama && !primaryProviderId.value && !primaryProviderForm.api_key) {
+    throw new Error('首次创建主模型需要填写 API Key')
+  }
+
   saving.value = true
   error.value = null
 
@@ -246,7 +251,7 @@ async function savePrimaryProvider() {
         throw new Error(response.error || '更新主模型失败')
       }
     } else {
-      if (!primaryProviderForm.api_key) {
+      if (!isOllama && !primaryProviderForm.api_key) {
         throw new Error('首次创建主模型需要填写 API Key')
       }
       const response = await aiAdminApi.createProvider(primaryProviderForm)
@@ -312,8 +317,14 @@ async function savePrimaryProvider() {
 }
 
 async function saveNewProvider() {
-  if (!newProviderForm.name || !newProviderForm.base_url || !newProviderForm.api_key || !newProviderForm.model) {
+  if (!newProviderForm.name || !newProviderForm.base_url || !newProviderForm.model) {
     pushMessage('error', '备用模型表单还没填完整')
+    return
+  }
+
+  const isOllama = newProviderForm.provider_type === 'ollama'
+  if (!isOllama && !newProviderForm.api_key) {
+    pushMessage('error', '非 Ollama 类型的备用模型需要填写 API Key')
     return
   }
 
@@ -449,8 +460,14 @@ async function saveRoutes() {
 }
 
 async function testPrimaryProvider() {
-  if (!primaryProviderForm.base_url || !primaryProviderForm.model || !primaryProviderForm.api_key) {
-    pushMessage('error', '测试连接前请填入 Base URL、Model 和 API Key')
+  if (!primaryProviderForm.base_url || !primaryProviderForm.model) {
+    pushMessage('error', '测试连接前请填入 Base URL 和 Model')
+    return
+  }
+
+  const isOllama = primaryProviderForm.provider_type === 'ollama'
+  if (!isOllama && !primaryProviderForm.api_key) {
+    pushMessage('error', '非 Ollama 类型测试连接前请填入 API Key')
     return
   }
 
@@ -459,8 +476,9 @@ async function testPrimaryProvider() {
     const aiAdminApi = useAIAdminApi()
     const response = await aiAdminApi.testConnection({
       base_url: primaryProviderForm.base_url,
-      api_key: primaryProviderForm.api_key,
+      api_key: primaryProviderForm.api_key || undefined,
       model: primaryProviderForm.model,
+      provider_type: primaryProviderForm.provider_type,
     })
     if (!response.success) {
       throw new Error(response.error || '连接测试失败')
@@ -505,10 +523,17 @@ onMounted(() => {
       </div>
 
       <div v-else class="space-y-4">
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-1.5">Primary Name</label>
             <input v-model="primaryProviderForm.name" type="text" class="input w-full" placeholder="default-primary">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1.5">Provider Type</label>
+            <select v-model="primaryProviderForm.provider_type" class="input w-full">
+              <option value="openai_compatible">OpenAI Compatible</option>
+              <option value="ollama">Ollama (本地)</option>
+            </select>
           </div>
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-1.5">Model</label>
@@ -518,10 +543,15 @@ onMounted(() => {
 
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1.5">Base URL</label>
-          <input v-model="primaryProviderForm.base_url" type="text" class="input w-full" placeholder="https://api.openai.com/v1">
+          <input
+            v-model="primaryProviderForm.base_url"
+            type="text"
+            class="input w-full"
+            :placeholder="primaryProviderForm.provider_type === 'ollama' ? 'http://localhost:11434/v1' : 'https://api.openai.com/v1'"
+          >
         </div>
 
-        <div>
+        <div v-if="primaryProviderForm.provider_type !== 'ollama'">
           <label class="block text-sm font-medium text-gray-700 mb-1.5">API Key</label>
           <div class="relative">
             <input
@@ -534,6 +564,9 @@ onMounted(() => {
               <Icon :icon="showPrimaryApiKey ? 'mdi:eye-off' : 'mdi:eye'" width="16" height="16" />
             </button>
           </div>
+        </div>
+        <div v-else class="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-700">
+          Ollama 模式无需 API Key，请确保 Ollama 服务已启动并可访问。
         </div>
 
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -570,12 +603,24 @@ onMounted(() => {
       <div v-if="showNewProviderForm" class="grid grid-cols-1 md:grid-cols-2 gap-4 rounded-xl border border-dashed border-gray-300 p-4 bg-gray-50">
         <input v-model="newProviderForm.name" type="text" class="input w-full" placeholder="provider 名称">
         <input v-model="newProviderForm.model" type="text" class="input w-full" placeholder="模型名">
-        <input v-model="newProviderForm.base_url" type="text" class="input w-full md:col-span-2" placeholder="https://api.example.com/v1">
-        <div class="relative md:col-span-2">
+        <select v-model="newProviderForm.provider_type" class="input w-full">
+          <option value="openai_compatible">OpenAI Compatible</option>
+          <option value="ollama">Ollama (本地)</option>
+        </select>
+        <input
+          v-model="newProviderForm.base_url"
+          type="text"
+          class="input w-full"
+          :placeholder="newProviderForm.provider_type === 'ollama' ? 'http://localhost:11434/v1' : 'https://api.example.com/v1'"
+        >
+        <div v-if="newProviderForm.provider_type !== 'ollama'" class="relative md:col-span-2">
           <input v-model="newProviderForm.api_key" :type="showNewProviderApiKey ? 'text' : 'password'" class="input w-full pr-12" placeholder="API Key">
           <button class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" @click="showNewProviderApiKey = !showNewProviderApiKey">
             <Icon :icon="showNewProviderApiKey ? 'mdi:eye-off' : 'mdi:eye'" width="16" height="16" />
           </button>
+        </div>
+        <div v-else class="md:col-span-2 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-700">
+          Ollama 模式无需 API Key
         </div>
         <div class="md:col-span-2 flex justify-end">
           <button class="px-4 py-2 text-sm font-medium text-white bg-ink-700 rounded-lg hover:bg-ink-800 transition-colors disabled:opacity-50" :disabled="saving" @click="saveNewProvider">
@@ -614,12 +659,24 @@ onMounted(() => {
           <div v-if="editingProviderId === provider.id" class="mt-4 grid grid-cols-1 gap-3 rounded-lg border border-dashed border-gray-300 bg-white p-3">
             <input v-model="editProviderForm.name" type="text" class="input w-full" placeholder="provider 名称">
             <input v-model="editProviderForm.model" type="text" class="input w-full" placeholder="模型名">
-            <input v-model="editProviderForm.base_url" type="text" class="input w-full" placeholder="https://api.example.com/v1">
-            <div class="relative">
+            <select v-model="editProviderForm.provider_type" class="input w-full">
+              <option value="openai_compatible">OpenAI Compatible</option>
+              <option value="ollama">Ollama (本地)</option>
+            </select>
+            <input
+              v-model="editProviderForm.base_url"
+              type="text"
+              class="input w-full"
+              :placeholder="editProviderForm.provider_type === 'ollama' ? 'http://localhost:11434/v1' : 'https://api.example.com/v1'"
+            >
+            <div v-if="editProviderForm.provider_type !== 'ollama'" class="relative">
               <input v-model="editProviderForm.api_key" :type="showEditProviderApiKey ? 'text' : 'password'" class="input w-full pr-12" placeholder="留空表示沿用已保存密钥">
               <button class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" @click="showEditProviderApiKey = !showEditProviderApiKey">
                 <Icon :icon="showEditProviderApiKey ? 'mdi:eye-off' : 'mdi:eye'" width="16" height="16" />
               </button>
+            </div>
+            <div v-else class="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-700">
+              Ollama 模式无需 API Key
             </div>
             <div class="grid grid-cols-2 gap-3">
               <input v-model.number="editProviderForm.timeout_seconds" type="number" min="30" class="input w-full" placeholder="Timeout">

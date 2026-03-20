@@ -24,6 +24,7 @@ const (
 	DefaultRouteName             string     = "default"
 	DefaultProviderName          string     = "default-primary"
 	ProviderTypeOpenAICompatible string     = "openai_compatible"
+	ProviderTypeOllama           string     = "ollama"
 )
 
 var defaultCapabilities = []Capability{
@@ -106,11 +107,15 @@ func (s *Store) UpsertProvider(provider *models.AIProvider) error {
 	provider.ProviderType = strings.TrimSpace(provider.ProviderType)
 	provider.BaseURL = strings.TrimRight(strings.TrimSpace(provider.BaseURL), "/")
 	provider.Model = strings.TrimSpace(provider.Model)
-	if provider.Name == "" || provider.BaseURL == "" || provider.APIKey == "" || provider.Model == "" {
+	provider.APIKey = strings.TrimSpace(provider.APIKey)
+	if provider.Name == "" || provider.BaseURL == "" || provider.Model == "" {
 		return fmt.Errorf("provider fields are incomplete")
 	}
 	if provider.ProviderType == "" {
 		provider.ProviderType = ProviderTypeOpenAICompatible
+	}
+	if provider.ProviderType != ProviderTypeOllama && provider.APIKey == "" {
+		return fmt.Errorf("api_key is required for provider type %s", provider.ProviderType)
 	}
 	if provider.TimeoutSeconds <= 0 {
 		provider.TimeoutSeconds = 120

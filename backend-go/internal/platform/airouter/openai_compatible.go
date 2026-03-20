@@ -73,12 +73,16 @@ func (c *openAICompatibleClient) Chat(ctx context.Context, provider models.AIPro
 		maxTokens = *provider.MaxTokens
 	}
 
-	body, err := json.Marshal(map[string]any{
+	payload := map[string]any{
 		"model":       provider.Model,
 		"messages":    req.Messages,
 		"temperature": temperature,
 		"max_tokens":  maxTokens,
-	})
+	}
+	if provider.ProviderType == ProviderTypeOllama {
+		payload["think"] = false
+	}
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return "", err
 	}
@@ -89,7 +93,9 @@ func (c *openAICompatibleClient) Chat(ctx context.Context, provider models.AIPro
 		return "", err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+provider.APIKey)
+	if provider.APIKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+provider.APIKey)
+	}
 
 	timeout := time.Duration(provider.TimeoutSeconds) * time.Second
 	if timeout <= 0 {

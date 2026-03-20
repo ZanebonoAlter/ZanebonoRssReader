@@ -1,4 +1,4 @@
-package topicgraph
+package topicanalysis
 
 import (
 	"errors"

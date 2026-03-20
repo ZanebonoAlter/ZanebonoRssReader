@@ -62,7 +62,7 @@
 feed 还带这些能力开关：
 
 - `ai_summary_enabled`
-- `content_completion_enabled`
+- `article_summary_enabled`
 - `completion_on_refresh`
 - `max_completion_retries`
 - `firecrawl_enabled`

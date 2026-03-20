@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"my-robot-backend/internal/domain/models"
+	"my-robot-backend/internal/domain/topictypes"
 	"my-robot-backend/internal/platform/database"
 )
 
@@ -32,7 +33,7 @@ type HotspotArticleRef struct {
 // GetDigestsByArticleTag retrieves digests that contain articles with the given tag
 // This enables the reverse trace: Tag -> Articles -> Digests (containing those articles)
 func GetDigestsByArticleTag(tagSlug string, kind string, anchor time.Time, limit int) ([]HotspotDigestCard, error) {
-	windowStart, windowEnd, _, err := resolveWindow(kind, anchor)
+	windowStart, windowEnd, _, err := topictypes.ResolveWindow(kind, anchor)
 	if err != nil {
 		return nil, err
 	}

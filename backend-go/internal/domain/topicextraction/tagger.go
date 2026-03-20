@@ -1,11 +1,12 @@
-package topicgraph
+package topicextraction
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
+	"my-robot-backend/internal/domain/topictypes"
 	"sort"
-	"time"
+	"strings"
 
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/platform/database"
@@ -15,26 +16,32 @@ var errTopicAIUnavailable = errors.New("topic AI unavailable")
 
 // TagSummary extracts and stores tags for an AI summary
 // This is the main entry point called from the automatic summary scheduler
+// Skips if the summary already has tags (dedup)
 func TagSummary(summary *models.AISummary) error {
 	if summary == nil || summary.ID == 0 {
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-	defer cancel()
+	// Skip if already tagged
+	var existingCount int64
+	database.DB.Model(&models.AISummaryTopic{}).Where("summary_id = ?", summary.ID).Count(&existingCount)
+	if existingCount > 0 {
+		return nil
+	}
 
-	input := ExtractionInput{
+	input := topictypes.ExtractionInput{
 		Title:        summary.Title,
 		Summary:      summary.Summary,
 		FeedName:     feedLabel(*summary),
 		CategoryName: categoryLabel(*summary),
+		SummaryID:    &summary.ID,
 	}
 
 	// Use the new extraction system
 	extractor := NewTagExtractor()
-	result, err := extractor.ExtractTags(ctx, input)
+	result, err := extractor.ExtractTags(context.Background(), input)
 
-	var tags []TopicTag
+	var tags []topictypes.TopicTag
 	var source string
 
 	if err != nil || len(result.Tags) == 0 {
@@ -48,11 +55,6 @@ func TagSummary(summary *models.AISummary) error {
 
 	if len(tags) == 0 {
 		return nil
-	}
-
-	// Delete existing tag associations for this summary
-	if err := database.DB.Where("summary_id = ?", summary.ID).Delete(&models.AISummaryTopic{}).Error; err != nil {
-		return err
 	}
 
 	// Process each tag
@@ -78,13 +80,13 @@ func TagSummary(summary *models.AISummary) error {
 }
 
 // legacyExtractTopics is the old heuristic-based extraction (for fallback)
-func legacyExtractTopics(input ExtractionInput) []TopicTag {
+func legacyExtractTopics(input topictypes.ExtractionInput) []topictypes.TopicTag {
 	// Use the existing extractor.go logic
 	rawTags := ExtractTopics(input)
-	result := make([]TopicTag, len(rawTags))
+	result := make([]topictypes.TopicTag, len(rawTags))
 	for i, t := range rawTags {
-		category := normalizeDisplayCategory(t.Kind, t.Category)
-		result[i] = TopicTag{
+		category := NormalizeDisplayCategory(t.Kind, t.Category)
+		result[i] = topictypes.TopicTag{
 			Label:    t.Label,
 			Slug:     t.Slug,
 			Category: category,
@@ -96,10 +98,10 @@ func legacyExtractTopics(input ExtractionInput) []TopicTag {
 }
 
 // findOrCreateTag finds an existing tag or creates a new one
-func findOrCreateTag(tag TopicTag, source string) (*models.TopicTag, error) {
-	slug := slugify(tag.Label)
-	category := normalizeDisplayCategory(tag.Kind, tag.Category)
-	kind := normalizeTopicKind(tag.Kind, category)
+func findOrCreateTag(tag topictypes.TopicTag, source string) (*models.TopicTag, error) {
+	slug := topictypes.Slugify(tag.Label)
+	category := NormalizeDisplayCategory(tag.Kind, tag.Category)
+	kind := NormalizeTopicKind(tag.Kind, category)
 
 	// Try to find existing tag by slug and category
 	var dbTag models.TopicTag
@@ -142,7 +144,7 @@ func findOrCreateTag(tag TopicTag, source string) (*models.TopicTag, error) {
 	return &newTag, nil
 }
 
-func normalizeDisplayCategory(kind string, fallback string) string {
+func NormalizeDisplayCategory(kind string, fallback string) string {
 	switch kind {
 	case "topic":
 		return "event"
@@ -164,7 +166,7 @@ func normalizeDisplayCategory(kind string, fallback string) string {
 	}
 }
 
-func normalizeTopicKind(kind string, category string) string {
+func NormalizeTopicKind(kind string, category string) string {
 	switch kind {
 	case "topic", "entity", "keyword":
 		return kind
@@ -181,11 +183,11 @@ func normalizeTopicKind(kind string, category string) string {
 }
 
 // dedupeTagsWithCategory removes duplicate tags based on (category, slug)
-func dedupeTagsWithCategory(items []TopicTag) []TopicTag {
-	best := make(map[string]TopicTag)
+func dedupeTagsWithCategory(items []topictypes.TopicTag) []topictypes.TopicTag {
+	best := make(map[string]topictypes.TopicTag)
 	for _, item := range items {
 		if item.Slug == "" {
-			item.Slug = slugify(item.Label)
+			item.Slug = topictypes.Slugify(item.Label)
 		}
 		if item.Category == "" {
 			item.Category = "keyword"
@@ -197,7 +199,7 @@ func dedupeTagsWithCategory(items []TopicTag) []TopicTag {
 		}
 	}
 
-	result := make([]TopicTag, 0, len(best))
+	result := make([]topictypes.TopicTag, 0, len(best))
 	for _, item := range best {
 		result = append(result, item)
 	}
@@ -213,7 +215,7 @@ func dedupeTagsWithCategory(items []TopicTag) []TopicTag {
 }
 
 // sortTagsByScore sorts tags by score descending
-func sortTagsByScore(tags []TopicTag) {
+func sortTagsByScore(tags []topictypes.TopicTag) {
 	sort.SliceStable(tags, func(i, j int) bool {
 		if tags[i].Score == tags[j].Score {
 			return tags[i].Label < tags[j].Label
@@ -222,9 +224,23 @@ func sortTagsByScore(tags []TopicTag) {
 	})
 }
 
-// slugify creates a URL-safe slug from a string (uses extractor.go implementation)
+// topictypes.Slugify creates a URL-safe slug from a string (uses extractor.go implementation)
 
 // dedupeTopics is kept for backward compatibility with extractor.go
-func dedupeTopics(items []TopicTag) []TopicTag {
+func DedupeTopics(items []topictypes.TopicTag) []topictypes.TopicTag {
 	return dedupeTagsWithCategory(items)
+}
+
+func feedLabel(summary models.AISummary) string {
+	if summary.Feed != nil && strings.TrimSpace(summary.Feed.Title) != "" {
+		return summary.Feed.Title
+	}
+	return "未知订阅源"
+}
+
+func categoryLabel(summary models.AISummary) string {
+	if summary.Category != nil && strings.TrimSpace(summary.Category.Name) != "" {
+		return summary.Category.Name
+	}
+	return "未分类"
 }

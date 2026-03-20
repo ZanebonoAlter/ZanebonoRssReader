@@ -1,15 +1,17 @@
-package topicgraph
+package topicextraction
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"my-robot-backend/internal/domain/topictypes"
 	"regexp"
 	"sort"
 	"strings"
 
 	"my-robot-backend/internal/domain/models"
+	"my-robot-backend/internal/domain/topicanalysis"
 	"my-robot-backend/internal/platform/airouter"
 	"my-robot-backend/internal/platform/database"
 )
@@ -18,21 +20,21 @@ var errNoAIAvailable = errors.New("no AI provider available for tagging")
 
 // TagExtractor handles extracting and resolving tags from AI summaries
 type TagExtractor struct {
-	embeddingService *EmbeddingService
+	embeddingService *topicanalysis.EmbeddingService
 	router           *airouter.Router
 }
 
 // NewTagExtractor creates a new tag extractor
 func NewTagExtractor() *TagExtractor {
 	return &TagExtractor{
-		embeddingService: NewEmbeddingService(),
+		embeddingService: topicanalysis.NewEmbeddingService(),
 		router:           airouter.NewRouter(),
 	}
 }
 
 // ExtractionResult represents the result of tag extraction
 type ExtractionResult struct {
-	Tags    []TopicTag
+	Tags    []topictypes.TopicTag
 	Skipped []string // Tags that were skipped due to low confidence
 	Errors  []string
 	Source  string // "llm" or "heuristic"
@@ -41,7 +43,7 @@ type ExtractionResult struct {
 // ExtractTags extracts tags from a summary using two-stage process:
 // 1. AI extracts candidate tags with categories
 // 2. For ambiguous candidates, AI decides whether to reuse or create
-func (te *TagExtractor) ExtractTags(ctx context.Context, input ExtractionInput) (*ExtractionResult, error) {
+func (te *TagExtractor) ExtractTags(ctx context.Context, input topictypes.ExtractionInput) (*ExtractionResult, error) {
 	// Step 1: Extract candidate tags
 	candidates, err := te.extractCandidates(ctx, input)
 	if err != nil {
@@ -54,7 +56,7 @@ func (te *TagExtractor) ExtractTags(ctx context.Context, input ExtractionInput) 
 	}
 
 	// Step 2: Resolve each candidate against existing tags
-	tags := make([]TopicTag, 0, len(candidates))
+	tags := make([]topictypes.TopicTag, 0, len(candidates))
 	var skipped []string
 	var errs []string
 
@@ -80,12 +82,24 @@ func (te *TagExtractor) ExtractTags(ctx context.Context, input ExtractionInput) 
 }
 
 // extractCandidates extracts candidate tags from the summary
-func (te *TagExtractor) extractCandidates(ctx context.Context, input ExtractionInput) ([]ExtractedTag, error) {
+func (te *TagExtractor) extractCandidates(ctx context.Context, input topictypes.ExtractionInput) ([]topictypes.ExtractedTag, error) {
 	systemPrompt := buildExtractionSystemPrompt()
 	userPrompt := buildExtractionUserPrompt(input)
 
 	maxTokens := 600
 	temperature := 0.2
+	metadata := map[string]any{
+		"title": input.Title,
+	}
+	if input.FeedName != "" {
+		metadata["feed_name"] = input.FeedName
+	}
+	if input.ArticleID != nil {
+		metadata["article_id"] = *input.ArticleID
+	}
+	if input.SummaryID != nil {
+		metadata["summary_id"] = *input.SummaryID
+	}
 
 	result, err := te.router.Chat(ctx, airouter.ChatRequest{
 		Capability: airouter.CapabilityTopicTagging,
@@ -95,9 +109,7 @@ func (te *TagExtractor) extractCandidates(ctx context.Context, input ExtractionI
 		},
 		Temperature: &temperature,
 		MaxTokens:   &maxTokens,
-		Metadata: map[string]any{
-			"title": input.Title,
-		},
+		Metadata:    metadata,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("AI extraction failed: %w", err)
@@ -107,7 +119,7 @@ func (te *TagExtractor) extractCandidates(ctx context.Context, input ExtractionI
 }
 
 // resolveCandidate resolves a single candidate tag against existing tags
-func (te *TagExtractor) resolveCandidate(ctx context.Context, candidate ExtractedTag, input ExtractionInput) (*TopicTag, bool, error) {
+func (te *TagExtractor) resolveCandidate(ctx context.Context, candidate topictypes.ExtractedTag, input topictypes.ExtractionInput) (*topictypes.TopicTag, bool, error) {
 	// Validate category
 	category := validateCategory(candidate.Category)
 
@@ -117,7 +129,7 @@ func (te *TagExtractor) resolveCandidate(ctx context.Context, candidate Extracte
 	err := database.DB.Where("slug = ? AND category = ?", slug, category).First(&existingTag).Error
 	if err == nil {
 		// Exact match - reuse with updated score
-		return &TopicTag{
+		return &topictypes.TopicTag{
 			Label:     existingTag.Label,
 			Slug:      existingTag.Slug,
 			Category:  existingTag.Category,
@@ -133,7 +145,7 @@ func (te *TagExtractor) resolveCandidate(ctx context.Context, candidate Extracte
 	var aliasMatch models.TopicTag
 	aliasMatchErr := database.DB.Where("category = ? AND ? IN (SELECT value FROM json_each(aliases))", category, candidate.Label).First(&aliasMatch).Error
 	if aliasMatchErr == nil {
-		return &TopicTag{
+		return &topictypes.TopicTag{
 			Label:     aliasMatch.Label,
 			Slug:      aliasMatch.Slug,
 			Category:  aliasMatch.Category,
@@ -151,7 +163,7 @@ func (te *TagExtractor) resolveCandidate(ctx context.Context, candidate Extracte
 		switch matchResult.MatchType {
 		case "exact":
 			// Already handled above, but just in case
-			return &TopicTag{
+			return &topictypes.TopicTag{
 				Label:     matchResult.ExistingTag.Label,
 				Slug:      matchResult.ExistingTag.Slug,
 				Category:  matchResult.ExistingTag.Category,
@@ -164,7 +176,7 @@ func (te *TagExtractor) resolveCandidate(ctx context.Context, candidate Extracte
 
 		case "high_similarity":
 			// Auto-reuse
-			return &TopicTag{
+			return &topictypes.TopicTag{
 				Label:     matchResult.ExistingTag.Label,
 				Slug:      matchResult.ExistingTag.Slug,
 				Category:  matchResult.ExistingTag.Category,
@@ -177,7 +189,7 @@ func (te *TagExtractor) resolveCandidate(ctx context.Context, candidate Extracte
 
 		case "low_similarity":
 			// Auto-create new tag
-			return &TopicTag{
+			return &topictypes.TopicTag{
 				Label:    candidate.Label,
 				Slug:     slug,
 				Category: category,
@@ -191,7 +203,7 @@ func (te *TagExtractor) resolveCandidate(ctx context.Context, candidate Extracte
 			decision, err := te.aiJudgment(ctx, candidate, matchResult.Candidates, input)
 			if err != nil {
 				// On AI failure, default to creating new
-				return &TopicTag{
+				return &topictypes.TopicTag{
 					Label:    candidate.Label,
 					Slug:     slug,
 					Category: category,
@@ -205,7 +217,7 @@ func (te *TagExtractor) resolveCandidate(ctx context.Context, candidate Extracte
 				// Find the tag to reuse
 				for _, c := range matchResult.Candidates {
 					if c.Tag.ID == decision.ReuseTagID {
-						return &TopicTag{
+						return &topictypes.TopicTag{
 							Label:     c.Tag.Label,
 							Slug:      c.Tag.Slug,
 							Category:  c.Tag.Category,
@@ -228,7 +240,7 @@ func (te *TagExtractor) resolveCandidate(ctx context.Context, candidate Extracte
 			if decision.NewCategory != "" {
 				cat = validateCategory(decision.NewCategory)
 			}
-			return &TopicTag{
+			return &topictypes.TopicTag{
 				Label:    label,
 				Slug:     slugify(label),
 				Category: cat,
@@ -240,7 +252,7 @@ func (te *TagExtractor) resolveCandidate(ctx context.Context, candidate Extracte
 	}
 
 	// No embedding service or matching - create new tag
-	return &TopicTag{
+	return &topictypes.TopicTag{
 		Label:    candidate.Label,
 		Slug:     slug,
 		Category: category,
@@ -251,11 +263,11 @@ func (te *TagExtractor) resolveCandidate(ctx context.Context, candidate Extracte
 }
 
 // aiJudgment asks AI to decide on ambiguous tag matches
-func (te *TagExtractor) aiJudgment(ctx context.Context, candidate ExtractedTag, similarTags []TagCandidate, input ExtractionInput) (*TagResolutionResponse, error) {
+func (te *TagExtractor) aiJudgment(ctx context.Context, candidate topictypes.ExtractedTag, similarTags []topicanalysis.TagCandidate, input topictypes.ExtractionInput) (*topictypes.TagResolutionResponse, error) {
 	// Build context for AI decision
-	var similarInfo []SimilarTagInfo
+	var similarInfo []topictypes.SimilarTagInfo
 	for _, t := range similarTags {
-		similarInfo = append(similarInfo, SimilarTagInfo{
+		similarInfo = append(similarInfo, topictypes.SimilarTagInfo{
 			ID:         t.Tag.ID,
 			Label:      t.Tag.Label,
 			Category:   t.Tag.Category,
@@ -264,7 +276,7 @@ func (te *TagExtractor) aiJudgment(ctx context.Context, candidate ExtractedTag, 
 		})
 	}
 
-	req := TagResolutionRequest{
+	req := topictypes.TagResolutionRequest{
 		CandidateTag:   candidate,
 		SimilarTags:    similarInfo,
 		SummaryContext: fmt.Sprintf("标题: %s\n来源: %s", input.Title, input.FeedName),
@@ -275,6 +287,18 @@ func (te *TagExtractor) aiJudgment(ctx context.Context, candidate ExtractedTag, 
 
 	maxTokens := 200
 	temperature := 0.1
+	metadata := map[string]any{
+		"candidate": candidate.Label,
+	}
+	if input.FeedName != "" {
+		metadata["feed_name"] = input.FeedName
+	}
+	if input.ArticleID != nil {
+		metadata["article_id"] = *input.ArticleID
+	}
+	if input.SummaryID != nil {
+		metadata["summary_id"] = *input.SummaryID
+	}
 
 	result, err := te.router.Chat(ctx, airouter.ChatRequest{
 		Capability: airouter.CapabilityTopicTagging,
@@ -284,9 +308,7 @@ func (te *TagExtractor) aiJudgment(ctx context.Context, candidate ExtractedTag, 
 		},
 		Temperature: &temperature,
 		MaxTokens:   &maxTokens,
-		Metadata: map[string]any{
-			"candidate": candidate.Label,
-		},
+		Metadata:    metadata,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("AI judgment failed: %w", err)
@@ -296,9 +318,9 @@ func (te *TagExtractor) aiJudgment(ctx context.Context, candidate ExtractedTag, 
 }
 
 // extractWithHeuristic falls back to rule-based extraction
-func (te *TagExtractor) extractWithHeuristic(input ExtractionInput, originalErr error) (*ExtractionResult, error) {
+func (te *TagExtractor) extractWithHeuristic(input topictypes.ExtractionInput, originalErr error) (*ExtractionResult, error) {
 	tags := ExtractTopics(input)
-	result := make([]TopicTag, len(tags))
+	result := make([]topictypes.TopicTag, len(tags))
 	for i, t := range tags {
 		// Map old 'kind' to new 'category'
 		category := "keyword"
@@ -307,7 +329,7 @@ func (te *TagExtractor) extractWithHeuristic(input ExtractionInput, originalErr 
 			// Future: could add heuristics to detect person/event
 			category = "keyword"
 		}
-		result[i] = TopicTag{
+		result[i] = topictypes.TopicTag{
 			Label:    t.Label,
 			Slug:     t.Slug,
 			Category: category,
@@ -344,7 +366,7 @@ func buildExtractionSystemPrompt() string {
 - 组织名称归入 keyword 类别`
 }
 
-func buildExtractionUserPrompt(input ExtractionInput) string {
+func buildExtractionUserPrompt(input topictypes.ExtractionInput) string {
 	return fmt.Sprintf(`请从以下新闻摘要中提取标签：
 
 标题: %s
@@ -370,7 +392,7 @@ func buildResolutionSystemPrompt() string {
 {"decision": "reuse|create_new", "reuse_tag_id": 123, "reason": "决策理由", "new_label": "调整后的标签名", "new_category": "event|person|keyword"}`
 }
 
-func buildResolutionUserPrompt(req TagResolutionRequest) string {
+func buildResolutionUserPrompt(req topictypes.TagResolutionRequest) string {
 	var similarStr string
 	for _, t := range req.SimilarTags {
 		similarStr += fmt.Sprintf("- ID %d: \"%s\" (类别: %s, 相似度: %.2f)\n", t.ID, t.Label, t.Category, t.Similarity)
@@ -390,7 +412,7 @@ func buildResolutionUserPrompt(req TagResolutionRequest) string {
 请判断是否复用已有标签或创建新标签。`, req.CandidateTag.Label, req.CandidateTag.Category, req.CandidateTag.Confidence, similarStr, req.SummaryContext)
 }
 
-func parseExtractedTags(content string) ([]ExtractedTag, error) {
+func parseExtractedTags(content string) ([]topictypes.ExtractedTag, error) {
 	content = strings.TrimSpace(content)
 	content = strings.TrimPrefix(content, "```json")
 	content = strings.TrimPrefix(content, "```")
@@ -408,7 +430,7 @@ func parseExtractedTags(content string) ([]ExtractedTag, error) {
 		return nil, fmt.Errorf("failed to parse tags: %w", err)
 	}
 
-	result := make([]ExtractedTag, 0, len(raw))
+	result := make([]topictypes.ExtractedTag, 0, len(raw))
 	for _, t := range raw {
 		if strings.TrimSpace(t.Label) == "" {
 			continue
@@ -418,7 +440,7 @@ func parseExtractedTags(content string) ([]ExtractedTag, error) {
 		if conf <= 0 {
 			conf = 0.7
 		}
-		result = append(result, ExtractedTag{
+		result = append(result, topictypes.ExtractedTag{
 			Label:      strings.TrimSpace(t.Label),
 			Category:   cat,
 			Confidence: conf,
@@ -430,7 +452,7 @@ func parseExtractedTags(content string) ([]ExtractedTag, error) {
 	return result, nil
 }
 
-func parseResolutionResponse(content string) (*TagResolutionResponse, error) {
+func parseResolutionResponse(content string) (*topictypes.TagResolutionResponse, error) {
 	content = strings.TrimSpace(content)
 	content = strings.TrimPrefix(content, "```json")
 	content = strings.TrimPrefix(content, "```")
@@ -448,7 +470,7 @@ func parseResolutionResponse(content string) (*TagResolutionResponse, error) {
 		return nil, fmt.Errorf("failed to parse resolution: %w", err)
 	}
 
-	return &TagResolutionResponse{
+	return &topictypes.TagResolutionResponse{
 		Decision:    resp.Decision,
 		ReuseTagID:  resp.ReuseTagID,
 		Reason:      resp.Reason,
@@ -507,8 +529,8 @@ func slugifyWithPunc(value string) string {
 }
 
 // dedupeTags removes duplicate tags based on slug and category
-func dedupeTags(tags []TopicTag) []TopicTag {
-	best := make(map[string]TopicTag)
+func dedupeTags(tags []topictypes.TopicTag) []topictypes.TopicTag {
+	best := make(map[string]topictypes.TopicTag)
 	for _, t := range tags {
 		key := t.Category + ":" + t.Slug
 		current, exists := best[key]
@@ -517,7 +539,7 @@ func dedupeTags(tags []TopicTag) []TopicTag {
 		}
 	}
 
-	result := make([]TopicTag, 0, len(best))
+	result := make([]topictypes.TopicTag, 0, len(best))
 	for _, t := range best {
 		result = append(result, t)
 	}

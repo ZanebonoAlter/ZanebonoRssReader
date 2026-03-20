@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -49,12 +50,12 @@ func TestCompleteArticleWithForceUsesAIRouterRoute(t *testing.T) {
 		t.Fatalf("create route provider: %v", err)
 	}
 
-	feed := models.Feed{Title: "Feed", URL: fmt.Sprintf("https://example.com/%s", t.Name()), ContentCompletionEnabled: true, FirecrawlEnabled: true, MaxCompletionRetries: 2}
+	feed := models.Feed{Title: "Feed", URL: fmt.Sprintf("https://example.com/%s", t.Name()), ArticleSummaryEnabled: true, FirecrawlEnabled: true, MaxCompletionRetries: 2}
 	if err := database.DB.Create(&feed).Error; err != nil {
 		t.Fatalf("create feed: %v", err)
 	}
 
-	article := models.Article{FeedID: feed.ID, Title: "Need routing", Link: "https://example.com/a1", FirecrawlStatus: "completed", FirecrawlContent: "body", ContentStatus: "incomplete"}
+	article := models.Article{FeedID: feed.ID, Title: "Need routing", Link: "https://example.com/a1", FirecrawlStatus: "completed", FirecrawlContent: "body", SummaryStatus: "incomplete"}
 	if err := database.DB.Create(&article).Error; err != nil {
 		t.Fatalf("create article: %v", err)
 	}
@@ -68,8 +69,11 @@ func TestCompleteArticleWithForceUsesAIRouterRoute(t *testing.T) {
 	if err := database.DB.First(&refreshed, article.ID).Error; err != nil {
 		t.Fatalf("reload article: %v", err)
 	}
-	if refreshed.ContentStatus != "complete" {
-		t.Fatalf("content status = %q, want complete", refreshed.ContentStatus)
+	if refreshed.SummaryStatus != "complete" {
+		t.Fatalf("summary status = %q, want complete", refreshed.SummaryStatus)
+	}
+	if refreshed.SummaryGeneratedAt == nil {
+		t.Fatal("expected summary generated timestamp to be populated")
 	}
 	if refreshed.AIContentSummary == "" {
 		t.Fatal("expected AI content summary to be populated from router")
@@ -80,18 +84,18 @@ func TestGetOverviewCountsQueueState(t *testing.T) {
 	setupServicesTestDB(t)
 
 	feedEnabled := models.Feed{
-		Title:                    "Enabled Feed",
-		URL:                      "https://enabled.example/rss",
-		ContentCompletionEnabled: true,
-		FirecrawlEnabled:         true,
-		MaxCompletionRetries:     3,
+		Title:                 "Enabled Feed",
+		URL:                   "https://enabled.example/rss",
+		ArticleSummaryEnabled: true,
+		FirecrawlEnabled:      true,
+		MaxCompletionRetries:  3,
 	}
 	feedDisabled := models.Feed{
-		Title:                    "Disabled Feed",
-		URL:                      "https://disabled.example/rss",
-		ContentCompletionEnabled: false,
-		FirecrawlEnabled:         true,
-		MaxCompletionRetries:     3,
+		Title:                 "Disabled Feed",
+		URL:                   "https://disabled.example/rss",
+		ArticleSummaryEnabled: false,
+		FirecrawlEnabled:      true,
+		MaxCompletionRetries:  3,
 	}
 
 	if err := database.DB.Create(&feedEnabled).Error; err != nil {
@@ -103,13 +107,13 @@ func TestGetOverviewCountsQueueState(t *testing.T) {
 
 	now := time.Now()
 	articles := []models.Article{
-		{FeedID: feedEnabled.ID, Title: "eligible-1", Link: "https://a/1", FirecrawlStatus: "completed", ContentStatus: "incomplete", FirecrawlContent: "ready"},
-		{FeedID: feedEnabled.ID, Title: "eligible-2", Link: "https://a/2", FirecrawlStatus: "completed", ContentStatus: "incomplete", FirecrawlContent: "ready"},
-		{FeedID: feedEnabled.ID, Title: "processing", Link: "https://a/3", FirecrawlStatus: "completed", ContentStatus: "pending", FirecrawlContent: "ready"},
-		{FeedID: feedEnabled.ID, Title: "done", Link: "https://a/4", FirecrawlStatus: "completed", ContentStatus: "complete", ContentFetchedAt: &now},
-		{FeedID: feedEnabled.ID, Title: "failed", Link: "https://a/5", FirecrawlStatus: "completed", ContentStatus: "failed", CompletionError: "boom"},
-		{FeedID: feedEnabled.ID, Title: "waiting crawl", Link: "https://a/6", FirecrawlStatus: "pending", ContentStatus: "incomplete"},
-		{FeedID: feedDisabled.ID, Title: "feed disabled", Link: "https://a/7", FirecrawlStatus: "completed", ContentStatus: "incomplete", FirecrawlContent: "ready"},
+		{FeedID: feedEnabled.ID, Title: "eligible-1", Link: "https://a/1", FirecrawlStatus: "completed", SummaryStatus: "incomplete", FirecrawlContent: "ready"},
+		{FeedID: feedEnabled.ID, Title: "eligible-2", Link: "https://a/2", FirecrawlStatus: "completed", SummaryStatus: "incomplete", FirecrawlContent: "ready"},
+		{FeedID: feedEnabled.ID, Title: "processing", Link: "https://a/3", FirecrawlStatus: "completed", SummaryStatus: "pending", FirecrawlContent: "ready"},
+		{FeedID: feedEnabled.ID, Title: "done", Link: "https://a/4", FirecrawlStatus: "completed", SummaryStatus: "complete", SummaryGeneratedAt: &now},
+		{FeedID: feedEnabled.ID, Title: "failed", Link: "https://a/5", FirecrawlStatus: "completed", SummaryStatus: "failed", CompletionError: "boom"},
+		{FeedID: feedEnabled.ID, Title: "waiting crawl", Link: "https://a/6", FirecrawlStatus: "pending", SummaryStatus: "incomplete"},
+		{FeedID: feedDisabled.ID, Title: "feed disabled", Link: "https://a/7", FirecrawlStatus: "completed", SummaryStatus: "incomplete", FirecrawlContent: "ready"},
 	}
 
 	if err := database.DB.Create(&articles).Error; err != nil {
@@ -160,5 +164,81 @@ func TestGetOverviewCountsQueueState(t *testing.T) {
 	}
 	if overview.StaleProcessingArticle == nil || overview.StaleProcessingArticle.Title != "processing" {
 		t.Fatalf("stale processing article = %#v, want processing", overview.StaleProcessingArticle)
+	}
+}
+
+func TestCompleteArticleWithForceRetriesUntilMaxAndLogsMetadata(t *testing.T) {
+	setupServicesTestDB(t)
+
+	aiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"error":{"code":"1302","message":"rate limited"}}`))
+	}))
+	defer aiServer.Close()
+
+	provider := models.AIProvider{Name: "completion-primary", ProviderType: airouter.ProviderTypeOpenAICompatible, BaseURL: aiServer.URL, APIKey: "token", Model: "test-model", Enabled: true}
+	if err := database.DB.Create(&provider).Error; err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+	route := models.AIRoute{Name: airouter.DefaultRouteName, Capability: string(airouter.CapabilityArticleCompletion), Enabled: true, Strategy: "ordered_failover"}
+	if err := database.DB.Create(&route).Error; err != nil {
+		t.Fatalf("create route: %v", err)
+	}
+	if err := database.DB.Create(&models.AIRouteProvider{RouteID: route.ID, ProviderID: provider.ID, Priority: 1, Enabled: true}).Error; err != nil {
+		t.Fatalf("create route provider: %v", err)
+	}
+
+	feed := models.Feed{Title: "Feed", URL: fmt.Sprintf("https://example.com/%s", t.Name()), ArticleSummaryEnabled: true, FirecrawlEnabled: true, MaxCompletionRetries: 2}
+	if err := database.DB.Create(&feed).Error; err != nil {
+		t.Fatalf("create feed: %v", err)
+	}
+
+	article := models.Article{FeedID: feed.ID, Title: "Need retry", Link: "https://example.com/a1", FirecrawlStatus: "completed", FirecrawlContent: "body", SummaryStatus: "incomplete"}
+	if err := database.DB.Create(&article).Error; err != nil {
+		t.Fatalf("create article: %v", err)
+	}
+
+	service := NewContentCompletionService("http://localhost:11235")
+	if err := service.CompleteArticleWithForce(article.ID, false); err == nil {
+		t.Fatal("expected first attempt to fail")
+	}
+
+	var refreshed models.Article
+	if err := database.DB.First(&refreshed, article.ID).Error; err != nil {
+		t.Fatalf("reload article after first attempt: %v", err)
+	}
+	if refreshed.SummaryStatus != "incomplete" {
+		t.Fatalf("summary status after first attempt = %q, want incomplete", refreshed.SummaryStatus)
+	}
+	if refreshed.CompletionAttempts != 1 {
+		t.Fatalf("completion attempts after first attempt = %d, want 1", refreshed.CompletionAttempts)
+	}
+
+	var callLogs []models.AICallLog
+	if err := database.DB.Order("id ASC").Find(&callLogs).Error; err != nil {
+		t.Fatalf("load call logs: %v", err)
+	}
+	if len(callLogs) != 1 {
+		t.Fatalf("call log count after first attempt = %d, want 1", len(callLogs))
+	}
+	if !strings.Contains(callLogs[0].RequestMeta, fmt.Sprintf(`"article_id":%d`, article.ID)) {
+		t.Fatalf("request_meta missing article_id: %s", callLogs[0].RequestMeta)
+	}
+	if !strings.Contains(callLogs[0].RequestMeta, fmt.Sprintf(`"feed_id":%d`, feed.ID)) {
+		t.Fatalf("request_meta missing feed_id: %s", callLogs[0].RequestMeta)
+	}
+
+	if err := service.CompleteArticleWithForce(article.ID, false); err == nil {
+		t.Fatal("expected second attempt to fail")
+	}
+	if err := database.DB.First(&refreshed, article.ID).Error; err != nil {
+		t.Fatalf("reload article after second attempt: %v", err)
+	}
+	if refreshed.SummaryStatus != "failed" {
+		t.Fatalf("summary status after second attempt = %q, want failed", refreshed.SummaryStatus)
+	}
+	if refreshed.CompletionAttempts != 2 {
+		t.Fatalf("completion attempts after second attempt = %d, want 2", refreshed.CompletionAttempts)
 	}
 }

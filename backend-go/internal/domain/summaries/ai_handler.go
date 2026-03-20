@@ -24,9 +24,10 @@ type SummarizeArticleRequest struct {
 }
 
 type TestAIConnectionRequest struct {
-	BaseURL string `json:"base_url" binding:"required"`
-	APIKey  string `json:"api_key" binding:"required"`
-	Model   string `json:"model" binding:"required"`
+	BaseURL      string `json:"base_url" binding:"required"`
+	APIKey       string `json:"api_key"`
+	Model        string `json:"model" binding:"required"`
+	ProviderType string `json:"provider_type"`
 }
 
 type SaveAISettingsRequest struct {
@@ -96,6 +97,14 @@ func TestAIConnection(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
 			"error":   "缺少必填字段",
+		})
+		return
+	}
+
+	if req.ProviderType != "ollama" && strings.TrimSpace(req.APIKey) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "API Key 是必填项",
 		})
 		return
 	}

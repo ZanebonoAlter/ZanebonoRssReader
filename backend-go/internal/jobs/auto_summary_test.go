@@ -2,11 +2,15 @@ package jobs
 
 import (
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"my-robot-backend/internal/domain/models"
+	"my-robot-backend/internal/platform/airouter"
 	"my-robot-backend/internal/platform/database"
 )
 
@@ -115,4 +119,95 @@ func TestAutoSummaryTriggerNowStartsRealRun(t *testing.T) {
 		t.Fatalf("load scheduler task: %v", err)
 	}
 	t.Fatalf("expected auto_summary manual trigger to update task, got total executions %d", task.TotalExecutions)
+}
+
+func TestGenerateSummaryForFeedSkipsExistingBatchAndLogsMetadata(t *testing.T) {
+	setupSchedulersTestDB(t)
+	if err := database.DB.AutoMigrate(&models.Category{}, &models.UserPreference{}, &models.AISummary{}, &models.TopicTag{}, &models.AISummaryTopic{}, &models.ArticleTopicTag{}, &models.AIProvider{}, &models.AIRoute{}, &models.AIRouteProvider{}, &models.AICallLog{}); err != nil {
+		t.Fatalf("extra migrate: %v", err)
+	}
+
+	aiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"summary body"}}]}`))
+	}))
+	defer aiServer.Close()
+
+	provider := models.AIProvider{Name: "summary-primary", ProviderType: airouter.ProviderTypeOpenAICompatible, BaseURL: aiServer.URL, APIKey: "token", Model: "test-model", Enabled: true}
+	if err := database.DB.Create(&provider).Error; err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+	route := models.AIRoute{Name: airouter.DefaultRouteName, Capability: string(airouter.CapabilitySummary), Enabled: true, Strategy: "ordered_failover"}
+	if err := database.DB.Create(&route).Error; err != nil {
+		t.Fatalf("create route: %v", err)
+	}
+	if err := database.DB.Create(&models.AIRouteProvider{RouteID: route.ID, ProviderID: provider.ID, Priority: 1, Enabled: true}).Error; err != nil {
+		t.Fatalf("create route provider: %v", err)
+	}
+
+	feed := models.Feed{Title: "Feed", URL: "https://example.com/feed", AISummaryEnabled: true}
+	if err := database.DB.Create(&feed).Error; err != nil {
+		t.Fatalf("create feed: %v", err)
+	}
+
+	pub := time.Now()
+	articles := make([]models.Article, 0, 21)
+	for i := 0; i < 21; i++ {
+		articles = append(articles, models.Article{
+			FeedID:  feed.ID,
+			Title:   fmt.Sprintf("Article %02d", i+1),
+			Link:    fmt.Sprintf("https://example.com/%02d", i+1),
+			Content: "rss body",
+			PubDate: &pub,
+		})
+	}
+	if err := database.DB.Create(&articles).Error; err != nil {
+		t.Fatalf("create articles: %v", err)
+	}
+
+	firstBatchIDs := make([]uint, 0, 20)
+	for i := 0; i < 20; i++ {
+		firstBatchIDs = append(firstBatchIDs, articles[i].ID)
+	}
+	firstBatchJSON, _ := json.Marshal(firstBatchIDs)
+	existing := models.AISummary{FeedID: &feed.ID, Title: "Existing batch", Summary: "saved", Articles: string(firstBatchJSON), ArticleCount: len(firstBatchIDs), TimeRange: 180}
+	if err := database.DB.Create(&existing).Error; err != nil {
+		t.Fatalf("create existing summary: %v", err)
+	}
+
+	scheduler := NewAutoSummaryScheduler(60)
+	scheduler.aiConfig = &AIConfig{TimeRange: 180}
+
+	generated, err := scheduler.generateSummaryForFeed(&feed)
+	if err != nil {
+		t.Fatalf("generate summary: %v", err)
+	}
+	if !generated {
+		t.Fatal("expected generateSummaryForFeed to generate missing batch")
+	}
+
+	var summaries []models.AISummary
+	if err := database.DB.Order("id ASC").Find(&summaries).Error; err != nil {
+		t.Fatalf("load summaries: %v", err)
+	}
+	if len(summaries) != 2 {
+		t.Fatalf("summary count = %d, want 2", len(summaries))
+	}
+
+	var logs []models.AICallLog
+	if err := database.DB.Order("id ASC").Find(&logs).Error; err != nil {
+		t.Fatalf("load logs: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("summary log count = %d, want 1", len(logs))
+	}
+	if !strings.Contains(logs[0].RequestMeta, fmt.Sprintf(`"feed_id":%d`, feed.ID)) {
+		t.Fatalf("request_meta missing feed_id: %s", logs[0].RequestMeta)
+	}
+	if !strings.Contains(logs[0].RequestMeta, `"batch_num":2`) {
+		t.Fatalf("request_meta missing batch_num: %s", logs[0].RequestMeta)
+	}
+	if !strings.Contains(logs[0].RequestMeta, `"article_ids":[`) {
+		t.Fatalf("request_meta missing article_ids: %s", logs[0].RequestMeta)
+	}
 }

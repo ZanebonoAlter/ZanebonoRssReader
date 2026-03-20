@@ -135,8 +135,8 @@ const feedStatusItems = computed(() => {
     },
     {
       label: '总结',
-      value: currentFeed.value.contentCompletionEnabled ? '开启' : '关闭',
-      tone: currentFeed.value.contentCompletionEnabled ? 'emerald' : 'stone',
+      value: currentFeed.value.articleSummaryEnabled ? '开启' : '关闭',
+      tone: currentFeed.value.articleSummaryEnabled ? 'emerald' : 'stone',
       icon: 'mdi:brain',
       spinning: false,
     },

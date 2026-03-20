@@ -104,7 +104,7 @@ func EnsureTables() error {
 				refresh_error TEXT,
 				last_refresh_at DATETIME,
 				ai_summary_enabled BOOLEAN DEFAULT 1,
-				content_completion_enabled BOOLEAN DEFAULT 0,
+				article_summary_enabled BOOLEAN DEFAULT 0,
 				completion_on_refresh BOOLEAN DEFAULT 1,
 				max_completion_retries INTEGER DEFAULT 3,
 				firecrawl_enabled BOOLEAN DEFAULT 0,
@@ -123,9 +123,8 @@ func EnsureTables() error {
 				author VARCHAR(200),
 				read BOOLEAN DEFAULT 0,
 				favorite BOOLEAN DEFAULT 0,
-				content_status VARCHAR(20) DEFAULT 'complete',
-				full_content TEXT,
-				content_fetched_at DATETIME,
+				summary_status VARCHAR(20) DEFAULT 'complete',
+				summary_generated_at DATETIME,
 				completion_attempts INTEGER DEFAULT 0,
 				completion_error TEXT,
 				ai_content_summary TEXT,
@@ -469,7 +468,7 @@ func EnsureTables() error {
 }
 
 func runMigrations() error {
-	if !columnExists("ai_summaries", "feed_id") {
+	if tableExists("ai_summaries") && !columnExists("ai_summaries", "feed_id") {
 		log.Println("Adding feed_id column to ai_summaries table...")
 		if err := DB.Exec("ALTER TABLE ai_summaries ADD COLUMN feed_id INTEGER REFERENCES feeds(id) ON DELETE CASCADE").Error; err != nil {
 			log.Printf("Warning: Failed to add feed_id column: %v", err)
@@ -478,14 +477,55 @@ func runMigrations() error {
 		}
 	}
 
+	if !columnExists("feeds", "article_summary_enabled") {
+		log.Println("Adding article_summary_enabled column to feeds table...")
+		if err := DB.Exec("ALTER TABLE feeds ADD COLUMN article_summary_enabled BOOLEAN DEFAULT 0").Error; err != nil {
+			log.Printf("Warning: Failed to add article_summary_enabled column: %v", err)
+		} else {
+			if columnExists("feeds", "content_completion_enabled") {
+				if err := DB.Exec("UPDATE feeds SET article_summary_enabled = COALESCE(content_completion_enabled, 0)").Error; err != nil {
+					log.Printf("Warning: Failed to backfill article_summary_enabled: %v", err)
+				}
+			}
+			log.Println("✓ article_summary_enabled column added to feeds")
+		}
+	}
+
+	if !columnExists("articles", "summary_status") {
+		log.Println("Adding summary_status column to articles table...")
+		if err := DB.Exec("ALTER TABLE articles ADD COLUMN summary_status VARCHAR(20) DEFAULT 'complete'").Error; err != nil {
+			log.Printf("Warning: Failed to add summary_status column: %v", err)
+		} else {
+			if columnExists("articles", "content_status") {
+				if err := DB.Exec("UPDATE articles SET summary_status = COALESCE(content_status, 'complete')").Error; err != nil {
+					log.Printf("Warning: Failed to backfill summary_status: %v", err)
+				}
+			}
+			log.Println("✓ summary_status column added to articles")
+		}
+	}
+
+	if !columnExists("articles", "summary_generated_at") {
+		log.Println("Adding summary_generated_at column to articles table...")
+		if err := DB.Exec("ALTER TABLE articles ADD COLUMN summary_generated_at DATETIME").Error; err != nil {
+			log.Printf("Warning: Failed to add summary_generated_at column: %v", err)
+		} else {
+			if columnExists("articles", "content_fetched_at") {
+				if err := DB.Exec("UPDATE articles SET summary_generated_at = content_fetched_at WHERE summary_generated_at IS NULL").Error; err != nil {
+					log.Printf("Warning: Failed to backfill summary_generated_at: %v", err)
+				}
+			}
+			log.Println("✓ summary_generated_at column added to articles")
+		}
+	}
+
 	articleMigrations := []struct {
 		colName string
 		colType string
 	}{
 		{"image_url", "VARCHAR(1000)"},
-		{"content_status", "VARCHAR(20) DEFAULT 'complete'"},
-		{"full_content", "TEXT"},
-		{"content_fetched_at", "DATETIME"},
+		{"summary_status", "VARCHAR(20) DEFAULT 'complete'"},
+		{"summary_generated_at", "DATETIME"},
 		{"completion_attempts", "INTEGER DEFAULT 0"},
 		{"completion_error", "TEXT"},
 		{"ai_content_summary", "TEXT"},
@@ -511,7 +551,7 @@ func runMigrations() error {
 		colName string
 		colType string
 	}{
-		{"content_completion_enabled", "BOOLEAN DEFAULT 0"},
+		{"article_summary_enabled", "BOOLEAN DEFAULT 0"},
 		{"completion_on_refresh", "BOOLEAN DEFAULT 1"},
 		{"max_completion_retries", "INTEGER DEFAULT 3"},
 		{"firecrawl_enabled", "BOOLEAN DEFAULT 0"},
@@ -530,51 +570,47 @@ func runMigrations() error {
 	}
 
 	// topic_tags migrations for new category system
-	topicTagMigrations := []struct {
-		colName string
-		colType string
-	}{
-		{"category", "VARCHAR(20) DEFAULT 'keyword'"},
-		{"icon", "VARCHAR(100)"},
-		{"is_canonical", "BOOLEAN DEFAULT 0"},
-	}
+	if tableExists("topic_tags") {
+		topicTagMigrations := []struct {
+			colName string
+			colType string
+		}{
+			{"category", "VARCHAR(20) DEFAULT 'keyword'"},
+			{"icon", "VARCHAR(100)"},
+			{"is_canonical", "BOOLEAN DEFAULT 0"},
+		}
 
-	for _, m := range topicTagMigrations {
-		if !columnExists("topic_tags", m.colName) {
-			log.Printf("Adding %s column to topic_tags table...", m.colName)
-			sql := fmt.Sprintf("ALTER TABLE topic_tags ADD COLUMN %s %s", m.colName, m.colType)
-			if err := DB.Exec(sql).Error; err != nil {
-				log.Printf("Warning: Failed to add %s column: %v", m.colName, err)
-			} else {
-				log.Printf("✓ %s column added to topic_tags", m.colName)
+		for _, m := range topicTagMigrations {
+			if !columnExists("topic_tags", m.colName) {
+				log.Printf("Adding %s column to topic_tags table...", m.colName)
+				sql := fmt.Sprintf("ALTER TABLE topic_tags ADD COLUMN %s %s", m.colName, m.colType)
+				if err := DB.Exec(sql).Error; err != nil {
+					log.Printf("Warning: Failed to add %s column: %v", m.colName, err)
+				} else {
+					log.Printf("✓ %s column added to topic_tags", m.colName)
+				}
 			}
 		}
-	}
 
-	// Migrate existing kind values to category
-	if columnExists("topic_tags", "category") {
-		// Map old kind values to new category values
-		// kind 'topic' -> category 'keyword'
-		// kind 'entity' -> category 'keyword' (organizations, products go here)
-		var needsMigration int64
-		DB.Raw("SELECT COUNT(*) FROM topic_tags WHERE category = 'keyword' AND kind IS NOT NULL AND kind != ''").Scan(&needsMigration)
-		if needsMigration > 0 {
-			log.Printf("Migrating %d existing topic_tags to new category system...", needsMigration)
-			// All existing tags default to 'keyword' category
-			// The kind field is retained for backward compatibility
-			log.Printf("✓ Existing topic_tags migrated to category system")
+		// Migrate existing kind values to category
+		if columnExists("topic_tags", "category") {
+			var needsMigration int64
+			DB.Raw("SELECT COUNT(*) FROM topic_tags WHERE category = 'keyword' AND kind IS NOT NULL AND kind != ''").Scan(&needsMigration)
+			if needsMigration > 0 {
+				log.Printf("Migrating %d existing topic_tags to new category system...", needsMigration)
+				log.Printf("✓ Existing topic_tags migrated to category system")
+			}
 		}
-	}
 
-	// Create index for category + slug composite key
-	var indexExists int64
-	DB.Raw("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_topic_tags_category_slug'").Scan(&indexExists)
-	if indexExists == 0 {
-		log.Println("Creating composite index for topic_tags...")
-		if err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_topic_tags_category_slug ON topic_tags(category, slug)").Error; err != nil {
-			log.Printf("Warning: Failed to create composite index: %v", err)
-		} else {
-			log.Println("✓ Composite index created for topic_tags")
+		var indexExists int64
+		DB.Raw("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_topic_tags_category_slug'").Scan(&indexExists)
+		if indexExists == 0 {
+			log.Println("Creating composite index for topic_tags...")
+			if err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_topic_tags_category_slug ON topic_tags(category, slug)").Error; err != nil {
+				log.Printf("Warning: Failed to create composite index: %v", err)
+			} else {
+				log.Println("✓ Composite index created for topic_tags")
+			}
 		}
 	}
 

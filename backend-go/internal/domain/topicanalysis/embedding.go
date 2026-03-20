@@ -1,4 +1,4 @@
-package topicgraph
+package topicanalysis
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"my-robot-backend/internal/domain/models"
+	"my-robot-backend/internal/domain/topictypes"
 	"my-robot-backend/internal/platform/airouter"
 	"my-robot-backend/internal/platform/database"
 )
@@ -178,7 +179,7 @@ func (s *EmbeddingService) FindSimilarTags(ctx context.Context, tag *models.Topi
 // TagMatch decides how to handle a candidate tag
 func (s *EmbeddingService) TagMatch(ctx context.Context, label, category string, aliases string) (*TagMatchResult, error) {
 	// Step 1: Check for exact match by slug in the same category
-	slug := slugify(label)
+	slug := topictypes.Slugify(label)
 	var existingTag models.TopicTag
 	err := database.DB.Where("slug = ? AND category = ?", slug, category).First(&existingTag).Error
 	if err == nil {

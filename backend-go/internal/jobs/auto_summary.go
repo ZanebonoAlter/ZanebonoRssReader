@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -14,10 +15,11 @@ import (
 	"time"
 
 	"github.com/robfig/cron/v3"
+	"gorm.io/gorm"
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/domain/preferences"
 	"my-robot-backend/internal/domain/summaries"
-	"my-robot-backend/internal/domain/topicgraph"
+	"my-robot-backend/internal/domain/topicextraction"
 	"my-robot-backend/internal/platform/airouter"
 	"my-robot-backend/internal/platform/aisettings"
 	"my-robot-backend/internal/platform/database"
@@ -297,7 +299,7 @@ func (s *AutoSummaryScheduler) runSummaryCycle(triggerSource string) {
 	s.updateSchedulerStatus("idle", "", &startTime, summary)
 }
 
-const maxArticlesPerSummary = 80
+const maxArticlesPerSummary = 20
 
 func (s *AutoSummaryScheduler) generateSummaryForFeed(feed *models.Feed) (bool, error) {
 	if s.aiConfig == nil {
@@ -344,8 +346,29 @@ func (s *AutoSummaryScheduler) generateSummaryForFeed(feed *models.Feed) (bool, 
 		log.Printf("Processing batch %d/%d with %d articles for feed %d", batchNum, totalBatches, len(batch), feed.ID)
 
 		articleTexts := make([]string, 0, len(batch))
+		batchArticleIDs := make([]uint, len(batch))
 		for _, article := range batch {
 			articleTexts = append(articleTexts, buildAutoSummaryArticleText(article))
+		}
+		for i, article := range batch {
+			batchArticleIDs[i] = article.ID
+		}
+		articleIDsJSON, _ := json.Marshal(batchArticleIDs)
+
+		existingSummary, err := findExistingSummaryBatch(&feed.ID, string(articleIDsJSON))
+		if err != nil {
+			return false, fmt.Errorf("failed to check existing summary batch: %w", err)
+		}
+		if existingSummary != nil {
+			allArticleIDs = append(allArticleIDs, batchArticleIDs...)
+			log.Printf("Skipping existing summary for feed %d batch %d/%d (ID: %d)", feed.ID, batchNum, totalBatches, existingSummary.ID)
+			if err := topicextraction.TagSummary(existingSummary); err != nil {
+				log.Printf("[WARN] Failed to backfill tags for existing auto summary %d: %v", existingSummary.ID, err)
+			}
+			if err := topicextraction.TagArticles(batch, feedName, categoryName); err != nil {
+				log.Printf("[WARN] Failed to tag articles for existing summary feed %d batch %d: %v", feed.ID, batchNum, err)
+			}
+			continue
 		}
 
 		title := feedName + " - " + time.Now().Format("2006-01-02 15:04")
@@ -371,17 +394,11 @@ func (s *AutoSummaryScheduler) generateSummaryForFeed(feed *models.Feed) (bool, 
 			promptContext.CategoryCount,
 		)
 
-		summaryText, err := s.callAI(summaryPrompt)
+		summaryText, err := s.callAI(summaryPrompt, buildSummaryRequestMeta("auto_summary", &feed.ID, feedName, categoryName, timeRange, batchNum, totalBatches, batchArticleIDs))
 		if err != nil {
 			return false, fmt.Errorf("AI API call failed: %w", err)
 		}
-
-		batchArticleIDs := make([]uint, len(batch))
-		for i, article := range batch {
-			batchArticleIDs[i] = article.ID
-		}
 		allArticleIDs = append(allArticleIDs, batchArticleIDs...)
-		articleIDsJSON, _ := json.Marshal(batchArticleIDs)
 
 		var categoryID *uint
 		if feed.CategoryID != nil {
@@ -403,15 +420,11 @@ func (s *AutoSummaryScheduler) generateSummaryForFeed(feed *models.Feed) (bool, 
 			return false, fmt.Errorf("failed to save summary: %w", err)
 		}
 
-		if err := topicgraph.TagSummary(&aiSummary); err != nil {
+		if err := topicextraction.TagSummary(&aiSummary); err != nil {
 			log.Printf("[WARN] Failed to tag auto summary %d: %v", aiSummary.ID, err)
 		}
 
-		if err := topicgraph.EnqueueTopicAnalysisForSummary(uint64(aiSummary.ID), topicgraph.AnalysisPriorityMedium, database.DB); err != nil {
-			log.Printf("[WARN] Failed to enqueue topic analysis for auto summary %d: %v", aiSummary.ID, err)
-		}
-
-		if err := topicgraph.TagArticles(batch, feedName, categoryName); err != nil {
+		if err := topicextraction.TagArticles(batch, feedName, categoryName); err != nil {
 			log.Printf("[WARN] Failed to tag articles for feed %d batch %d: %v", feed.ID, batchNum, err)
 		}
 
@@ -464,6 +477,39 @@ func truncateAutoSummaryText(text string, limit int) string {
 	return text[:limit]
 }
 
+func buildSummaryRequestMeta(source string, feedID *uint, feedName string, categoryName string, timeRange int, batchNum int, totalBatches int, articleIDs []uint) map[string]any {
+	meta := map[string]any{
+		"article_ids":   articleIDs,
+		"batch_num":     batchNum,
+		"category_name": categoryName,
+		"feed_name":     feedName,
+		"source":        source,
+		"time_range":    timeRange,
+		"total_batches": totalBatches,
+	}
+	if feedID != nil {
+		meta["feed_id"] = *feedID
+	}
+	return meta
+}
+
+func findExistingSummaryBatch(feedID *uint, articleIDsJSON string) (*models.AISummary, error) {
+	if feedID == nil || articleIDsJSON == "" {
+		return nil, nil
+	}
+
+	var summary models.AISummary
+	err := database.DB.Where("feed_id = ? AND articles = ?", *feedID, articleIDsJSON).Order("id DESC").First(&summary).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	return &summary, nil
+}
+
 func buildFeedSummaryPrompt(feedName string, categoryName string, articleCount int, articlesText string) string {
 	catInfo := ""
 	if categoryName != "" {
@@ -508,9 +554,9 @@ func buildFeedSummaryPrompt(feedName string, categoryName string, articleCount i
 5. 将订阅源名称作为一个标签：#` + feedName
 }
 
-func (s *AutoSummaryScheduler) callAI(prompt string) (string, error) {
+func (s *AutoSummaryScheduler) callAI(prompt string, metadata map[string]any) (string, error) {
 	if _, _, err := airouter.NewStore(database.DB).ResolvePrimaryProvider(airouter.CapabilitySummary); err == nil {
-		result, routeErr := requestAutoSummaryChat(prompt, map[string]any{"source": "auto_summary"})
+		result, routeErr := requestAutoSummaryChat(prompt, metadata)
 		if routeErr == nil {
 			return result, nil
 		}

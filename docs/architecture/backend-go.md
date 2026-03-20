@@ -43,6 +43,7 @@
 backend-go/
 ├── cmd/
 │   ├── migrate-digest/
+│   ├── migrate-tags/
 │   ├── server/
 │   └── test-digest/
 ├── configs/
@@ -57,10 +58,15 @@ backend-go/
 │   │   ├── feeds/
 │   │   ├── models/
 │   │   ├── preferences/
-│   │   └── summaries/
+│   │   ├── summaries/
+│   │   ├── topictypes/        # 共享类型和工具函数
+│   │   ├── topicgraph/        # 图谱查询和展示
+│   │   ├── topicanalysis/     # 分析队列和 AI 分析
+│   │   └── topicextraction/   # 标签提取和匹配
 │   ├── jobs/
 │   └── platform/
 │       ├── ai/
+│       ├── airouter/
 │       ├── aisettings/
 │       ├── config/
 │       ├── database/
@@ -107,6 +113,10 @@ backend-go/
 - `contentprocessing/` - 内容补全、抓取、Firecrawl 相关处理
 - `digest/` - digest 配置、生成器、导出器、手动运行
 - `models/` - 共享 GORM 模型和公共格式化 helper
+- `topictypes/` - 主题相关共享类型和工具函数（TopicTag、ExtractionInput 等）
+- `topicgraph/` - 图谱查询、展示、API handler
+- `topicanalysis/` - 分析队列、AI 分析器、嵌入向量服务
+- `topicextraction/` - 标签提取、解析、匹配
 
 ### `internal/jobs/`
 
@@ -130,31 +140,71 @@ backend-go/
 - `preferences` - 阅读行为与偏好分析
 - `contentprocessing` - 内容补全、抓取、Firecrawl 开关与正文处理
 - `digest` - 每日/每周汇总、飞书、Obsidian
+- `topicgraph` + `topicanalysis` + `topicextraction` - 主题图谱（标签提取、分析、查询展示）
+- `platform/airouter` - AI 路由和 provider 管理
 - `platform/ws` - WebSocket 进度推送
 
-### 主题分析服务
+### 主题图谱子系统
 
-#### 组件
+主题图谱功能已拆分为三个子域，共享类型集中在 `topictypes` 包：
 
-- `AnalysisService`: 分析业务逻辑
-- `AnalysisQueue`: 分析任务队列
-- `AIAnalyzer`: AI 分析器
-- `AnalysisHandler`: HTTP API 处理
+#### 目录结构
+
+```
+domain/
+├── topictypes/        # 共享类型和工具函数
+│   ├── types.go       # TopicTag, ExtractionInput, GraphNode 等
+│   ├── helpers.go     # Slugify, NormalizeDisplayCategory 等
+│   └── services.go    # ResolveWindow, ParseAnchorDate, FetchArticlesForSummaries
+├── topicgraph/        # 图谱查询和展示
+│   ├── handler.go     # HTTP API (GetTopicGraph, GetTopicDetail 等)
+│   ├── service.go     # 图谱构建、查询逻辑
+│   └── hotspot_digests.go
+├── topicanalysis/     # 分析队列和 AI 分析
+│   ├── analysis_service.go  # 分析业务逻辑
+│   ├── analysis_queue.go    # 任务队列
+│   ├── ai_analysis.go       # AI 分析器
+│   ├── analysis_handler.go  # HTTP API
+│   └── embedding.go         # 嵌入向量服务
+└── topicextraction/   # 标签提取和匹配
+    ├── tagger.go             # 摘要标签提取入口
+    ├── article_tagger.go     # 文章标签提取
+    ├── extractor.go          # 基础启发式提取
+    └── extractor_enhanced.go # AI 增强提取（含嵌入匹配）
+```
+
+#### 依赖关系
+
+```
+topictypes (无依赖，纯类型)
+    ↑
+    ├── topicgraph
+    ├── topicanalysis
+    └── topicextraction → topicanalysis (EmbeddingService)
+```
+
+#### 组件说明
+
+- **topictypes**: 共享类型定义（TopicTag、ExtractionInput、GraphNode 等）和工具函数（Slugify、NormalizeDisplayCategory）
+- **topicgraph**: 图谱查询和展示，构建节点/边数据，处理 API 请求
+- **topicanalysis**: 分析任务队列、AI 分析、嵌入向量生成和相似度匹配
+- **topicextraction**: 标签提取入口，支持启发式和 AI 两种模式
 
 #### 数据模型
 
+- `TopicTag`: 标签（slug、label、category）
 - `TopicTagAnalysis`: 分析结果存储
 - `TopicAnalysisCursor`: 增量更新游标
-- `AnalysisJob`: 队列任务
+- `TopicTagEmbedding`: 标签嵌入向量
 
 #### 工作流
 
-1. 新 summary 生成后触发 TagSummary
-2. 为每个关联 topic 创建分析任务
-3. 任务入队（优先级：手动 > 自动增量）
-4. Worker 出队任务并执行
-5. 调用 AI 进行分析
-6. 存储结果并更新游标
+1. 新 summary 生成后触发 `topicextraction.TagSummary`
+2. AI 提取候选标签（或回退到启发式提取）
+3. 嵌入匹配找到相似标签，必要时 AI 判断复用/新建
+4. 为每个关联 topic 创建分析任务（`topicanalysis`）
+5. 任务入队，Worker 出队并调用 AI 分析
+6. 存储结果，图谱查询时由 `topicgraph` 组装展示
 
 ## 当前结构的问题
 
@@ -171,13 +221,13 @@ backend-go/
 
 当前模型里已经明确出现这些新增能力字段：
 
-- `feeds.content_completion_enabled`
+- `feeds.article_summary_enabled`
 - `feeds.completion_on_refresh`
 - `feeds.max_completion_retries`
 - `feeds.firecrawl_enabled`
 - `articles.image_url`
-- `articles.content_status`
-- `articles.full_content`
+- `articles.summary_status`
+- `articles.summary_generated_at`
 - `articles.ai_content_summary`
 - `articles.firecrawl_status`
 - `articles.firecrawl_content`
@@ -227,8 +277,15 @@ backend-go/
 - `preferences`
 - `contentprocessing`
 - `digest`
+- `topictypes` + `topicgraph` + `topicanalysis` + `topicextraction`
 
 `firecrawl` 目前仍保留在 `contentprocessing`，因为它还是内容增强链路的一段，不是单独业务面。
+
+主题图谱已拆分为四个包：
+- `topictypes` - 共享类型，无依赖
+- `topicgraph` - 图谱查询展示
+- `topicanalysis` - 分析队列和 AI
+- `topicextraction` - 标签提取匹配
 
 ## 迁移原则
 

@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"my-robot-backend/internal/domain/models"
-	"my-robot-backend/internal/domain/topicgraph"
+	"my-robot-backend/internal/domain/topicanalysis"
 	"my-robot-backend/internal/platform/config"
 	"my-robot-backend/internal/platform/database"
 )
@@ -119,9 +119,9 @@ func migrateTags(dryRun bool, generateEmbeddings bool) (*migrationResult, error)
 	result.total = len(tags)
 
 	// Initialize embedding service if needed
-	var embeddingSvc *topicgraph.EmbeddingService
+	var embeddingSvc *topicanalysis.EmbeddingService
 	if generateEmbeddings {
-		embeddingSvc = topicgraph.NewEmbeddingService()
+		embeddingSvc = topicanalysis.NewEmbeddingService()
 	}
 
 	for i, tag := range tags {

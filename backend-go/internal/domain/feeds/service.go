@@ -137,22 +137,21 @@ func (s *FeedService) FetchFeedPreview(feedURL string) (title, description strin
 
 func (s *FeedService) buildArticleFromEntry(feed models.Feed, entry ParsedEntry) models.Article {
 	article := models.Article{
-		FeedID:           feed.ID,
-		Title:            entry.Title,
-		Description:      entry.Description,
-		Content:          entry.Content,
-		Link:             entry.Link,
-		ImageURL:         entry.ImageURL,
-		PubDate:          entry.PubDate,
-		Author:           entry.Author,
-		FirecrawlEnabled: feed.FirecrawlEnabled,
-		ContentStatus:    "complete",
+		FeedID:        feed.ID,
+		Title:         entry.Title,
+		Description:   entry.Description,
+		Content:       entry.Content,
+		Link:          entry.Link,
+		ImageURL:      entry.ImageURL,
+		PubDate:       entry.PubDate,
+		Author:        entry.Author,
+		SummaryStatus: "complete",
 	}
 
 	if feed.FirecrawlEnabled {
 		article.FirecrawlStatus = "pending"
-		if feed.ContentCompletionEnabled {
-			article.ContentStatus = "incomplete"
+		if feed.ArticleSummaryEnabled {
+			article.SummaryStatus = "incomplete"
 		}
 	}
 

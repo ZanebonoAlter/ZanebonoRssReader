@@ -204,7 +204,9 @@ func (s *AIService) callOpenAI(req openAIRequest) (*openAIResponse, error) {
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+s.APIKey)
+	if s.APIKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+s.APIKey)
+	}
 
 	resp, err := s.client.Do(httpReq)
 	if err != nil {

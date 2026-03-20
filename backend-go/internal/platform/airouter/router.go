@@ -21,6 +21,7 @@ func NewRouter() *Router {
 		store: store,
 		clients: map[string]ProviderClient{
 			ProviderTypeOpenAICompatible: NewOpenAICompatibleClient(),
+			ProviderTypeOllama:           NewOpenAICompatibleClient(),
 		},
 	}
 }
@@ -30,6 +31,7 @@ func NewRouterWithStore(store *Store) *Router {
 		store: store,
 		clients: map[string]ProviderClient{
 			ProviderTypeOpenAICompatible: NewOpenAICompatibleClient(),
+			ProviderTypeOllama:           NewOpenAICompatibleClient(),
 		},
 	}
 }
@@ -72,10 +74,8 @@ func (r *Router) Chat(ctx context.Context, req ChatRequest) (*ChatResult, error)
 		}
 
 		providerErr := &ProviderError{}
-		retryable := false
 		code := "provider_error"
 		if errors.As(callErr, &providerErr) {
-			retryable = providerErr.Retryable
 			if providerErr.Code != "" {
 				code = providerErr.Code
 			}
@@ -92,9 +92,6 @@ func (r *Router) Chat(ctx context.Context, req ChatRequest) (*ChatResult, error)
 			RequestMeta:  encodeMeta(req.Metadata),
 		})
 		attemptErrors = append(attemptErrors, fmt.Errorf("%s: %w", provider.Name, callErr))
-		if !retryable {
-			break
-		}
 	}
 
 	return nil, errors.Join(attemptErrors...)

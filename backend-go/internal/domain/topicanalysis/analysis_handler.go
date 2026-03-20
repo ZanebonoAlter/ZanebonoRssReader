@@ -1,4 +1,4 @@
-package topicgraph
+package topicanalysis
 
 import (
 	"io"
@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
+	"my-robot-backend/internal/domain/topictypes"
 )
 
 type AnalysisHandler struct {
@@ -228,7 +230,7 @@ func parseWindowAnchorFromRequest(c *gin.Context) (string, time.Time, error) {
 		}
 	}
 
-	anchorDate, err := parseAnchorDate(anchorDateRaw)
+	anchorDate, err := topictypes.ParseAnchorDate(anchorDateRaw)
 	if err != nil {
 		return "", time.Time{}, err
 	}

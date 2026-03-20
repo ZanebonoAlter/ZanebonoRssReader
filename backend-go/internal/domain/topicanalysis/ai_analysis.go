@@ -1,4 +1,4 @@
-package topicgraph
+package topicanalysis
 
 import (
 	"context"
@@ -13,6 +13,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"my-robot-backend/internal/domain/topictypes"
 	"my-robot-backend/internal/platform/airouter"
 )
 
@@ -344,7 +345,7 @@ func (s *AIAnalysisService) buildPrompt(params AnalysisParams) (string, error) {
 	input := aiPromptInput{
 		TopicLabel: strings.TrimSpace(params.TopicLabel),
 		WindowType: normalizeWindowType(params.WindowType),
-		AnchorDate: normalizeQueueAnchorDate(params.AnchorDate).In(topicGraphCST).Format("2006-01-02"),
+		AnchorDate: normalizeQueueAnchorDate(params.AnchorDate).In(topictypes.TopicGraphCST).Format("2006-01-02"),
 		Summaries:  strings.Join(lines, "\n\n"),
 	}
 

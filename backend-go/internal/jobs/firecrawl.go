@@ -156,16 +156,16 @@ func (s *FirecrawlScheduler) checkAndCrawl() {
 			continue
 		}
 
-		now := time.Now()
-		updates := map[string]interface{}{
-			"firecrawl_status":     "completed",
-			"firecrawl_content":    result.Data.Markdown,
-			"firecrawl_crawled_at": now,
-		}
-		if feed.ContentCompletionEnabled {
-			updates["content_status"] = "incomplete"
-		}
-		database.DB.Model(&art).Updates(updates)
+			now := time.Now()
+			updates := map[string]interface{}{
+				"firecrawl_status":     "completed",
+				"firecrawl_content":    result.Data.Markdown,
+				"firecrawl_crawled_at": now,
+			}
+			if feed.ArticleSummaryEnabled {
+				updates["summary_status"] = "incomplete"
+			}
+			database.DB.Model(&art).Updates(updates)
 
 		completed++
 		s.broadcastProgress(batchID, "processing", len(articles), completed, failed, &ws.FirecrawlArticleProgress{

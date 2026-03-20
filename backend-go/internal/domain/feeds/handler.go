@@ -13,35 +13,35 @@ import (
 )
 
 type CreateFeedRequest struct {
-	Title                    string `json:"title"`
-	Description              string `json:"description"`
-	URL                      string `json:"url" binding:"required"`
-	CategoryID               *uint  `json:"category_id"`
-	Icon                     string `json:"icon"`
-	Color                    string `json:"color"`
-	MaxArticles              int    `json:"max_articles"`
-	RefreshInterval          int    `json:"refresh_interval"`
-	AISummaryEnabled         bool   `json:"ai_summary_enabled"`
-	ContentCompletionEnabled bool   `json:"content_completion_enabled"`
-	CompletionOnRefresh      bool   `json:"completion_on_refresh"`
-	MaxCompletionRetries     int    `json:"max_completion_retries"`
-	FirecrawlEnabled         bool   `json:"firecrawl_enabled"`
+	Title                 string `json:"title"`
+	Description           string `json:"description"`
+	URL                   string `json:"url" binding:"required"`
+	CategoryID            *uint  `json:"category_id"`
+	Icon                  string `json:"icon"`
+	Color                 string `json:"color"`
+	MaxArticles           int    `json:"max_articles"`
+	RefreshInterval       int    `json:"refresh_interval"`
+	AISummaryEnabled      bool   `json:"ai_summary_enabled"`
+	ArticleSummaryEnabled bool   `json:"article_summary_enabled"`
+	CompletionOnRefresh   bool   `json:"completion_on_refresh"`
+	MaxCompletionRetries  int    `json:"max_completion_retries"`
+	FirecrawlEnabled      bool   `json:"firecrawl_enabled"`
 }
 
 type UpdateFeedRequest struct {
-	Title                    string `json:"title"`
-	Description              string `json:"description"`
-	URL                      string `json:"url"`
-	CategoryID               *uint  `json:"category_id"`
-	Icon                     string `json:"icon"`
-	Color                    string `json:"color"`
-	MaxArticles              int    `json:"max_articles"`
-	RefreshInterval          int    `json:"refresh_interval"`
-	AISummaryEnabled         bool   `json:"ai_summary_enabled"`
-	ContentCompletionEnabled *bool  `json:"content_completion_enabled"`
-	CompletionOnRefresh      *bool  `json:"completion_on_refresh"`
-	MaxCompletionRetries     *int   `json:"max_completion_retries"`
-	FirecrawlEnabled         *bool  `json:"firecrawl_enabled"`
+	Title                 string `json:"title"`
+	Description           string `json:"description"`
+	URL                   string `json:"url"`
+	CategoryID            *uint  `json:"category_id"`
+	Icon                  string `json:"icon"`
+	Color                 string `json:"color"`
+	MaxArticles           int    `json:"max_articles"`
+	RefreshInterval       int    `json:"refresh_interval"`
+	AISummaryEnabled      bool   `json:"ai_summary_enabled"`
+	ArticleSummaryEnabled *bool  `json:"article_summary_enabled"`
+	CompletionOnRefresh   *bool  `json:"completion_on_refresh"`
+	MaxCompletionRetries  *int   `json:"max_completion_retries"`
+	FirecrawlEnabled      *bool  `json:"firecrawl_enabled"`
 }
 
 func GetFeeds(c *gin.Context) {
@@ -179,20 +179,20 @@ func CreateFeed(c *gin.Context) {
 
 	now := time.Now()
 	feed := models.Feed{
-		Title:                    req.Title,
-		Description:              req.Description,
-		URL:                      req.URL,
-		CategoryID:               req.CategoryID,
-		Icon:                     req.Icon,
-		Color:                    req.Color,
-		MaxArticles:              req.MaxArticles,
-		RefreshInterval:          req.RefreshInterval,
-		AISummaryEnabled:         req.AISummaryEnabled,
-		ContentCompletionEnabled: req.ContentCompletionEnabled,
-		CompletionOnRefresh:      req.CompletionOnRefresh,
-		MaxCompletionRetries:     req.MaxCompletionRetries,
-		FirecrawlEnabled:         req.FirecrawlEnabled,
-		LastUpdated:              &now,
+		Title:                 req.Title,
+		Description:           req.Description,
+		URL:                   req.URL,
+		CategoryID:            req.CategoryID,
+		Icon:                  req.Icon,
+		Color:                 req.Color,
+		MaxArticles:           req.MaxArticles,
+		RefreshInterval:       req.RefreshInterval,
+		AISummaryEnabled:      req.AISummaryEnabled,
+		ArticleSummaryEnabled: req.ArticleSummaryEnabled,
+		CompletionOnRefresh:   req.CompletionOnRefresh,
+		MaxCompletionRetries:  req.MaxCompletionRetries,
+		FirecrawlEnabled:      req.FirecrawlEnabled,
+		LastUpdated:           &now,
 	}
 
 	if feed.Title == "" {
@@ -312,8 +312,8 @@ func UpdateFeed(c *gin.Context) {
 	if _, exists := bodyMap["ai_summary_enabled"]; exists {
 		updates["ai_summary_enabled"] = req.AISummaryEnabled
 	}
-	if _, exists := bodyMap["content_completion_enabled"]; exists && req.ContentCompletionEnabled != nil {
-		updates["content_completion_enabled"] = *req.ContentCompletionEnabled
+	if _, exists := bodyMap["article_summary_enabled"]; exists && req.ArticleSummaryEnabled != nil {
+		updates["article_summary_enabled"] = *req.ArticleSummaryEnabled
 	}
 	if _, exists := bodyMap["completion_on_refresh"]; exists && req.CompletionOnRefresh != nil {
 		updates["completion_on_refresh"] = *req.CompletionOnRefresh

@@ -2,24 +2,22 @@ import { ref } from 'vue'
 import { apiClient } from '~/api/client'
 
 export interface ContentCompletionStatus {
-  contentStatus: 'complete' | 'incomplete' | 'pending' | 'failed'
+  summaryStatus: 'complete' | 'incomplete' | 'pending' | 'failed'
   attempts: number
   error: string | null
-  fetchedAt: string | null
+  summaryGeneratedAt: string | null
   aiContentSummary?: string
-  fullContent?: string
   firecrawlContent?: string
   firecrawlStatus?: 'pending' | 'processing' | 'completed' | 'failed'
   firecrawlError?: string | null
 }
 
 interface CompletionStatusPayload {
-  content_status: 'complete' | 'incomplete' | 'pending' | 'failed'
+  summary_status: 'complete' | 'incomplete' | 'pending' | 'failed'
   attempts: number
   error: string | null
-  fetched_at: string | null
+  summary_generated_at: string | null
   ai_content_summary?: string
-  full_content?: string
   firecrawl_content?: string
   firecrawl_status?: 'pending' | 'processing' | 'completed' | 'failed'
   firecrawl_error?: string | null
@@ -62,12 +60,11 @@ export function useContentCompletion() {
     }
 
     return {
-      contentStatus: response.data.content_status,
+      summaryStatus: response.data.summary_status,
       attempts: response.data.attempts,
       error: response.data.error,
-      fetchedAt: response.data.fetched_at,
+      summaryGeneratedAt: response.data.summary_generated_at,
       aiContentSummary: response.data.ai_content_summary,
-      fullContent: response.data.full_content,
       firecrawlContent: response.data.firecrawl_content,
       firecrawlStatus: response.data.firecrawl_status,
       firecrawlError: response.data.firecrawl_error,

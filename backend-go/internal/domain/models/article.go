@@ -17,13 +17,11 @@ type Article struct {
 	Author             string     `gorm:"size:200" json:"author"`
 	Read               bool       `gorm:"default:false" json:"read"`
 	Favorite           bool       `gorm:"default:false" json:"favorite"`
-	ContentStatus      string     `gorm:"size:20;default:complete" json:"content_status"`
-	FullContent        string     `gorm:"type:text" json:"full_content"`
-	ContentFetchedAt   *time.Time `json:"content_fetched_at"`
+	SummaryStatus      string     `gorm:"size:20;default:complete" json:"summary_status"`
+	SummaryGeneratedAt *time.Time `json:"summary_generated_at"`
 	CompletionAttempts int        `gorm:"default:0" json:"completion_attempts"`
 	CompletionError    string     `gorm:"type:text" json:"completion_error"`
 	AIContentSummary   string     `gorm:"type:text" json:"ai_content_summary"`
-	FirecrawlEnabled   bool       `gorm:"default:false" json:"firecrawl_enabled"`
 	FirecrawlStatus    string     `gorm:"size:20;default:pending" json:"firecrawl_status"`
 	FirecrawlError     string     `gorm:"type:text" json:"firecrawl_error"`
 	FirecrawlContent   string     `gorm:"type:text" json:"firecrawl_content"`
@@ -46,13 +44,11 @@ func (a *Article) ToDict() map[string]interface{} {
 		"author":               a.Author,
 		"read":                 a.Read,
 		"favorite":             a.Favorite,
-		"content_status":       a.ContentStatus,
-		"full_content":         a.FullContent,
-		"content_fetched_at":   FormatDatetimeCSTPtr(a.ContentFetchedAt),
+		"summary_status":       a.SummaryStatus,
+		"summary_generated_at": FormatDatetimeCSTPtr(a.SummaryGeneratedAt),
 		"completion_attempts":  a.CompletionAttempts,
 		"completion_error":     a.CompletionError,
 		"ai_content_summary":   a.AIContentSummary,
-		"firecrawl_enabled":    a.FirecrawlEnabled,
 		"firecrawl_status":     a.FirecrawlStatus,
 		"firecrawl_error":      a.FirecrawlError,
 		"firecrawl_content":    a.FirecrawlContent,

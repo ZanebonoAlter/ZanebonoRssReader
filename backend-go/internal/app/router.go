@@ -10,6 +10,7 @@ import (
 	feedsdomain "my-robot-backend/internal/domain/feeds"
 	preferencesdomain "my-robot-backend/internal/domain/preferences"
 	summariesdomain "my-robot-backend/internal/domain/summaries"
+	topicanalysisdomain "my-robot-backend/internal/domain/topicanalysis"
 	topicgraphdomain "my-robot-backend/internal/domain/topicgraph"
 	"my-robot-backend/internal/jobs"
 	"my-robot-backend/internal/platform/database"
@@ -165,7 +166,7 @@ func SetupRoutes(r *gin.Engine) {
 			topicGraph.GET("/tag/:slug/digests", topicgraphdomain.GetDigestsByArticleTagHandler)
 			topicGraph.GET("/topic/:slug/articles", topicgraphdomain.GetTopicArticles)
 		}
-		topicgraphdomain.RegisterAnalysisRoutes(topicGraph, topicgraphdomain.GetAnalysisService(database.DB))
+		topicanalysisdomain.RegisterAnalysisRoutes(topicGraph, topicanalysisdomain.GetAnalysisService(database.DB))
 
 		digestGroup := api.Group("/digest")
 		{

@@ -17,19 +17,19 @@
 | `content` | TEXT | RSS 原始内容（HTML 片段） | RSS Feed 解析 | HTML |
 | `firecrawl_content` | TEXT | Firecrawl 抓取的完整网页内容 | Firecrawl Scheduler | Markdown |
 | `ai_content_summary` | TEXT | AI 生成的优化总结内容 | AI Summary Scheduler | Markdown |
-| `full_content` | TEXT | （保留字段，向后兼容） | - | - |
 
 #### 状态字段
 
 | 字段名 | 类型 | 用途 | 可选值 |
 |--------|------|------|--------|
-| `content_status` | VARCHAR(20) | AI 总结状态 | `incomplete` / `pending` / `complete` / `failed` |
+| `summary_status` | VARCHAR(20) | AI 总结状态 | `incomplete` / `pending` / `complete` / `failed` |
 | `firecrawl_status` | VARCHAR(20) | Firecrawl 抓取状态 | `pending` / `processing` / `completed` / `failed` |
 
 #### 其他字段
 
 | 字段名 | 用途 |
 |--------|------|
+| `summary_generated_at` | AI 总结生成时间 |
 | `completion_attempts` | AI 总结重试次数 |
 | `completion_error` | AI 总结错误信息 |
 | `firecrawl_error` | Firecrawl 抓取错误信息 |
@@ -46,13 +46,13 @@
 | 字段名 | 类型 | 用途 | 说明 |
 |--------|------|------|------|
 | `firecrawl_enabled` | BOOLEAN | 是否启用 Firecrawl 抓取完整内容 | 需要全局配置 Firecrawl API |
-| `content_completion_enabled` | BOOLEAN | 是否启用 AI 内容总结 | **命名说明**：虽然名字是"内容补全"，但实际功能是"AI 内容总结" |
+| `article_summary_enabled` | BOOLEAN | 是否启用文章级 AI 总结 | Firecrawl 成功后进入总结队列 |
 | `max_completion_retries` | INTEGER | AI 总结最大重试次数 | 默认 3 次 |
 
 **重要说明**：
-- `content_completion_enabled` 的名称源于历史原因，容易误解为"补全缺失内容"
-- 实际功能：对 Firecrawl 抓取的完整内容进行 AI 优化总结
-- 建议理解方式：`content_completion_enabled` = `ai_summary_enabled`（文章级别）
+- `ai_summary_enabled` 仍表示 feed / category 级批量总结开关
+- `article_summary_enabled` 表示文章级 AI 总结开关
+- 两者职责不同，不再混用旧命名
 
 ---
 
@@ -99,7 +99,7 @@
 │     创建新文章                                               │
 │     - content = RSS 原始内容                                 │
 │     - firecrawl_status = 'pending'                          │
-│     - content_status = 'incomplete'（如果 feed 启用）       │
+│     - summary_status = 'incomplete'（如果启用文章总结）     │
 └─────────────────────────────────────────────────────────────┘
                          ↓
 ┌─────────────────────────────────────────────────────────────┐
@@ -114,7 +114,7 @@
 │     更新文章：                                               │
 │     - firecrawl_status = 'completed'                        │
 │     - firecrawl_content = 完整内容（Markdown）              │
-│     - content_status = 'incomplete' ← 标记需要 AI 总结     │
+│     - summary_status = 'incomplete' ← 标记需要 AI 总结     │
 └─────────────────────────────────────────────────────────────┘
                          ↓
 ┌─────────────────────────────────────────────────────────────┐
@@ -122,8 +122,8 @@
 │     ↓                                                        │
 │     查询条件：                                               │
 │     - firecrawl_status = 'completed'                        │
-│     - content_status = 'incomplete'                         │
-│     - feed.content_completion_enabled = true                │
+│     - summary_status = 'incomplete'                         │
+│     - feed.article_summary_enabled = true                   │
 │     ↓                                                        │
 │     读取 firecrawl_content                                   │
 │     ↓                                                        │
@@ -131,7 +131,7 @@
 │     ↓                                                        │
 │     更新文章：                                               │
 │     - ai_content_summary = AI 总结（Markdown）              │
-│     - content_status = 'complete'                           │
+│     - summary_status = 'complete'                           │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -149,7 +149,7 @@ pending → processing → completed
 - `completed`：抓取成功
 - `failed`：抓取失败
 
-#### Content Status 状态流转
+#### Summary Status 状态流转
 
 ```
 incomplete → pending → complete
@@ -244,7 +244,7 @@ ai_content_summary（AI 总结）
    - `summary_config.model` 设置正确
 
 2. Feed 级别配置：
-   - `feed.content_completion_enabled` = true
+   - `feed.article_summary_enabled` = true
 
 **依赖关系**：
 - AI 总结功能依赖 Firecrawl 先抓取完整内容
@@ -262,7 +262,7 @@ ai_content_summary（AI 总结）
 
 ### AI 总结失败
 
-- `content_status` = 'failed'
+- `summary_status` = 'failed'
 - `completion_error` 记录错误信息
 - 会自动重试（最多 `max_completion_retries` 次）
 
@@ -298,7 +298,7 @@ WHERE name = 'content_completion';
 
 ### 兼容性
 
-- `full_content` 字段保留，但不再使用
+- 旧列通过运行时迁移回填到新列
 - 旧数据不受影响
 - 新流程自动处理新文章
 
@@ -325,18 +325,18 @@ A: 系统会：
 
 ### Q: 能否只启用 Firecrawl 而不启用 AI 总结？
 
-A: 可以。设置 `feed.content_completion_enabled = false`。
+A: 可以。设置 `feed.article_summary_enabled = false`。
 
 此时：
 - 会抓取完整内容（`firecrawl_content`）
 - 不会生成 AI 总结（`ai_content_summary` 为空）
 - 前端显示原始内容（`content`）
 
-### Q: 为什么 content_status 默认值是 'incomplete'？
+### Q: 为什么 `summary_status` 默认值看起来和实际流程不一样？
 
-A: 这是历史遗留问题。现在：
-- 新文章创建时不设置 `content_status`
-- Firecrawl 完成后设置为 `'incomplete'`
+A: 现在的流程是：
+- 新文章默认是 `summary_status = 'complete'`
+- 只有在启用了文章级 AI 总结并且进入处理链路时，才会切到 `'incomplete'`
 - 表示"需要 AI 总结"
 
 ---
@@ -347,13 +347,13 @@ A: 这是历史遗留问题。现在：
 
 **重大变更**：
 1. 将 `content_completion` 任务重命名为 `ai_summary`
-2. 明确了 `content_completion_enabled` 的实际用途（AI 总结）
+2. 将 `content_completion_enabled` 明确重命名为 `article_summary_enabled`
 3. 修改了 Content Completion Service 查询逻辑
-4. Firecrawl 完成后自动设置 `content_status = 'incomplete'`
+4. Firecrawl 完成后自动设置 `summary_status = 'incomplete'`
 5. 创建了本文档
 
 **向后兼容**：
-- 保留所有现有字段
+- 通过运行时迁移回填旧列到新列
 - 旧数据不受影响
 - 新流程自动处理
 

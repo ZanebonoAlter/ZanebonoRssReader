@@ -1,9 +1,11 @@
-package topicgraph
+package topicextraction
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"time"
+	"my-robot-backend/internal/domain/topictypes"
+	"strings"
 
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/platform/database"
@@ -11,27 +13,33 @@ import (
 
 // TagArticle extracts and stores tags for a single article
 // This is called during auto_summary to tag individual articles
+// Skips if the article already has tags (dedup)
 func TagArticle(article *models.Article, feedName, categoryName string) error {
 	if article == nil || article.ID == 0 {
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
+	// Skip if already tagged
+	var existingCount int64
+	database.DB.Model(&models.ArticleTopicTag{}).Where("article_id = ?", article.ID).Count(&existingCount)
+	if existingCount > 0 {
+		return nil
+	}
 
 	// Build input for extraction
-	input := ExtractionInput{
+	input := topictypes.ExtractionInput{
 		Title:        article.Title,
 		Summary:      buildArticleSummary(*article),
 		FeedName:     feedName,
 		CategoryName: categoryName,
+		ArticleID:    &article.ID,
 	}
 
 	// Use the extraction system
 	extractor := NewTagExtractor()
-	result, err := extractor.ExtractTags(ctx, input)
+	result, err := extractor.ExtractTags(context.Background(), input)
 
-	var tags []TopicTag
+	var tags []topictypes.TopicTag
 	var source string
 
 	if err != nil || len(result.Tags) == 0 {
@@ -45,11 +53,6 @@ func TagArticle(article *models.Article, feedName, categoryName string) error {
 
 	if len(tags) == 0 {
 		return nil
-	}
-
-	// Delete existing tag associations for this article
-	if err := database.DB.Where("article_id = ?", article.ID).Delete(&models.ArticleTopicTag{}).Error; err != nil {
-		return err
 	}
 
 	// Process each tag
@@ -104,21 +107,21 @@ func TagArticles(articles []models.Article, feedName, categoryName string) error
 }
 
 // GetArticleTags retrieves all tags for a specific article
-func GetArticleTags(articleID uint) ([]TopicTag, error) {
+func GetArticleTags(articleID uint) ([]topictypes.TopicTag, error) {
 	var links []models.ArticleTopicTag
 	err := database.DB.Where("article_id = ?", articleID).
-		Preload("TopicTag").
+		Preload("topictypes.TopicTag").
 		Find(&links).Error
 	if err != nil {
 		return nil, err
 	}
 
-	result := make([]TopicTag, 0, len(links))
+	result := make([]topictypes.TopicTag, 0, len(links))
 	for _, link := range links {
 		if link.TopicTag == nil {
 			continue
 		}
-		result = append(result, TopicTag{
+		result = append(result, topictypes.TopicTag{
 			Label:    link.TopicTag.Label,
 			Slug:     link.TopicTag.Slug,
 			Category: link.TopicTag.Category,
@@ -150,4 +153,15 @@ func GetArticlesByTag(slug, category string, limit int) ([]models.Article, error
 		Find(&articles).Error
 
 	return articles, err
+}
+
+func parseAliasesFromJSON(aliases string) []string {
+	if strings.TrimSpace(aliases) == "" {
+		return nil
+	}
+	var result []string
+	if err := json.Unmarshal([]byte(aliases), &result); err != nil {
+		return nil
+	}
+	return result
 }

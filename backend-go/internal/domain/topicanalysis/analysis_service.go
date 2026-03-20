@@ -1,4 +1,4 @@
-package topicgraph
+package topicanalysis
 
 import (
 	"encoding/json"
@@ -14,6 +14,7 @@ import (
 	"gorm.io/gorm"
 
 	"my-robot-backend/internal/domain/models"
+	"my-robot-backend/internal/domain/topictypes"
 )
 
 const (
@@ -91,21 +92,7 @@ func (s *analysisService) GetOrCreateAnalysis(tagID uint64, analysisType, window
 		return nil, err
 	}
 
-	analysis, err := s.GetAnalysis(tagID, analysisType, windowType, anchor)
-	if err != nil {
-		return nil, err
-	}
-	if analysis != nil {
-		if stale, staleErr := s.needsRefresh(tagID, analysisType, windowType, anchor, uint64(analysis.SummaryCount)); staleErr == nil && stale {
-			_ = s.enqueue(tagID, analysisType, windowType, anchor, AnalysisPriorityMedium)
-		}
-		return analysis, nil
-	}
-
-	if err := s.enqueue(tagID, analysisType, windowType, anchor, AnalysisPriorityMedium); err != nil {
-		return nil, err
-	}
-	return nil, nil
+	return s.GetAnalysis(tagID, analysisType, windowType, anchor)
 }
 
 func (s *analysisService) GetAnalysis(tagID uint64, analysisType, windowType string, anchorDate time.Time) (*models.TopicTagAnalysis, error) {
@@ -174,7 +161,7 @@ func (s *analysisService) EnqueueForSummary(summaryID uint64, priority int) erro
 		return nil
 	}
 
-	anchor := normalizeQueueAnchorDate(time.Now().In(topicGraphCST))
+	anchor := normalizeQueueAnchorDate(time.Now().In(topictypes.TopicGraphCST))
 	for _, tagID := range tagIDs {
 		for _, analysisType := range []string{AnalysisTypeEvent, AnalysisTypePerson, AnalysisTypeKeyword} {
 			if err := s.enqueue(tagID, analysisType, WindowTypeDaily, anchor, priority); err != nil {
@@ -243,7 +230,7 @@ func (s *analysisService) buildAndPersist(tagID uint64, analysisType, windowType
 		return nil, fmt.Errorf("failed to load topic tag: %w", err)
 	}
 
-	windowStart, windowEnd, _, err := resolveWindow(windowType, anchor)
+	windowStart, windowEnd, _, err := topictypes.ResolveWindow(windowType, anchor)
 	if err != nil {
 		return nil, err
 	}
@@ -336,6 +323,8 @@ func (s *analysisService) buildPayloadJSON(tag models.TopicTag, analysisType str
 	return string(bytes), "heuristic", nil
 }
 
+const maxSummariesPerTag = 20
+
 func (s *analysisService) fetchSummariesByTag(tagID uint64, windowStart, windowEnd time.Time) ([]models.AISummary, error) {
 	var summaries []models.AISummary
 	err := s.db.Model(&models.AISummary{}).
@@ -345,6 +334,7 @@ func (s *analysisService) fetchSummariesByTag(tagID uint64, windowStart, windowE
 		Preload("Feed").
 		Preload("Category").
 		Order("ai_summaries.created_at DESC").
+		Limit(maxSummariesPerTag).
 		Find(&summaries).Error
 	if err != nil {
 		return nil, fmt.Errorf("failed to query summaries for tag: %w", err)
@@ -370,7 +360,7 @@ func (s *analysisService) fetchTagIDsBySummaryID(summaryID uint64) ([]uint64, er
 }
 
 func (s *analysisService) needsRefresh(tagID uint64, analysisType string, windowType string, anchorDate time.Time, currentSummaryCount uint64) (bool, error) {
-	windowStart, windowEnd, _, err := resolveWindow(windowType, anchorDate)
+	windowStart, windowEnd, _, err := topictypes.ResolveWindow(windowType, anchorDate)
 	if err != nil {
 		return false, err
 	}
@@ -421,7 +411,7 @@ func mapSummaryInfos(summaries []models.AISummary) []SummaryInfo {
 			SummaryID: uint64(summary.ID),
 			Title:     summary.Title,
 			Summary:   summary.Summary,
-			CreatedAt: summary.CreatedAt.In(topicGraphCST).Format("2006-01-02"),
+			CreatedAt: summary.CreatedAt.In(topictypes.TopicGraphCST).Format("2006-01-02"),
 		}
 		if summary.Feed != nil {
 			item.FeedName = summary.Feed.Title
@@ -448,7 +438,7 @@ func (s *analysisService) buildPayload(tag models.TopicTag, analysisType string,
 }
 
 func (s *analysisService) buildEventPayload(tag models.TopicTag, summaries []models.AISummary) map[string]any {
-	articlesBySummary := fetchArticlesForSummaries(summaries)
+	articlesBySummary := topictypes.FetchArticlesForSummaries(summaries)
 	timeline := make([]map[string]any, 0, len(summaries))
 	keyMoments := make([]string, 0, minInt(len(summaries), 5))
 
@@ -459,7 +449,7 @@ func (s *analysisService) buildEventPayload(tag models.TopicTag, summaries []mod
 		}
 
 		timeline = append(timeline, map[string]any{
-			"date":            summary.CreatedAt.In(topicGraphCST).Format("2006-01-02"),
+			"date":            summary.CreatedAt.In(topictypes.TopicGraphCST).Format("2006-01-02"),
 			"title":           summary.Title,
 			"summary":         truncateText(summary.Summary, 240),
 			"source_articles": sources,
@@ -477,12 +467,12 @@ func (s *analysisService) buildEventPayload(tag models.TopicTag, summaries []mod
 }
 
 func (s *analysisService) buildPersonPayload(tag models.TopicTag, summaries []models.AISummary, windowType string) map[string]any {
-	articlesBySummary := fetchArticlesForSummaries(summaries)
+	articlesBySummary := topictypes.FetchArticlesForSummaries(summaries)
 	appearances := make([]map[string]any, 0, len(summaries))
 
 	for _, summary := range summaries {
 		item := map[string]any{
-			"date":  summary.CreatedAt.In(topicGraphCST).Format("2006-01-02"),
+			"date":  summary.CreatedAt.In(topictypes.TopicGraphCST).Format("2006-01-02"),
 			"scene": truncateText(summary.Title, 96),
 			"quote": firstSentence(summary.Summary),
 		}
@@ -608,7 +598,7 @@ func (s *analysisService) updateCursor(tagID uint64, analysisType, windowType st
 	}
 
 	cursor.LastSummaryID = maxSummaryID(summaries)
-	cursor.LastUpdatedAt = time.Now().In(topicGraphCST)
+	cursor.LastUpdatedAt = time.Now().In(topictypes.TopicGraphCST)
 
 	if cursor.ID == 0 {
 		if err := s.db.Create(&cursor).Error; err != nil {
@@ -637,7 +627,7 @@ func validateAnalysisParams(analysisType, windowType string) error {
 }
 
 func normalizeAnalysisAnchor(windowType string, anchorDate time.Time) (time.Time, error) {
-	windowStart, _, _, err := resolveWindow(windowType, anchorDate)
+	windowStart, _, _, err := topictypes.ResolveWindow(windowType, anchorDate)
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -647,7 +637,7 @@ func normalizeAnalysisAnchor(windowType string, anchorDate time.Time) (time.Time
 func buildTrendData(summaries []models.AISummary, windowType string) []map[string]any {
 	counter := map[string]int{}
 	for _, summary := range summaries {
-		key := summary.CreatedAt.In(topicGraphCST).Format("2006-01-02")
+		key := summary.CreatedAt.In(topictypes.TopicGraphCST).Format("2006-01-02")
 		counter[key]++
 	}
 	trend := make([]map[string]any, 0, len(counter))

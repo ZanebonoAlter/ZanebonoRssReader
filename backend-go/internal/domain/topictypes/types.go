@@ -1,10 +1,12 @@
-package topicgraph
+package topictypes
 
 type ExtractionInput struct {
 	Title        string
 	Summary      string
 	FeedName     string
 	CategoryName string
+	ArticleID    *uint
+	SummaryID    *uint
 }
 
 // TopicTag represents a tag extracted from AI summaries
@@ -151,4 +153,11 @@ type TopicGraphResponse struct {
 	ArticleCount int         `json:"article_count"`
 	FeedCount    int         `json:"feed_count"`
 	TopTopics    []TopicTag  `json:"top_topics"`
+}
+
+// TopicsByCategoryResult holds tags grouped by category
+type TopicsByCategoryResult struct {
+	Events   []TopicTag `json:"events"`
+	People   []TopicTag `json:"people"`
+	Keywords []TopicTag `json:"keywords"`
 }

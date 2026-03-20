@@ -4,27 +4,25 @@ import { getArticleContentSources, resolveArticleContentBySource } from './artic
 
 describe('articleContentSource', () => {
   it('prefers firecrawl when both firecrawl and original content exist', () => {
-	const sources = getArticleContentSources({
-		firecrawlContent: '# Firecrawl body',
-		fullContent: '<p>Original full content</p>',
-		content: '<p>Original fallback</p>',
-	})
+    const sources = getArticleContentSources({
+      firecrawlContent: '# Firecrawl body',
+      content: '<p>Original fallback</p>',
+    })
 
     expect(sources.available).toEqual(['firecrawl', 'original'])
     expect(sources.defaultSource).toBe('firecrawl')
     expect(resolveArticleContentBySource(sources, 'firecrawl')).toBe('# Firecrawl body')
-	expect(resolveArticleContentBySource(sources, 'original')).toBe('<p>Original full content</p>')
+    expect(resolveArticleContentBySource(sources, 'original')).toBe('<p>Original fallback</p>')
   })
 
   it('only exposes original when firecrawl content is missing', () => {
-	const sources = getArticleContentSources({
-		fullContent: '<p>Original full content</p>',
-		content: '<p>Original fallback</p>',
-	})
+    const sources = getArticleContentSources({
+      content: '<p>Original fallback</p>',
+    })
 
     expect(sources.available).toEqual(['original'])
     expect(sources.defaultSource).toBe('original')
-	expect(resolveArticleContentBySource(sources, 'original')).toBe('<p>Original full content</p>')
+    expect(resolveArticleContentBySource(sources, 'original')).toBe('<p>Original fallback</p>')
   })
 
   it('only exposes firecrawl when original content is missing', () => {

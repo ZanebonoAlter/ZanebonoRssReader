@@ -1,13 +1,15 @@
-package topicgraph
+package topicextraction
 
 import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"my-robot-backend/internal/domain/topictypes"
 )
 
 func TestExtractTopicsFindsCanonicalAITopicsAndEntities(t *testing.T) {
-	result := ExtractTopics(ExtractionInput{
+	result := ExtractTopics(topictypes.ExtractionInput{
 		Title:        "OpenAI pushes GPT-5 agent workflow",
 		Summary:      "OpenAI is shipping a new AI agent workflow around GPT-5 with multimodal planning and coding automation.",
 		FeedName:     "Latent Space",
@@ -24,7 +26,7 @@ func TestExtractTopicsFindsCanonicalAITopicsAndEntities(t *testing.T) {
 }
 
 func TestExtractTopicsDeduplicatesAliases(t *testing.T) {
-	result := ExtractTopics(ExtractionInput{
+	result := ExtractTopics(topictypes.ExtractionInput{
 		Title:        "OpenAI API update",
 		Summary:      "OpenAI says the Open AI API now supports agent memory. OPENAI tooling remains the focus.",
 		FeedName:     "OpenAI Blog",
@@ -39,7 +41,7 @@ func TestExtractTopicsDeduplicatesAliases(t *testing.T) {
 }
 
 func TestExtractTopicsFallsBackToFeedAndCategoryWhenTextIsSparse(t *testing.T) {
-	result := ExtractTopics(ExtractionInput{
+	result := ExtractTopics(topictypes.ExtractionInput{
 		Title:        "Daily Brief",
 		Summary:      "Short update.",
 		FeedName:     "NVIDIA Research",
@@ -50,7 +52,7 @@ func TestExtractTopicsFallsBackToFeedAndCategoryWhenTextIsSparse(t *testing.T) {
 	require.Contains(t, topicLabels(result), "Infra")
 }
 
-func topicLabels(items []TopicTag) []string {
+func topicLabels(items []topictypes.TopicTag) []string {
 	labels := make([]string, 0, len(items))
 	for _, item := range items {
 		labels = append(labels, item.Label)
@@ -58,7 +60,7 @@ func topicLabels(items []TopicTag) []string {
 	return labels
 }
 
-func topicSlugs(items []TopicTag) []string {
+func topicSlugs(items []topictypes.TopicTag) []string {
 	slugs := make([]string, 0, len(items))
 	for _, item := range items {
 		slugs = append(slugs, item.Slug)
@@ -76,7 +78,7 @@ func countMatches(items []string, needle string) int {
 	return count
 }
 
-func findTopic(items []TopicTag, label string) *TopicTag {
+func findTopic(items []topictypes.TopicTag, label string) *topictypes.TopicTag {
 	for _, item := range items {
 		if item.Label == label {
 			return &item

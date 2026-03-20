@@ -64,7 +64,9 @@ func (c *EmbeddingClient) Embed(ctx context.Context, provider models.AIProvider,
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+provider.APIKey)
+	if provider.APIKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+provider.APIKey)
+	}
 
 	timeout := time.Duration(provider.TimeoutSeconds) * time.Second
 	if timeout <= 0 {

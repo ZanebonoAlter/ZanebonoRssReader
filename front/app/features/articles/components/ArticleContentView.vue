@@ -88,12 +88,11 @@ const mergedArticle = computed<Article | null>(() => {
 
   return {
     ...props.article,
-    contentStatus: liveStatus.value?.contentStatus ?? props.article.contentStatus,
+    summaryStatus: liveStatus.value?.summaryStatus ?? props.article.summaryStatus,
     completionAttempts: liveStatus.value?.attempts ?? props.article.completionAttempts,
     completionError: liveStatus.value?.error ?? props.article.completionError,
-    contentFetchedAt: liveStatus.value?.fetchedAt ?? props.article.contentFetchedAt,
+    summaryGeneratedAt: liveStatus.value?.summaryGeneratedAt ?? props.article.summaryGeneratedAt,
     aiContentSummary: liveStatus.value?.aiContentSummary ?? props.article.aiContentSummary,
-    fullContent: liveStatus.value?.fullContent ?? props.article.fullContent,
     firecrawlContent: liveStatus.value?.firecrawlContent ?? props.article.firecrawlContent,
     firecrawlStatus: liveStatus.value?.firecrawlStatus ?? props.article.firecrawlStatus,
     firecrawlError: liveStatus.value?.firecrawlError ?? props.article.firecrawlError,
@@ -105,7 +104,7 @@ const summaryMeta = computed(() => mergedArticle.value ? getSummaryStatusMeta(me
 const showFirecrawlStatus = computed(() => mergedArticle.value ? shouldShowFirecrawlStatus(mergedArticle.value, feed.value) : false)
 const showSummaryStatus = computed(() => mergedArticle.value ? shouldShowSummaryStatus(mergedArticle.value, feed.value) : false)
 const showManualFirecrawlAction = computed(() => feed.value?.firecrawlEnabled === true)
-const showManualSummaryAction = computed(() => feed.value?.contentCompletionEnabled === true)
+const showManualSummaryAction = computed(() => feed.value?.articleSummaryEnabled === true)
 const showProcessingPanel = computed(() => {
   if (!mergedArticle.value) return false
 
@@ -143,12 +142,11 @@ function applyLiveStatusToArticle(status: ContentCompletionStatus | null) {
   if (!props.article || !status) return
 
   syncCurrentArticle({
-    contentStatus: status.contentStatus,
+    summaryStatus: status.summaryStatus,
     completionAttempts: status.attempts,
     completionError: status.error ?? undefined,
-    contentFetchedAt: status.fetchedAt ?? undefined,
+    summaryGeneratedAt: status.summaryGeneratedAt ?? undefined,
     aiContentSummary: status.aiContentSummary ?? props.article.aiContentSummary,
-    fullContent: status.fullContent ?? props.article.fullContent,
     firecrawlContent: status.firecrawlContent ?? props.article.firecrawlContent,
     firecrawlStatus: status.firecrawlStatus ?? props.article.firecrawlStatus,
     firecrawlError: status.firecrawlError ?? props.article.firecrawlError,
@@ -208,7 +206,7 @@ async function handleManualSummary() {
   manualSummaryLoading.value = true
   manualActionError.value = null
   syncCurrentArticle({
-    contentStatus: 'pending',
+    summaryStatus: 'pending',
     completionError: undefined,
   })
 
@@ -220,7 +218,7 @@ async function handleManualSummary() {
     const message = error instanceof Error ? error.message : '手动总结失败'
     manualActionError.value = message
     syncCurrentArticle({
-      contentStatus: 'failed',
+      summaryStatus: 'failed',
       completionError: message,
     })
   } finally {
@@ -242,7 +240,6 @@ watch(() => props.article, (newArticle) => {
   manualSummaryLoading.value = false
   selectedContentSource.value = getArticleContentSources({
     firecrawlContent: newArticle?.firecrawlContent,
-    fullContent: newArticle?.fullContent,
     content: newArticle?.content,
   }).defaultSource ?? 'firecrawl'
 
@@ -329,7 +326,6 @@ const renderedStoredSummary = computed(() => renderMarkdown(mergedArticle.value?
 
 const contentSources = computed(() => getArticleContentSources({
   firecrawlContent: mergedArticle.value?.firecrawlContent,
-  fullContent: mergedArticle.value?.fullContent,
   content: mergedArticle.value?.content,
 }))
 
@@ -362,7 +358,7 @@ const displayContent = computed(() => {
 
 const aiSourceContent = computed(() => {
   if (!mergedArticle.value) return ''
-  return mergedArticle.value.firecrawlContent || mergedArticle.value.fullContent || mergedArticle.value.content || mergedArticle.value.description || ''
+  return mergedArticle.value.firecrawlContent || mergedArticle.value.content || mergedArticle.value.description || ''
 })
 
 const showDescription = computed(() => {
@@ -378,8 +374,8 @@ const detailLines = computed(() => {
   if (mergedArticle.value.firecrawlCrawledAt) {
     lines.push(`抓取时间：${$dayjs(mergedArticle.value.firecrawlCrawledAt).format('YYYY-MM-DD HH:mm')}`)
   }
-  if (mergedArticle.value.contentFetchedAt) {
-    lines.push(`总结时间：${$dayjs(mergedArticle.value.contentFetchedAt).format('YYYY-MM-DD HH:mm')}`)
+  if (mergedArticle.value.summaryGeneratedAt) {
+    lines.push(`总结时间：${$dayjs(mergedArticle.value.summaryGeneratedAt).format('YYYY-MM-DD HH:mm')}`)
   }
   if ((mergedArticle.value.completionAttempts ?? 0) > 0) {
     lines.push(`总结尝试：${mergedArticle.value.completionAttempts} 次`)
@@ -457,7 +453,7 @@ import '~/components/article/ArticleContent.css'
               {{ firecrawlMeta.label }}
             </span>
             <span v-if="showSummaryStatus" class="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-semibold" :class="getStatusToneClasses(summaryMeta.tone)">
-              <Icon :icon="summaryMeta.icon" width="14" height="14" :class="{ 'animate-spin': mergedArticle.contentStatus === 'pending' }" />
+              <Icon :icon="summaryMeta.icon" width="14" height="14" :class="{ 'animate-spin': mergedArticle.summaryStatus === 'pending' }" />
               {{ summaryMeta.label }}
             </span>
           </div>
@@ -645,7 +641,7 @@ import '~/components/article/ArticleContent.css'
                 {{ firecrawlMeta.label }}
               </span>
               <span v-if="showSummaryStatus" class="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-semibold" :class="getStatusToneClasses(summaryMeta.tone)">
-                <Icon :icon="summaryMeta.icon" width="14" height="14" :class="{ 'animate-spin': mergedArticle.contentStatus === 'pending' }" />
+                <Icon :icon="summaryMeta.icon" width="14" height="14" :class="{ 'animate-spin': mergedArticle.summaryStatus === 'pending' }" />
                 {{ summaryMeta.label }}
               </span>
             </div>
@@ -785,7 +781,5 @@ import '~/components/article/ArticleContent.css'
   flex: 1;
 }
 </style>
-
-
 
 
