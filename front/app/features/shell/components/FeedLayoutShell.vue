@@ -196,6 +196,14 @@ function handleDigestClick() {
   navigateTo('/digest')
 }
 
+function handleTopicGraphClick() {
+  selectedCategory.value = 'topic-graph'
+  selectedFeed.value = null
+  showAISummaries.value = false
+  selectedSummary.value = null
+  navigateTo('/topics')
+}
+
 // 处理总结选择
 function handleSummarySelect(summary: any) {
   selectedSummary.value = summary
@@ -397,6 +405,7 @@ import '~/components/FeedLayout.css'
         @favorites-click="handleFavoritesClick"
         @ai-summaries-click="handleAISummariesClick"
         @digest-click="handleDigestClick"
+        @topic-graph-click="handleTopicGraphClick"
         @all-articles-click="handleAllArticlesClick"
         @edit-category="handleEditCategory"
         @edit-feed="handleEditFeed"

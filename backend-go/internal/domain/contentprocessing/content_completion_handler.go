@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"my-robot-backend/internal/app/runtimeinfo"
 	"my-robot-backend/internal/domain/models"
+	"my-robot-backend/internal/platform/airouter"
 	"my-robot-backend/internal/platform/database"
 )
 
@@ -20,6 +21,12 @@ func InitContentCompletionHandler(crawlBaseURL string) {
 
 func loadCompletionAISettings() {
 	if completionService == nil {
+		return
+	}
+
+	provider, _, err := airouter.NewRouter().ResolvePrimaryProvider(airouter.CapabilityArticleCompletion)
+	if err == nil && provider != nil && provider.BaseURL != "" && provider.APIKey != "" && provider.Model != "" {
+		completionService.SetAICredentials(provider.BaseURL, provider.APIKey, provider.Model)
 		return
 	}
 
@@ -104,7 +111,7 @@ func CompleteFeedArticles(c *gin.Context) {
 	}
 
 	var articles []models.Article
-	if err := database.DB.Where("feed_id = ? AND content_status IN ?", feedID, []string{"incomplete", "failed"}).Find(&articles).Error; err != nil {
+	if err := database.DB.Where("feed_id = ? AND summary_status IN ?", feedID, []string{"incomplete", "failed"}).Find(&articles).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 		return
 	}
@@ -144,12 +151,11 @@ func GetCompletionStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
-			"content_status":       article.ContentStatus,
+			"summary_status":       article.SummaryStatus,
 			"attempts":             article.CompletionAttempts,
 			"error":                article.CompletionError,
-			"fetched_at":           article.ContentFetchedAt,
+			"summary_generated_at": article.SummaryGeneratedAt,
 			"ai_content_summary":   article.AIContentSummary,
-			"full_content":         article.FullContent,
 			"firecrawl_content":    article.FirecrawlContent,
 			"firecrawl_status":     article.FirecrawlStatus,
 			"firecrawl_error":      article.FirecrawlError,

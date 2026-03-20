@@ -19,6 +19,15 @@ export interface DigestConfig {
   obsidian_weekly_digest: boolean
 }
 
+export interface DigestPreviewTopicTag {
+  slug: string
+  label: string
+  category: string
+  icon?: string
+  aliases?: string[]
+  score: number
+}
+
 export interface DigestPreviewSummary {
   id: number
   feed_id: number | null
@@ -30,6 +39,7 @@ export interface DigestPreviewSummary {
   summary_text: string
   article_count: number
   article_ids: number[]
+  topics: DigestPreviewTopicTag[]
   created_at: string
 }
 
@@ -70,6 +80,28 @@ export interface DigestRunResult {
   preview: DigestPreview
   sent_to_feishu: boolean
   exported_to_obsidian: boolean
+  sent_to_open_notebook?: boolean
+}
+
+export interface OpenNotebookConfig {
+  enabled: boolean
+  base_url: string
+  api_key: string
+  model: string
+  target_notebook: string
+  prompt_mode: 'digest_summary'
+  auto_send_daily: boolean
+  auto_send_weekly: boolean
+  export_back_to_obsidian: boolean
+}
+
+export interface OpenNotebookRunResult {
+  digest_type: DigestType
+  anchor_date: string
+  source_markdown: string
+  summary_markdown: string
+  remote_id?: string
+  remote_url?: string
 }
 
 function withDateQuery(endpoint: string, date?: string) {
@@ -97,6 +129,18 @@ export function useDigestApi() {
 
     async runNow(type: DigestType, date?: string) {
       return apiClient.post<DigestRunResult>(withDateQuery(`/digest/run/${type}`, date), {})
+    },
+
+    async getOpenNotebookConfig() {
+      return apiClient.get<OpenNotebookConfig>('/digest/open-notebook/config')
+    },
+
+    async updateOpenNotebookConfig(config: OpenNotebookConfig) {
+      return apiClient.put<OpenNotebookConfig>('/digest/open-notebook/config', config)
+    },
+
+    async sendToOpenNotebook(type: DigestType, date?: string) {
+      return apiClient.post<OpenNotebookRunResult>(withDateQuery(`/digest/open-notebook/${type}`, date), {})
     },
 
     async testFeishu(webhookURL?: string) {

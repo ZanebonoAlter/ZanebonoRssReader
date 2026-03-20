@@ -43,11 +43,28 @@ export function useSummaryWebSocket() {
   }
 
   const connect = () => {
-    if (ws.value?.readyState === WebSocket.OPEN) return
+    if (ws.value?.readyState === WebSocket.OPEN) return Promise.resolve()
+    if (ws.value?.readyState === WebSocket.CONNECTING) {
+      return new Promise<void>((resolve, reject) => {
+        const startedAt = Date.now()
+        const timer = setInterval(() => {
+          if (ws.value?.readyState === WebSocket.OPEN) {
+            clearInterval(timer)
+            resolve()
+            return
+          }
+          if (status.value === 'error' || Date.now() - startedAt > 5000) {
+            clearInterval(timer)
+            reject(new Error('WebSocket connect timeout'))
+          }
+        }, 100)
+      })
+    }
 
     status.value = 'connecting'
 
-    try {
+    return new Promise<void>((resolve, reject) => {
+      try {
       const url = getWsUrl()
       console.log('[WebSocket] Connecting to:', url)
 
@@ -57,6 +74,7 @@ export function useSummaryWebSocket() {
         console.log('[WebSocket] Connected')
         status.value = 'connected'
         reconnectAttempts.value = 0
+        resolve()
       }
 
       ws.value.onmessage = (event) => {
@@ -84,11 +102,14 @@ export function useSummaryWebSocket() {
       ws.value.onerror = (error) => {
         console.error('[WebSocket] Error:', error)
         status.value = 'error'
+        reject(new Error('WebSocket error'))
       }
-    } catch (err) {
-      console.error('[WebSocket] Failed to connect:', err)
-      status.value = 'error'
-    }
+      } catch (err) {
+        console.error('[WebSocket] Failed to connect:', err)
+        status.value = 'error'
+        reject(err instanceof Error ? err : new Error('WebSocket connect failed'))
+      }
+    })
   }
 
   const disconnect = () => {
@@ -97,6 +118,10 @@ export function useSummaryWebSocket() {
       ws.value = null
       status.value = 'disconnected'
     }
+  }
+
+  const clearLastMessage = () => {
+    lastMessage.value = null
   }
 
   const toBatchData = (message: WSMessage): SummaryBatch => {
@@ -161,6 +186,7 @@ export function useSummaryWebSocket() {
     lastMessage,
     connect,
     disconnect,
+    clearLastMessage,
     toBatchData,
   }
 }

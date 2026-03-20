@@ -2,6 +2,7 @@ package app
 
 import (
 	"github.com/gin-gonic/gin"
+	aiadmindomain "my-robot-backend/internal/domain/aiadmin"
 	articlesdomain "my-robot-backend/internal/domain/articles"
 	categoriesdomain "my-robot-backend/internal/domain/categories"
 	contentprocessingdomain "my-robot-backend/internal/domain/contentprocessing"
@@ -9,7 +10,10 @@ import (
 	feedsdomain "my-robot-backend/internal/domain/feeds"
 	preferencesdomain "my-robot-backend/internal/domain/preferences"
 	summariesdomain "my-robot-backend/internal/domain/summaries"
+	topicanalysisdomain "my-robot-backend/internal/domain/topicanalysis"
+	topicgraphdomain "my-robot-backend/internal/domain/topicgraph"
 	"my-robot-backend/internal/jobs"
+	"my-robot-backend/internal/platform/database"
 	"my-robot-backend/internal/platform/ws"
 )
 
@@ -39,16 +43,7 @@ func SetupRoutes(r *gin.Engine) {
 		})
 	})
 
-	r.GET("/api/tasks/status", func(c *gin.Context) {
-		c.JSON(200, gin.H{
-			"success": true,
-			"data": gin.H{
-				"queue_size":   0,
-				"active_tasks": 0,
-				"tasks":        []string{},
-			},
-		})
-	})
+	r.GET("/api/tasks/status", jobs.GetTasksStatus)
 
 	r.GET("/ws", ws.HandleWebSocket)
 
@@ -89,6 +84,12 @@ func SetupRoutes(r *gin.Engine) {
 			ai.POST("/test", summariesdomain.TestAIConnection)
 			ai.GET("/settings", summariesdomain.GetAISettings)
 			ai.POST("/settings", summariesdomain.SaveAISettings)
+			ai.GET("/providers", aiadmindomain.ListProviders)
+			ai.POST("/providers", aiadmindomain.UpsertProvider)
+			ai.PUT("/providers/:provider_id", aiadmindomain.UpdateProvider)
+			ai.DELETE("/providers/:provider_id", aiadmindomain.DeleteProvider)
+			ai.GET("/routes", aiadmindomain.ListRoutes)
+			ai.PUT("/routes/:capability", aiadmindomain.UpdateRoute)
 		}
 
 		opml := api.Group("")
@@ -148,9 +149,22 @@ func SetupRoutes(r *gin.Engine) {
 			firecrawl.POST("/settings", contentprocessingdomain.SaveFirecrawlSettings)
 		}
 
+		topicGraph := api.Group("/topic-graph")
+		{
+			topicGraph.GET("/:type", topicgraphdomain.GetTopicGraph)
+			topicGraph.GET("/topic/:slug", topicgraphdomain.GetTopicDetail)
+			topicGraph.GET("/by-category", topicgraphdomain.GetTopicsByCategory)
+			topicGraph.GET("/tag/:slug/digests", topicgraphdomain.GetDigestsByArticleTagHandler)
+			topicGraph.GET("/topic/:slug/articles", topicgraphdomain.GetTopicArticles)
+		}
+		topicanalysisdomain.RegisterAnalysisRoutes(topicGraph, topicanalysisdomain.GetAnalysisService(database.DB))
+
 		digestGroup := api.Group("/digest")
 		{
 			digestGroup.GET("/config", digestdomain.GetDigestConfig)
+			digestGroup.GET("/open-notebook/config", digestdomain.GetOpenNotebookConfig)
+			digestGroup.PUT("/open-notebook/config", digestdomain.UpdateOpenNotebookConfig)
+			digestGroup.POST("/open-notebook/:type", digestdomain.SendDigestToOpenNotebook)
 			digestGroup.GET("/status", digestdomain.GetDigestStatus)
 			digestGroup.GET("/preview/:type", digestdomain.GetDigestPreview)
 			digestGroup.PUT("/config", digestdomain.UpdateDigestConfig)

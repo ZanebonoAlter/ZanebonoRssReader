@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/robfig/cron/v3"
+	"gorm.io/gorm"
 	"my-robot-backend/internal/domain/contentprocessing"
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/platform/database"
@@ -27,6 +29,7 @@ type ContentCompletionScheduler struct {
 	lastExecutionTime *time.Time
 	lastRunSummary    *ContentCompletionRunSummary
 	mu                sync.RWMutex
+	executionMutex    sync.Mutex
 }
 
 type ContentCompletionRunSummary struct {
@@ -69,20 +72,124 @@ func NewContentCompletionScheduler(completionService *contentprocessing.ContentC
 }
 
 func (s *ContentCompletionScheduler) Start() error {
+	if s.isRunning {
+		return fmt.Errorf("content completion scheduler already running")
+	}
+	if err := s.reconcileSchedulerTask(); err != nil {
+		return fmt.Errorf("reconcile content completion scheduler task: %w", err)
+	}
 	s.cron.Start()
 	s.isRunning = true
 	log.Printf("AI summary scheduler started (interval: %v)", s.checkInterval)
-	s.initSchedulerTask()
 	return nil
 }
 
 func (s *ContentCompletionScheduler) Stop() {
+	if !s.isRunning {
+		return
+	}
 	s.cron.Stop()
 	s.isRunning = false
 	log.Println("AI summary scheduler stopped")
 }
 
+func (s *ContentCompletionScheduler) TriggerNow() map[string]interface{} {
+	if !s.executionMutex.TryLock() {
+		return map[string]interface{}{
+			"accepted":    false,
+			"started":     false,
+			"reason":      "already_running",
+			"message":     "内容补全正在执行中，稍后再试。",
+			"status_code": 409,
+		}
+	}
+
+	go s.runCompletionCycle("manual", nextContentCompletionRunID("manual"))
+	return map[string]interface{}{
+		"accepted": true,
+		"started":  true,
+		"message":  "文章总结任务已触发",
+	}
+}
+
+func (s *ContentCompletionScheduler) UpdateInterval(interval int) error {
+	if interval <= 0 {
+		return fmt.Errorf("interval must be positive")
+	}
+
+	wasRunning := s.isRunning
+	if wasRunning {
+		s.Stop()
+	}
+
+	s.cron = cron.New()
+	s.checkInterval = time.Duration(interval) * time.Second
+	if _, err := s.cron.AddFunc(fmt.Sprintf("@every %ds", interval), s.checkAndCompleteArticles); err != nil {
+		return fmt.Errorf("failed to reschedule content completion: %w", err)
+	}
+
+	if wasRunning {
+		if err := s.Start(); err != nil {
+			return err
+		}
+	}
+
+	var task models.SchedulerTask
+	if err := database.DB.Where("name = ?", s.taskName).First(&task).Error; err == nil {
+		nextRun := time.Now().Add(s.checkInterval)
+		database.DB.Model(&task).Updates(map[string]interface{}{
+			"check_interval":      interval,
+			"next_execution_time": &nextRun,
+		})
+	}
+
+	return nil
+}
+
+func (s *ContentCompletionScheduler) ResetStats() error {
+	var task models.SchedulerTask
+	if err := database.DB.Where("name = ?", s.taskName).First(&task).Error; err != nil {
+		return err
+	}
+
+	nextRun := time.Now().Add(s.checkInterval)
+	updates := map[string]interface{}{
+		"status":                  "idle",
+		"last_error":              "",
+		"last_error_time":         nil,
+		"total_executions":        0,
+		"successful_executions":   0,
+		"failed_executions":       0,
+		"consecutive_failures":    0,
+		"last_execution_time":     nil,
+		"last_execution_duration": nil,
+		"last_execution_result":   "",
+		"next_execution_time":     &nextRun,
+	}
+
+	s.mu.Lock()
+	s.lastError = ""
+	s.lastExecutionTime = nil
+	s.lastProcessed = nil
+	s.currentArticle = nil
+	s.lastRunSummary = nil
+	s.mu.Unlock()
+
+	return database.DB.Model(&task).Updates(updates).Error
+}
+
 func (s *ContentCompletionScheduler) checkAndCompleteArticles() {
+	if !s.executionMutex.TryLock() {
+		log.Println("Content completion scheduler already running, skipping this cycle")
+		return
+	}
+
+	s.runCompletionCycle("scheduled", nextContentCompletionRunID("scheduled"))
+}
+
+func (s *ContentCompletionScheduler) runCompletionCycle(triggerSource, runID string) {
+	defer s.executionMutex.Unlock()
+
 	var task models.SchedulerTask
 	if err := database.DB.Where("name = ?", s.taskName).First(&task).Error; err != nil {
 		log.Printf("Scheduler task not found: %v", err)
@@ -111,14 +218,7 @@ func (s *ContentCompletionScheduler) checkAndCompleteArticles() {
 	runSummary := &ContentCompletionRunSummary{
 		StartedAt: now.Format(time.RFC3339),
 	}
-	var articles []models.Article
-	err := database.DB.
-		Joins("JOIN feeds ON feeds.id = articles.feed_id").
-		Where("articles.firecrawl_status = ? AND articles.content_status = ?", "completed", "incomplete").
-		Where("feeds.content_completion_enabled = ?", true).
-		Preload("Feed").
-		Limit(50).
-		Find(&articles).Error
+	articles, err := s.completionService.ListReadyArticles(50)
 	if err != nil {
 		task.Status = "error"
 		task.LastError = err.Error()
@@ -149,7 +249,10 @@ func (s *ContentCompletionScheduler) checkAndCompleteArticles() {
 			continue
 		}
 
-		if err := s.completionService.CompleteArticle(article.ID); err != nil {
+		if err := s.completionService.CompleteArticleWithMetadata(article.ID, false, map[string]any{
+			"scheduler_run_id": runID,
+			"trigger_source":   triggerSource,
+		}); err != nil {
 			errors = append(errors, fmt.Errorf("article %d: %w", article.ID, err))
 			runSummary.FailedCount++
 			appendRunError(runSummary, article.ID, err.Error(), classifyCompletionError(err.Error()))
@@ -209,6 +312,10 @@ func (s *ContentCompletionScheduler) checkAndCompleteArticles() {
 	s.mu.Unlock()
 }
 
+func nextContentCompletionRunID(triggerSource string) string {
+	return fmt.Sprintf("content-completion-%s-%d", triggerSource, time.Now().UnixNano())
+}
+
 func (s *ContentCompletionScheduler) initSchedulerTask() {
 	var task models.SchedulerTask
 	err := database.DB.Where("name = ?", s.taskName).First(&task).Error
@@ -234,6 +341,96 @@ func (s *ContentCompletionScheduler) initSchedulerTask() {
 
 	database.DB.Create(&task)
 	log.Println("AI summary scheduler task initialized")
+}
+
+func (s *ContentCompletionScheduler) reconcileSchedulerTask() error {
+	const legacyTaskName = "content_completion"
+
+	var primary models.SchedulerTask
+	primaryErr := database.DB.Where("name = ?", s.taskName).First(&primary).Error
+	if primaryErr != nil && !errors.Is(primaryErr, gorm.ErrRecordNotFound) {
+		return primaryErr
+	}
+
+	var legacy models.SchedulerTask
+	legacyErr := database.DB.Where("name = ?", legacyTaskName).First(&legacy).Error
+	if legacyErr != nil && !errors.Is(legacyErr, gorm.ErrRecordNotFound) {
+		return legacyErr
+	}
+
+	hasPrimary := primaryErr == nil
+	hasLegacy := legacyErr == nil
+
+	if !hasPrimary && !hasLegacy {
+		s.initSchedulerTask()
+		return nil
+	}
+
+	if !hasPrimary && hasLegacy {
+		legacy.Name = s.taskName
+		primary = legacy
+		hasPrimary = true
+		hasLegacy = false
+	}
+
+	if hasLegacy {
+		if legacy.CheckInterval > 0 {
+			primary.CheckInterval = legacy.CheckInterval
+		}
+		if primary.Description == "" && legacy.Description != "" {
+			primary.Description = legacy.Description
+		}
+		if primary.LastExecutionResult == "" && legacy.LastExecutionResult != "" {
+			primary.LastExecutionResult = legacy.LastExecutionResult
+		}
+		if err := database.DB.Delete(&legacy).Error; err != nil {
+			return err
+		}
+	}
+
+	if primary.CheckInterval <= 0 {
+		primary.CheckInterval = int(s.checkInterval.Seconds())
+	}
+	if err := s.reschedule(primary.CheckInterval); err != nil {
+		return err
+	}
+
+	if primary.Status == "running" {
+		nextRun := time.Now().In(time.FixedZone("CST", 8*3600)).Add(s.checkInterval)
+		primary.Status = "idle"
+		primary.NextExecutionTime = &nextRun
+	}
+
+	if hasPrimary && primary.ID != 0 {
+		return database.DB.Model(&models.SchedulerTask{}).Where("id = ?", primary.ID).Updates(map[string]interface{}{
+			"name":                primary.Name,
+			"description":         primary.Description,
+			"check_interval":      primary.CheckInterval,
+			"status":              primary.Status,
+			"next_execution_time": primary.NextExecutionTime,
+		}).Error
+	}
+
+	return database.DB.Create(&primary).Error
+}
+
+func (s *ContentCompletionScheduler) reschedule(intervalSeconds int) error {
+	if intervalSeconds <= 0 {
+		return nil
+	}
+
+	if s.checkInterval == time.Duration(intervalSeconds)*time.Second {
+		return nil
+	}
+
+	rescheduled := cron.New()
+	if _, err := rescheduled.AddFunc(fmt.Sprintf("@every %ds", intervalSeconds), s.checkAndCompleteArticles); err != nil {
+		return err
+	}
+
+	s.cron = rescheduled
+	s.checkInterval = time.Duration(intervalSeconds) * time.Second
+	return nil
 }
 
 func (s *ContentCompletionScheduler) GetStatus() map[string]interface{} {

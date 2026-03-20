@@ -2,6 +2,7 @@ package summaries
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"gorm.io/gorm"
@@ -88,7 +89,7 @@ func (b *AISummaryPromptBuilder) BuildPersonalizedPrompt(
 
 	type Stats struct {
 		PreferenceCount int
-		AvgReadingTime  int
+		AvgReadingTime  float64
 		AvgScrollDepth  float64
 	}
 
@@ -101,6 +102,7 @@ func (b *AISummaryPromptBuilder) BuildPersonalizedPrompt(
 		FROM user_preferences
 	`).Scan(&stats).Error; err == nil && stats.PreferenceCount > 0 {
 		context.Personalized = true
+		avgReadingTime := int(math.Round(stats.AvgReadingTime))
 		if language == "zh" {
 			userContext.WriteString("### 阅读习惯\n")
 			readingStyle := "中等深度"
@@ -109,7 +111,7 @@ func (b *AISummaryPromptBuilder) BuildPersonalizedPrompt(
 			} else if stats.AvgReadingTime < 60 {
 				readingStyle = "偏向快读"
 			}
-			userContext.WriteString(fmt.Sprintf("- 平均阅读时长: %d 秒（%s）\n", stats.AvgReadingTime, readingStyle))
+			userContext.WriteString(fmt.Sprintf("- 平均阅读时长: %d 秒（%s）\n", avgReadingTime, readingStyle))
 
 			attentionLevel := "中等"
 			if stats.AvgScrollDepth > 80 {
@@ -119,22 +121,22 @@ func (b *AISummaryPromptBuilder) BuildPersonalizedPrompt(
 			}
 			userContext.WriteString(fmt.Sprintf("- 平均滚动深度: %.0f%%（%s）\n\n", stats.AvgScrollDepth, attentionLevel))
 		} else {
-			userContext.WriteString("### Reading Habits\n")
-			readingStyle := "balanced"
+			userContext.WriteString("### 阅读习惯\n")
+			readingStyle := "均衡阅读"
 			if stats.AvgReadingTime > 180 {
-				readingStyle = "detail-oriented"
+				readingStyle = "偏爱细节"
 			} else if stats.AvgReadingTime < 60 {
-				readingStyle = "quick scan"
+				readingStyle = "偏向快读"
 			}
-			userContext.WriteString(fmt.Sprintf("- Average reading time: %d seconds (%s)\n", stats.AvgReadingTime, readingStyle))
+			userContext.WriteString(fmt.Sprintf("- 平均阅读时长: %d 秒（%s）\n", avgReadingTime, readingStyle))
 
-			attentionLevel := "moderate"
+			attentionLevel := "中等"
 			if stats.AvgScrollDepth > 80 {
-				attentionLevel = "high attention"
+				attentionLevel = "高，通常会读完"
 			} else if stats.AvgScrollDepth < 40 {
-				attentionLevel = "light attention"
+				attentionLevel = "低，更像快速扫读"
 			}
-			userContext.WriteString(fmt.Sprintf("- Average scroll depth: %.0f%% (%s)\n\n", stats.AvgScrollDepth, attentionLevel))
+			userContext.WriteString(fmt.Sprintf("- 平均滚动深度: %.0f%%（%s）\n\n", stats.AvgScrollDepth, attentionLevel))
 		}
 	}
 
@@ -199,45 +201,45 @@ func (b *AISummaryPromptBuilder) buildBasePrompt(
 5. 可以根据用户偏好调整详略和关注点。`, target, articleCount, articlesText, feedName)
 	}
 
-	target := fmt.Sprintf("feed \"%s\"", feedName)
+	target := fmt.Sprintf("订阅源\"%s\"", feedName)
 	if categoryName != "" {
-		target += fmt.Sprintf(" (category: %s)", categoryName)
+		target += fmt.Sprintf("（分类：%s）", categoryName)
 	}
 
-	return fmt.Sprintf(`Please summarize the following %d articles from %s.
+	return fmt.Sprintf(`请总结以下来自%s的 %d 篇文章。
 
-Articles (in reverse chronological order):
+文章列表（按时间倒序）：
 %s
 
-Please provide a summary in the following format:
+请按下面格式输出：
 
-## Core Theme
-One sentence summarizing the core theme and trends.
+## 核心主题
+用一句话概括这批文章的共同主题和趋势。
 
-## Important News
+## 重要新闻
 
-### Hot Topics
-List 2-3 most important events, each including:
-- Event title (in bold)
-- Brief description (2-3 sentences)
-- Source citation using > [Article Title](link)
+### 热点事件
+列出 2-3 个最重要的事件。每个事件包含：
+- 加粗标题
+- 2-3 句简述
+- 引用来源，格式为 > [文章标题](链接)
 
-### Other Important News
-List other important news, each including:
-- News title (in bold)
-- Brief description (1-2 sentences)
-- Source citation
+### 其他重要新闻
+列出其余值得关注的新闻。每条包含：
+- 加粗标题
+- 1-2 句简述
+- 引用来源
 
-## Key Points
-Summarize 3-5 key points or trends.
+## 核心观点
+总结 3-5 个关键信号或趋势。
 
-## Related Tags
-#%s #tag1 #tag2 #tag3
+## 相关标签
+#%s #标签1 #标签2 #标签3
 
-Important Notes:
-1. Always cite news sources.
-2. Source format: > [Article Title](article link).
-3. Keep the summary concise and focused.
-4. Maintain an objective and neutral tone.
-5. Adjust content depth based on user preferences.`, articleCount, target, articlesText, feedName)
+注意：
+1. 每条新闻都必须带来源引用。
+2. 引用格式固定为 > [文章标题](文章链接)。
+3. 总结要短，重点要清楚。
+4. 保持客观、中立。
+5. 可以根据用户偏好调整详略和关注点。`, target, articleCount, articlesText, feedName)
 }

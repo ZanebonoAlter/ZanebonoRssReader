@@ -42,6 +42,15 @@ const metaFacts = computed(() => {
   ]
 })
 
+function getTopicCategoryMeta(category: string) {
+  const meta: Record<string, { label: string, color: string, defaultIcon: string }> = {
+    event: { label: '事件', color: '#f59e0b', defaultIcon: 'mdi:calendar-star' },
+    person: { label: '人物', color: '#10b981', defaultIcon: 'mdi:account' },
+    keyword: { label: '关键词', color: '#6366f1', defaultIcon: 'mdi:tag' },
+  }
+  return (meta[category] || meta.keyword)!
+}
+
 async function loadRelatedArticles(summary: DigestPreviewSummary | null) {
   if (!summary?.article_ids?.length) {
     relatedArticles.value = []
@@ -148,40 +157,26 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="digest-detail-shell min-h-[760px] overflow-hidden rounded-[36px] border border-[var(--color-border-medium)] bg-[rgba(255,255,255,0.82)] shadow-[0_24px_60px_rgba(18,24,30,0.08)]">
-    <div v-if="summary" class="flex h-full flex-col">
-      <header class="border-b border-[var(--color-border-subtle)] px-6 py-5 md:px-7">
+  <section class="digest-detail-shell min-h-0 h-full overflow-hidden rounded-[36px] border border-[var(--color-border-medium)] bg-[rgba(255,255,255,0.82)] shadow-[0_24px_60px_rgba(18,24,30,0.08)] xl:min-h-[760px]">
+    <div v-if="summary" class="flex h-full min-h-0 flex-col">
+      <header class="shrink-0 border-b border-[var(--color-border-subtle)] px-6 py-3.5 md:px-7">
         <div class="flex flex-wrap items-start justify-between gap-4">
-          <div class="max-w-5xl">
+          <div class="min-w-0 flex-1 xl:pr-4">
             <p class="text-xs uppercase tracking-[0.32em] text-ink-light">{{ activeTypeLabel }} Summary</p>
-            <div class="mt-3 flex flex-wrap items-center gap-3">
-              <div class="digest-feed-badge">
-                <Icon :icon="summary.feed_icon || 'mdi:rss'" width="16" :style="{ color: summary.feed_color || '#3b6b87' }" />
-                <span :style="{ color: summary.feed_color || '#3b6b87' }">{{ summary.feed_name }}</span>
-              </div>
-              <span class="digest-meta-chip">{{ summary.category_name }}</span>
-            </div>
-            <h2 class="mt-4 max-w-[16ch] text-3xl font-black leading-none text-ink-dark md:text-5xl">{{ summary.feed_name }}</h2>
-            <p class="mt-3 max-w-[44rem] text-sm leading-7 text-ink-medium md:text-base">这条是 feed 级 AI 总结。点下面文章，会弹出来直接读。</p>
-          </div>
-
-          <div class="grid gap-2 sm:grid-cols-3">
-            <article v-for="fact in metaFacts" :key="fact.label" class="digest-fact-chip">
-              <p class="text-[11px] uppercase tracking-[0.24em] text-ink-light">{{ fact.label }}</p>
-              <p class="mt-2 text-sm font-bold text-ink-dark">{{ fact.value }}</p>
-            </article>
+            
+            <h2 class="mt-2.5 max-w-none text-[1.75rem] font-black leading-tight text-ink-dark md:text-[2rem]">{{ summary.feed_name }}</h2>
           </div>
         </div>
       </header>
 
-      <div class="grid flex-1 gap-0 xl:grid-cols-[minmax(0,1fr)_380px] 2xl:grid-cols-[minmax(0,1fr)_440px]">
-        <div class="border-b border-[var(--color-border-subtle)] px-6 py-6 md:px-7 xl:border-b-0 xl:border-r">
+      <div class="digest-detail-main grid flex-1 min-h-0 gap-0 xl:grid-cols-[minmax(0,1fr)_380px] 2xl:grid-cols-[minmax(0,1fr)_440px]">
+        <div class="digest-detail-scroll digest-detail-scroll--summary min-h-0 border-b border-[var(--color-border-subtle)] px-6 py-6 md:px-7 xl:overflow-y-auto xl:border-b-0 xl:border-r">
           <div class="digest-summary-surface" @click.capture="handleArticleLinkClick">
             <div class="digest-summary-content max-w-none" v-html="renderedSummary" />
           </div>
         </div>
 
-        <aside class="bg-[rgba(247,241,230,0.72)] px-5 py-6 md:px-6">
+        <aside class="digest-detail-scroll digest-detail-scroll--articles min-h-0 bg-[rgba(247,241,230,0.72)] px-5 py-6 md:px-6 xl:overflow-y-auto">
           <div class="space-y-4">
             <div>
               <p class="text-xs uppercase tracking-[0.28em] text-ink-light">关联文章</p>
@@ -300,7 +295,7 @@ onBeforeUnmount(() => {
   min-width: 108px;
   border-radius: 20px;
   background: rgba(255,255,255,0.72);
-  padding: 0.85rem 1rem;
+  padding: 0.7rem 0.9rem;
 }
 
 .digest-summary-surface {
@@ -395,6 +390,24 @@ onBeforeUnmount(() => {
   background: rgba(255,255,255,0.8);
   padding: 1rem;
   transition: border-color 180ms ease, background 180ms ease, transform 180ms ease;
+}
+
+.digest-topic-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 1px solid;
+  border-radius: 999px;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: default;
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+
+.digest-topic-tag:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
 }
 
 .digest-article-card:hover {

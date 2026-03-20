@@ -68,8 +68,8 @@ func NewAIService(baseURL, apiKey, model string) *AIService {
 }
 
 func (s *AIService) SummarizeArticle(title, content, language string) (*AISummaryResponse, error) {
-	systemPrompt := s.getSystemPrompt(language)
-	userContent := s.prepareArticleContent(title, content)
+	systemPrompt := s.GetSystemPrompt(language)
+	userContent := s.PrepareArticleContent(title, content)
 
 	req := openAIRequest{
 		Model: s.Model,
@@ -93,12 +93,12 @@ func (s *AIService) SummarizeArticle(title, content, language string) (*AISummar
 	}
 
 	summaryText := cleanSummaryMarkdown(resp.Choices[0].Message.Content)
-	summary := s.parseSummaryResponse(summaryText)
+	summary := ParseSummaryMarkdown(summaryText)
 	summary.Markdown = summaryText
 	return summary, nil
 }
 
-func (s *AIService) getSystemPrompt(language string) string {
+func (s *AIService) GetSystemPrompt(language string) string {
 	if language == "zh" {
 		return `你是一名中文编辑，负责把抓取到的网页正文整理成适合 RSS 阅读器展示的 Markdown 成稿。
 
@@ -126,20 +126,20 @@ func (s *AIService) getSystemPrompt(language string) string {
 - 如果原文结构混乱，优先保证信息完整，其次再优化阅读顺序。`
 	}
 
-	return `You are rewriting scraped web content into a polished reading version.
-Return Markdown only.
+	return `你将抓取到的网页内容重写为适合阅读的 polished 版本。
+仅返回 Markdown。
 
-Rules:
-1. Start with '# <article title>'.
-2. Add a short bullet digest near the top.
-3. Keep the main body in Markdown with clear headings.
-4. Preserve useful lists, quotes, tables, links, dates, names, numbers, and product terms.
-5. Remove ads, nav text, cookie prompts, repeated footer text, and obvious boilerplate.
-6. If the source structure is messy, reorganize it into a cleaner article while keeping the original facts.
-7. Do not mention the prompt. Do not wrap the output in code fences.`
+规则：
+1. 以 '# <文章标题>' 开头。
+2. 在顶部附近添加一个简短的要点摘要。
+3. 正文使用 Markdown 格式，标题清晰。
+4. 保留有用的列表、引用、表格、链接、日期、名称、数字和产品术语。
+5. 删除广告、导航文本、Cookie 提示、重复的页脚文本和明显的样板内容。
+6. 如果原文结构混乱，将其重新组织成更清晰的文章，同时保留原始事实。
+7. 不要提及提示。不要用代码块包裹输出。`
 }
 
-func (s *AIService) prepareArticleContent(title, content string) string {
+func (s *AIService) PrepareArticleContent(title, content string) string {
 	maxContentLength := 80000
 	if len(content) > maxContentLength {
 		content = content[:maxContentLength] + "..."
@@ -149,6 +149,10 @@ func (s *AIService) prepareArticleContent(title, content string) string {
 }
 
 func (s *AIService) parseSummaryResponse(responseText string) *AISummaryResponse {
+	return ParseSummaryMarkdown(responseText)
+}
+
+func ParseSummaryMarkdown(responseText string) *AISummaryResponse {
 	summary := &AISummaryResponse{
 		KeyPoints: make([]string, 0),
 		Takeaways: make([]string, 0),
@@ -200,7 +204,9 @@ func (s *AIService) callOpenAI(req openAIRequest) (*openAIResponse, error) {
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+s.APIKey)
+	if s.APIKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+s.APIKey)
+	}
 
 	resp, err := s.client.Do(httpReq)
 	if err != nil {

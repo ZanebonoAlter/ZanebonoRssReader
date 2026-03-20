@@ -5,56 +5,56 @@ import { useContentCompletion, type ContentCompletionStatus } from '~/features/a
 
 interface Props {
   articleId: string
-  contentStatus?: string
-  fullContent?: string
+  summaryStatus?: string
+  firecrawlContent?: string
   aiSummary?: string
   readonly?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  contentStatus: 'complete',
-  fullContent: '',
+  summaryStatus: 'complete',
+  firecrawlContent: '',
   aiSummary: '',
   readonly: false,
 })
 
 const emit = defineEmits<{
-  completed: [fullContent: string, aiSummary: string]
+  completed: [firecrawlContent: string, aiSummary: string]
 }>()
 
 const { loading, completeArticle, getCompletionStatus } = useContentCompletion()
 
 const status = ref<ContentCompletionStatus>({
-  contentStatus: props.contentStatus as ContentCompletionStatus['contentStatus'],
+  summaryStatus: props.summaryStatus as ContentCompletionStatus['summaryStatus'],
   attempts: 0,
   error: null,
-  fetchedAt: null,
+  summaryGeneratedAt: null,
 })
 
-const isIncomplete = computed(() => status.value.contentStatus === 'incomplete')
-const isPending = computed(() => status.value.contentStatus === 'pending')
-const isFailed = computed(() => status.value.contentStatus === 'failed')
-const isComplete = computed(() => status.value.contentStatus === 'complete' || Boolean(props.fullContent))
+const isIncomplete = computed(() => status.value.summaryStatus === 'incomplete')
+const isPending = computed(() => status.value.summaryStatus === 'pending')
+const isFailed = computed(() => status.value.summaryStatus === 'failed')
+const isComplete = computed(() => status.value.summaryStatus === 'complete' || Boolean(props.firecrawlContent))
 const renderedSummary = computed(() => props.aiSummary ? marked.parse(props.aiSummary) as string : '')
 
 const statusText = computed(() => {
   if (isPending.value) return '正在补全...'
   if (isFailed.value) return '补全失败'
-  if (isComplete.value && props.fullContent) return '内容已补全'
+  if (isComplete.value && props.firecrawlContent) return '内容已补全'
   return '内容未补全'
 })
 
 const statusIcon = computed(() => {
   if (isPending.value) return 'mdi:loading'
   if (isFailed.value) return 'mdi:alert-circle'
-  if (isComplete.value && props.fullContent) return 'mdi:check-circle'
+  if (isComplete.value && props.firecrawlContent) return 'mdi:check-circle'
   return 'mdi:file-refresh-outline'
 })
 
 const statusClasses = computed(() => {
   if (isPending.value) return 'bg-amber-50 text-amber-700 border-amber-200'
   if (isFailed.value) return 'bg-rose-50 text-rose-700 border-rose-200'
-  if (isComplete.value && props.fullContent) return 'bg-emerald-50 text-emerald-700 border-emerald-200'
+  if (isComplete.value && props.firecrawlContent) return 'bg-emerald-50 text-emerald-700 border-emerald-200'
   return 'bg-stone-100 text-stone-700 border-stone-200'
 })
 
@@ -65,8 +65,8 @@ async function handleComplete() {
   const newStatus = await getCompletionStatus(props.articleId)
   status.value = newStatus
 
-  if (newStatus.contentStatus === 'complete') {
-    emit('completed', newStatus.fullContent || props.fullContent || '', newStatus.aiContentSummary || props.aiSummary || '')
+  if (newStatus.summaryStatus === 'complete') {
+    emit('completed', newStatus.firecrawlContent || props.firecrawlContent || '', newStatus.aiContentSummary || props.aiSummary || '')
   }
 }
 

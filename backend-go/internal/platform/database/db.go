@@ -57,9 +57,19 @@ func Migrate() error {
 		&models.Feed{},
 		&models.Article{},
 		&models.AISummary{},
+		&models.TopicTag{},
+		&models.TopicTagEmbedding{},
+		&models.TopicTagAnalysis{},
+		&models.TopicAnalysisCursor{},
+		&models.AISummaryTopic{},
+		&models.ArticleTopicTag{},
 		&models.AISummaryFeed{},
 		&models.SchedulerTask{},
 		&models.AISettings{},
+		&models.AIProvider{},
+		&models.AIRoute{},
+		&models.AIRouteProvider{},
+		&models.AICallLog{},
 		&models.ReadingBehavior{},
 		&models.UserPreference{},
 	)
@@ -94,7 +104,7 @@ func EnsureTables() error {
 				refresh_error TEXT,
 				last_refresh_at DATETIME,
 				ai_summary_enabled BOOLEAN DEFAULT 1,
-				content_completion_enabled BOOLEAN DEFAULT 0,
+				article_summary_enabled BOOLEAN DEFAULT 0,
 				completion_on_refresh BOOLEAN DEFAULT 1,
 				max_completion_retries INTEGER DEFAULT 3,
 				firecrawl_enabled BOOLEAN DEFAULT 0,
@@ -113,9 +123,9 @@ func EnsureTables() error {
 				author VARCHAR(200),
 				read BOOLEAN DEFAULT 0,
 				favorite BOOLEAN DEFAULT 0,
-				content_status VARCHAR(20) DEFAULT 'complete',
-				full_content TEXT,
-				content_fetched_at DATETIME,
+				summary_status VARCHAR(20) DEFAULT 'complete',
+				summary_generated_at DATETIME,
+				summary_processing_started_at DATETIME,
 				completion_attempts INTEGER DEFAULT 0,
 				completion_error TEXT,
 				ai_content_summary TEXT,
@@ -141,6 +151,72 @@ func EnsureTables() error {
 				updated_at DATETIME,
 				FOREIGN KEY(feed_id) REFERENCES feeds(id) ON DELETE CASCADE,
 				FOREIGN KEY(category_id) REFERENCES categories(id)
+			)`,
+		"topic_tags": `
+			CREATE TABLE IF NOT EXISTS topic_tags (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				slug VARCHAR(120) NOT NULL,
+				label VARCHAR(160) NOT NULL,
+				category VARCHAR(20) NOT NULL DEFAULT 'keyword',
+				icon VARCHAR(100),
+				aliases TEXT,
+				is_canonical BOOLEAN DEFAULT 0,
+				source VARCHAR(20) DEFAULT 'llm',
+				kind VARCHAR(20) DEFAULT 'keyword',
+				created_at DATETIME,
+				updated_at DATETIME
+			)`,
+		"topic_tag_embeddings": `
+			CREATE TABLE IF NOT EXISTS topic_tag_embeddings (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				topic_tag_id INTEGER NOT NULL UNIQUE,
+				vector TEXT NOT NULL,
+				dimension INTEGER NOT NULL,
+				model VARCHAR(50) NOT NULL,
+				text_hash VARCHAR(64),
+				created_at DATETIME,
+				updated_at DATETIME,
+				FOREIGN KEY(topic_tag_id) REFERENCES topic_tags(id) ON DELETE CASCADE
+			)`,
+		"topic_tag_analyses": `
+			CREATE TABLE IF NOT EXISTS topic_tag_analyses (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				topic_tag_id INTEGER NOT NULL,
+				analysis_type VARCHAR(32) NOT NULL,
+				window_type VARCHAR(32) NOT NULL,
+				anchor_date DATETIME NOT NULL,
+				summary_count INTEGER DEFAULT 0,
+				payload_json TEXT,
+				source VARCHAR(20) DEFAULT 'heuristic',
+				version INTEGER DEFAULT 1,
+				created_at DATETIME,
+				updated_at DATETIME,
+				FOREIGN KEY(topic_tag_id) REFERENCES topic_tags(id) ON DELETE CASCADE,
+				UNIQUE(topic_tag_id, analysis_type, window_type, anchor_date)
+			)`,
+		"topic_analysis_cursors": `
+			CREATE TABLE IF NOT EXISTS topic_analysis_cursors (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				topic_tag_id INTEGER NOT NULL,
+				analysis_type VARCHAR(32) NOT NULL,
+				window_type VARCHAR(32) NOT NULL,
+				last_summary_id INTEGER DEFAULT 0,
+				last_updated_at DATETIME,
+				created_at DATETIME,
+				updated_at DATETIME,
+				FOREIGN KEY(topic_tag_id) REFERENCES topic_tags(id) ON DELETE CASCADE,
+				UNIQUE(topic_tag_id, analysis_type, window_type)
+			)`,
+		"ai_summary_topics": `
+			CREATE TABLE IF NOT EXISTS ai_summary_topics (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				summary_id INTEGER NOT NULL,
+				topic_tag_id INTEGER NOT NULL,
+				score REAL DEFAULT 0,
+				source VARCHAR(20) DEFAULT 'heuristic',
+				created_at DATETIME,
+				FOREIGN KEY(summary_id) REFERENCES ai_summaries(id) ON DELETE CASCADE,
+				FOREIGN KEY(topic_tag_id) REFERENCES topic_tags(id) ON DELETE CASCADE
 			)`,
 		"scheduler_tasks": `
 			CREATE TABLE IF NOT EXISTS scheduler_tasks (
@@ -170,6 +246,61 @@ func EnsureTables() error {
 				description VARCHAR(200),
 				created_at DATETIME,
 				updated_at DATETIME
+			)`,
+		"ai_providers": `
+			CREATE TABLE IF NOT EXISTS ai_providers (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				name VARCHAR(100) NOT NULL UNIQUE,
+				provider_type VARCHAR(50) NOT NULL DEFAULT 'openai_compatible',
+				base_url VARCHAR(500) NOT NULL,
+				api_key TEXT NOT NULL,
+				model VARCHAR(100) NOT NULL,
+				enabled BOOLEAN NOT NULL DEFAULT 1,
+				timeout_seconds INTEGER NOT NULL DEFAULT 120,
+				max_tokens INTEGER,
+				temperature REAL,
+				metadata TEXT,
+				created_at DATETIME,
+				updated_at DATETIME
+			)`,
+		"ai_routes": `
+			CREATE TABLE IF NOT EXISTS ai_routes (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				name VARCHAR(100) NOT NULL,
+				capability VARCHAR(50) NOT NULL,
+				enabled BOOLEAN NOT NULL DEFAULT 1,
+				strategy VARCHAR(50) NOT NULL DEFAULT 'ordered_failover',
+				description VARCHAR(255),
+				created_at DATETIME,
+				updated_at DATETIME,
+				UNIQUE(capability, name)
+			)`,
+		"ai_route_providers": `
+			CREATE TABLE IF NOT EXISTS ai_route_providers (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				route_id INTEGER NOT NULL,
+				provider_id INTEGER NOT NULL,
+				priority INTEGER NOT NULL DEFAULT 100,
+				enabled BOOLEAN NOT NULL DEFAULT 1,
+				created_at DATETIME,
+				updated_at DATETIME,
+				FOREIGN KEY(route_id) REFERENCES ai_routes(id) ON DELETE CASCADE,
+				FOREIGN KEY(provider_id) REFERENCES ai_providers(id) ON DELETE CASCADE,
+				UNIQUE(route_id, provider_id)
+			)`,
+		"ai_call_logs": `
+			CREATE TABLE IF NOT EXISTS ai_call_logs (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				capability VARCHAR(50) NOT NULL,
+				route_name VARCHAR(100) NOT NULL,
+				provider_name VARCHAR(100) NOT NULL,
+				success BOOLEAN NOT NULL,
+				is_fallback BOOLEAN NOT NULL DEFAULT 0,
+				latency_ms INTEGER,
+				error_code VARCHAR(100),
+				error_message TEXT,
+				request_meta TEXT,
+				created_at DATETIME
 			)`,
 		"reading_behaviors": `
 			CREATE TABLE IF NOT EXISTS reading_behaviors (
@@ -224,6 +355,19 @@ func EnsureTables() error {
 				updated_at DATETIME,
 				FOREIGN KEY(article_id) REFERENCES articles(id) ON DELETE CASCADE
 			)`,
+		"article_topic_tags": `
+			CREATE TABLE IF NOT EXISTS article_topic_tags (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				article_id INTEGER NOT NULL,
+				topic_tag_id INTEGER NOT NULL,
+				score REAL DEFAULT 0,
+				source VARCHAR(20) DEFAULT 'llm',
+				created_at DATETIME,
+				updated_at DATETIME,
+				FOREIGN KEY(article_id) REFERENCES articles(id) ON DELETE CASCADE,
+				FOREIGN KEY(topic_tag_id) REFERENCES topic_tags(id) ON DELETE CASCADE,
+				UNIQUE(article_id, topic_tag_id)
+			)`,
 	}
 
 	indexes := map[string][]string{
@@ -244,6 +388,23 @@ func EnsureTables() error {
 		"ai_settings": {
 			"CREATE INDEX IF NOT EXISTS idx_ai_settings_key ON ai_settings(key)",
 		},
+		"ai_providers": {
+			"CREATE INDEX IF NOT EXISTS idx_ai_providers_enabled ON ai_providers(enabled)",
+			"CREATE INDEX IF NOT EXISTS idx_ai_providers_provider_type ON ai_providers(provider_type)",
+		},
+		"ai_routes": {
+			"CREATE INDEX IF NOT EXISTS idx_ai_routes_capability ON ai_routes(capability)",
+			"CREATE INDEX IF NOT EXISTS idx_ai_routes_enabled ON ai_routes(enabled)",
+		},
+		"ai_route_providers": {
+			"CREATE INDEX IF NOT EXISTS idx_ai_route_providers_route_id ON ai_route_providers(route_id)",
+			"CREATE INDEX IF NOT EXISTS idx_ai_route_providers_provider_id ON ai_route_providers(provider_id)",
+			"CREATE INDEX IF NOT EXISTS idx_ai_route_providers_priority ON ai_route_providers(priority)",
+		},
+		"ai_call_logs": {
+			"CREATE INDEX IF NOT EXISTS idx_ai_call_logs_capability ON ai_call_logs(capability)",
+			"CREATE INDEX IF NOT EXISTS idx_ai_call_logs_success ON ai_call_logs(success)",
+		},
 		"reading_behaviors": {
 			"CREATE INDEX IF NOT EXISTS idx_reading_behaviors_category_id ON reading_behaviors(category_id)",
 			"CREATE INDEX IF NOT EXISTS idx_reading_behaviors_feed_id ON reading_behaviors(feed_id)",
@@ -260,6 +421,25 @@ func EnsureTables() error {
 		"ai_summary_feeds": {
 			"CREATE INDEX IF NOT EXISTS idx_ai_summary_feeds_summary_id ON ai_summary_feeds(summary_id)",
 			"CREATE INDEX IF NOT EXISTS idx_ai_summary_feeds_feed_id ON ai_summary_feeds(feed_id)",
+		},
+		"topic_tags": {
+			"CREATE INDEX IF NOT EXISTS idx_topic_tags_category ON topic_tags(category)",
+			"CREATE INDEX IF NOT EXISTS idx_topic_tags_category_slug ON topic_tags(category, slug)",
+		},
+		"topic_tag_embeddings": {
+			"CREATE INDEX IF NOT EXISTS idx_topic_tag_embeddings_topic_tag_id ON topic_tag_embeddings(topic_tag_id)",
+		},
+		"topic_tag_analyses": {
+			"CREATE INDEX IF NOT EXISTS idx_topic_tag_analyses_tag_id ON topic_tag_analyses(topic_tag_id)",
+			"CREATE INDEX IF NOT EXISTS idx_topic_tag_analyses_lookup ON topic_tag_analyses(topic_tag_id, analysis_type, window_type, anchor_date)",
+		},
+		"topic_analysis_cursors": {
+			"CREATE INDEX IF NOT EXISTS idx_topic_analysis_cursors_tag_id ON topic_analysis_cursors(topic_tag_id)",
+			"CREATE INDEX IF NOT EXISTS idx_topic_analysis_cursors_lookup ON topic_analysis_cursors(topic_tag_id, analysis_type, window_type)",
+		},
+		"article_topic_tags": {
+			"CREATE INDEX IF NOT EXISTS idx_article_topic_tags_article_id ON article_topic_tags(article_id)",
+			"CREATE INDEX IF NOT EXISTS idx_article_topic_tags_topic_tag_id ON article_topic_tags(topic_tag_id)",
 		},
 	}
 
@@ -289,7 +469,7 @@ func EnsureTables() error {
 }
 
 func runMigrations() error {
-	if !columnExists("ai_summaries", "feed_id") {
+	if tableExists("ai_summaries") && !columnExists("ai_summaries", "feed_id") {
 		log.Println("Adding feed_id column to ai_summaries table...")
 		if err := DB.Exec("ALTER TABLE ai_summaries ADD COLUMN feed_id INTEGER REFERENCES feeds(id) ON DELETE CASCADE").Error; err != nil {
 			log.Printf("Warning: Failed to add feed_id column: %v", err)
@@ -298,14 +478,56 @@ func runMigrations() error {
 		}
 	}
 
+	if !columnExists("feeds", "article_summary_enabled") {
+		log.Println("Adding article_summary_enabled column to feeds table...")
+		if err := DB.Exec("ALTER TABLE feeds ADD COLUMN article_summary_enabled BOOLEAN DEFAULT 0").Error; err != nil {
+			log.Printf("Warning: Failed to add article_summary_enabled column: %v", err)
+		} else {
+			if columnExists("feeds", "content_completion_enabled") {
+				if err := DB.Exec("UPDATE feeds SET article_summary_enabled = COALESCE(content_completion_enabled, 0)").Error; err != nil {
+					log.Printf("Warning: Failed to backfill article_summary_enabled: %v", err)
+				}
+			}
+			log.Println("✓ article_summary_enabled column added to feeds")
+		}
+	}
+
+	if !columnExists("articles", "summary_status") {
+		log.Println("Adding summary_status column to articles table...")
+		if err := DB.Exec("ALTER TABLE articles ADD COLUMN summary_status VARCHAR(20) DEFAULT 'complete'").Error; err != nil {
+			log.Printf("Warning: Failed to add summary_status column: %v", err)
+		} else {
+			if columnExists("articles", "content_status") {
+				if err := DB.Exec("UPDATE articles SET summary_status = COALESCE(content_status, 'complete')").Error; err != nil {
+					log.Printf("Warning: Failed to backfill summary_status: %v", err)
+				}
+			}
+			log.Println("✓ summary_status column added to articles")
+		}
+	}
+
+	if !columnExists("articles", "summary_generated_at") {
+		log.Println("Adding summary_generated_at column to articles table...")
+		if err := DB.Exec("ALTER TABLE articles ADD COLUMN summary_generated_at DATETIME").Error; err != nil {
+			log.Printf("Warning: Failed to add summary_generated_at column: %v", err)
+		} else {
+			if columnExists("articles", "content_fetched_at") {
+				if err := DB.Exec("UPDATE articles SET summary_generated_at = content_fetched_at WHERE summary_generated_at IS NULL").Error; err != nil {
+					log.Printf("Warning: Failed to backfill summary_generated_at: %v", err)
+				}
+			}
+			log.Println("✓ summary_generated_at column added to articles")
+		}
+	}
+
 	articleMigrations := []struct {
 		colName string
 		colType string
 	}{
 		{"image_url", "VARCHAR(1000)"},
-		{"content_status", "VARCHAR(20) DEFAULT 'complete'"},
-		{"full_content", "TEXT"},
-		{"content_fetched_at", "DATETIME"},
+		{"summary_status", "VARCHAR(20) DEFAULT 'complete'"},
+		{"summary_generated_at", "DATETIME"},
+		{"summary_processing_started_at", "DATETIME"},
 		{"completion_attempts", "INTEGER DEFAULT 0"},
 		{"completion_error", "TEXT"},
 		{"ai_content_summary", "TEXT"},
@@ -331,7 +553,7 @@ func runMigrations() error {
 		colName string
 		colType string
 	}{
-		{"content_completion_enabled", "BOOLEAN DEFAULT 0"},
+		{"article_summary_enabled", "BOOLEAN DEFAULT 0"},
 		{"completion_on_refresh", "BOOLEAN DEFAULT 1"},
 		{"max_completion_retries", "INTEGER DEFAULT 3"},
 		{"firecrawl_enabled", "BOOLEAN DEFAULT 0"},
@@ -345,6 +567,51 @@ func runMigrations() error {
 				log.Printf("Warning: Failed to add %s column: %v", m.colName, err)
 			} else {
 				log.Printf("✓ %s column added to feeds", m.colName)
+			}
+		}
+	}
+
+	// topic_tags migrations for new category system
+	if tableExists("topic_tags") {
+		topicTagMigrations := []struct {
+			colName string
+			colType string
+		}{
+			{"category", "VARCHAR(20) DEFAULT 'keyword'"},
+			{"icon", "VARCHAR(100)"},
+			{"is_canonical", "BOOLEAN DEFAULT 0"},
+		}
+
+		for _, m := range topicTagMigrations {
+			if !columnExists("topic_tags", m.colName) {
+				log.Printf("Adding %s column to topic_tags table...", m.colName)
+				sql := fmt.Sprintf("ALTER TABLE topic_tags ADD COLUMN %s %s", m.colName, m.colType)
+				if err := DB.Exec(sql).Error; err != nil {
+					log.Printf("Warning: Failed to add %s column: %v", m.colName, err)
+				} else {
+					log.Printf("✓ %s column added to topic_tags", m.colName)
+				}
+			}
+		}
+
+		// Migrate existing kind values to category
+		if columnExists("topic_tags", "category") {
+			var needsMigration int64
+			DB.Raw("SELECT COUNT(*) FROM topic_tags WHERE category = 'keyword' AND kind IS NOT NULL AND kind != ''").Scan(&needsMigration)
+			if needsMigration > 0 {
+				log.Printf("Migrating %d existing topic_tags to new category system...", needsMigration)
+				log.Printf("✓ Existing topic_tags migrated to category system")
+			}
+		}
+
+		var indexExists int64
+		DB.Raw("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_topic_tags_category_slug'").Scan(&indexExists)
+		if indexExists == 0 {
+			log.Println("Creating composite index for topic_tags...")
+			if err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_topic_tags_category_slug ON topic_tags(category, slug)").Error; err != nil {
+				log.Printf("Warning: Failed to create composite index: %v", err)
+			} else {
+				log.Println("✓ Composite index created for topic_tags")
 			}
 		}
 	}

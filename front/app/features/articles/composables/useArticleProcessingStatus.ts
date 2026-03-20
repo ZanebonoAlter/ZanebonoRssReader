@@ -48,7 +48,7 @@ export function getFirecrawlStatusMeta(article: Article): ProcessingStatusMeta {
 }
 
 export function getSummaryStatusMeta(article: Article): ProcessingStatusMeta {
-  switch (article.contentStatus) {
+  switch (article.summaryStatus) {
     case 'pending':
       return { label: '总结中', icon: 'mdi:loading', tone: 'info' }
     case 'complete':
@@ -56,7 +56,7 @@ export function getSummaryStatusMeta(article: Article): ProcessingStatusMeta {
         label: '已总结',
         icon: 'mdi:check-circle',
         tone: 'success',
-        hint: article.contentFetchedAt || undefined,
+        hint: article.summaryGeneratedAt || undefined,
       }
     case 'failed':
       return {
@@ -90,14 +90,14 @@ export function shouldShowFirecrawlStatus(article: Article, feed?: RssFeed | nul
 }
 
 export function shouldShowSummaryStatus(article: Article, feed?: RssFeed | null): boolean {
-  if (feed?.contentCompletionEnabled) return true
+  if (feed?.articleSummaryEnabled) return true
 
   return Boolean(
-    article.contentFetchedAt
+    article.summaryGeneratedAt
       || article.completionError
       || article.aiContentSummary?.trim()
-      || article.contentStatus === 'pending'
-      || article.contentStatus === 'failed'
+      || article.summaryStatus === 'pending'
+      || article.summaryStatus === 'failed'
   )
 }
 

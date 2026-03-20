@@ -42,9 +42,10 @@ export function useSummariesApi() {
   }
 
   async function updateAutoSummaryConfig(data: {
-    base_url: string
-    api_key: string
-    model: string
+    base_url?: string
+    api_key?: string
+    model?: string
+    time_range?: number
   }): Promise<ApiResponse<void>> {
     return apiClient.post('/auto-summary/config', data)
   }

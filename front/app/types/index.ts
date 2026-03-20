@@ -20,6 +20,9 @@ export * from './scheduler'
 // 通用类型
 export * from './common'
 
+// 时间线类型
+export * from './timeline'
+
 /**
  * 统一导出分页相关类型
  */

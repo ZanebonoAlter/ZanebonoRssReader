@@ -52,6 +52,8 @@ type JobUpdate struct {
 	ID           string `json:"id"`
 	FeedID       *uint  `json:"feed_id"`
 	FeedName     string `json:"feed_name"`
+	FeedIcon     string `json:"feed_icon"`
+	FeedColor    string `json:"feed_color"`
 	CategoryID   *uint  `json:"category_id"`
 	CategoryName string `json:"category_name"`
 	Status       string `json:"status"`

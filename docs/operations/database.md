@@ -47,7 +47,7 @@
 
 ### `feeds`
 
-- `content_completion_enabled`
+- `article_summary_enabled`
 - `completion_on_refresh`
 - `max_completion_retries`
 - `firecrawl_enabled`
@@ -55,9 +55,8 @@
 ### `articles`
 
 - `image_url`
-- `content_status`
-- `full_content`
-- `content_fetched_at`
+- `summary_status`
+- `summary_generated_at`
 - `completion_attempts`
 - `completion_error`
 - `ai_content_summary`

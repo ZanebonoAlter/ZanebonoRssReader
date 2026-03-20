@@ -66,7 +66,7 @@ func (s *FeedService) RefreshFeed(feedID uint) error {
 		}
 
 		var existingArticle models.Article
-		err := database.DB.Where("feed_id = ? AND link = ?", feed.ID, entry.Link).First(&existingArticle).Error
+		err := database.DB.Where("feed_id = ? AND title = ?", feed.ID, entry.Title).First(&existingArticle).Error
 		if err == nil {
 			continue
 		}
@@ -126,6 +126,10 @@ func (s *FeedService) cleanupOldArticles(feed *models.Feed) {
 			continue
 		}
 
+		if article.FirecrawlStatus == "pending" || article.FirecrawlStatus == "processing" || article.SummaryStatus == "incomplete" || article.SummaryStatus == "pending" {
+			continue
+		}
+
 		database.DB.Delete(&article)
 		articlesToDelete--
 	}
@@ -137,22 +141,21 @@ func (s *FeedService) FetchFeedPreview(feedURL string) (title, description strin
 
 func (s *FeedService) buildArticleFromEntry(feed models.Feed, entry ParsedEntry) models.Article {
 	article := models.Article{
-		FeedID:           feed.ID,
-		Title:            entry.Title,
-		Description:      entry.Description,
-		Content:          entry.Content,
-		Link:             entry.Link,
-		ImageURL:         entry.ImageURL,
-		PubDate:          entry.PubDate,
-		Author:           entry.Author,
-		FirecrawlEnabled: feed.FirecrawlEnabled,
-		ContentStatus:    "complete",
+		FeedID:        feed.ID,
+		Title:         entry.Title,
+		Description:   entry.Description,
+		Content:       entry.Content,
+		Link:          entry.Link,
+		ImageURL:      entry.ImageURL,
+		PubDate:       entry.PubDate,
+		Author:        entry.Author,
+		SummaryStatus: "complete",
 	}
 
 	if feed.FirecrawlEnabled {
 		article.FirecrawlStatus = "pending"
-		if feed.ContentCompletionEnabled {
-			article.ContentStatus = "incomplete"
+		if feed.ArticleSummaryEnabled {
+			article.SummaryStatus = "incomplete"
 		}
 	}
 

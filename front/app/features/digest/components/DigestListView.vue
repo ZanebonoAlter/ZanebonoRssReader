@@ -1,5 +1,6 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { Icon } from '@iconify/vue'
+import { marked } from 'marked'
 import { computed, onMounted, ref, watch } from 'vue'
 import DigestDetail from '~/features/digest/components/DigestDetail.vue'
 import DigestSettings from '~/features/digest/components/DigestSettings.vue'
@@ -10,6 +11,8 @@ import {
   type DigestPreviewSummary,
   type DigestStatus,
   type DigestType,
+  type OpenNotebookConfig,
+  type OpenNotebookRunResult,
 } from '~/api/digest'
 
 const props = withDefaults(defineProps<{
@@ -52,7 +55,10 @@ const previews = ref<Record<DigestType, DigestPreview | null>>({
 })
 const refreshingType = ref<DigestType | null>(null)
 const runningType = ref<DigestType | null>(null)
+const openNotebookSending = ref(false)
 const notice = ref<{ type: 'success' | 'error' | 'info', text: string } | null>(null)
+const openNotebookConfig = ref<OpenNotebookConfig | null>(null)
+const openNotebookResult = ref<OpenNotebookRunResult | null>(null)
 
 const typeMeta: Record<DigestType, { label: string, short: string, kicker: string }> = {
   daily: {
@@ -75,6 +81,18 @@ const activeCategories = computed(() => activePreview.value?.categories || [])
 const activeCategory = computed(() => activeCategories.value.find(category => category.id === selectedCategoryId.value) || null)
 const activeSummaries = computed(() => activeCategory.value?.summaries || [])
 const activeSummary = computed(() => activeSummaries.value.find(summary => summary.id === selectedSummaryId.value) || null)
+const activeOpenNotebookResult = computed(() => {
+  const result = openNotebookResult.value
+  if (!result) return null
+  if (result.digest_type !== selectedType.value) return null
+  if (result.anchor_date !== selectedDates.value[selectedType.value]) return null
+  return result
+})
+const renderedOpenNotebookResult = computed(() => {
+  if (!activeOpenNotebookResult.value?.summary_markdown) return ''
+  return String(marked.parse(activeOpenNotebookResult.value.summary_markdown))
+})
+const openNotebookReady = computed(() => Boolean(openNotebookConfig.value?.enabled && openNotebookConfig.value?.base_url))
 
 const statusChips = computed(() => {
   if (!status.value) return []
@@ -112,6 +130,15 @@ const bottomFacts = computed(() => {
   ]
 })
 
+function getTopicCategoryMeta(category: string) {
+  const meta: Record<string, { label: string, color: string, defaultIcon: string }> = {
+    event: { label: '事件', color: '#f59e0b', defaultIcon: 'mdi:calendar-star' },
+    person: { label: '人物', color: '#10b981', defaultIcon: 'mdi:account' },
+    keyword: { label: '关键词', color: '#6366f1', defaultIcon: 'mdi:tag' },
+  }
+  return (meta[category] || meta.keyword)!
+}
+
 function weekdayLabel(day?: number) {
   const labels: Record<number, string> = {
     0: '周日',
@@ -127,6 +154,10 @@ function weekdayLabel(day?: number) {
 
 function setNotice(type: 'success' | 'error' | 'info', text: string) {
   notice.value = { type, text }
+}
+
+function clearOpenNotebookResult() {
+  openNotebookResult.value = null
 }
 
 function openSettings() {
@@ -209,6 +240,13 @@ async function loadStatus() {
   }
 }
 
+async function loadOpenNotebookConfig() {
+  const response = await digestApi.getOpenNotebookConfig()
+  if (response.success && response.data) {
+    openNotebookConfig.value = response.data
+  }
+}
+
 async function loadPreview(type: DigestType, options?: { silent?: boolean; resetSelection?: boolean }) {
   if (!options?.silent) {
     refreshingType.value = type
@@ -219,6 +257,7 @@ async function loadPreview(type: DigestType, options?: { silent?: boolean; reset
     if (response.success && response.data) {
       previews.value[type] = response.data
       selectedDates.value[type] = response.data.anchor_date || selectedDates.value[type]
+      clearOpenNotebookResult()
       if (type === selectedType.value || options?.resetSelection) {
         applyDefaultSelection(response.data)
       }
@@ -244,13 +283,15 @@ async function runNow(type: DigestType) {
       previews.value[type] = response.data.preview
       selectedDates.value[type] = response.data.preview.anchor_date || selectedDates.value[type]
       selectedType.value = type
+      clearOpenNotebookResult()
       applyDefaultSelection(response.data.preview)
 
-      const hints = []
-      if (response.data.sent_to_feishu) hints.push('飞书已发')
-      if (response.data.exported_to_obsidian) hints.push('Obsidian 已写')
-      setNotice('success', hints.length ? `这版已跑完，${hints.join('，')}` : '这版已跑完')
-      return
+       const hints = []
+       if (response.data.sent_to_feishu) hints.push('飞书已发')
+       if (response.data.exported_to_obsidian) hints.push('Obsidian 已写')
+       if (response.data.sent_to_open_notebook) hints.push('Open Notebook 已收')
+       setNotice('success', hints.length ? `这版已跑完，${hints.join('，')}` : '这版已跑完')
+       return
     }
 
     setNotice('error', response.error || '执行失败')
@@ -259,6 +300,30 @@ async function runNow(type: DigestType) {
     setNotice('error', '执行失败')
   } finally {
     runningType.value = null
+  }
+}
+
+async function sendToOpenNotebook() {
+  if (!openNotebookReady.value) {
+    setNotice('info', '先把 Open Notebook 配好')
+    return
+  }
+
+  openNotebookSending.value = true
+  try {
+    const response = await digestApi.sendToOpenNotebook(selectedType.value, selectedDates.value[selectedType.value])
+    if (response.success && response.data) {
+      openNotebookResult.value = response.data
+      setNotice('success', response.data.remote_url ? '二次总结回来了，外链也带上了' : '二次总结回来了')
+      return
+    }
+
+    setNotice('error', response.error || 'Open Notebook 没接住')
+  } catch (error) {
+    console.error('Failed to send digest to open notebook:', error)
+    setNotice('error', 'Open Notebook 发送失败')
+  } finally {
+    openNotebookSending.value = false
   }
 }
 
@@ -275,6 +340,7 @@ async function loadDashboard() {
     if (props.lockedType) {
       await Promise.all([
         loadStatus(),
+        loadOpenNotebookConfig(),
         loadPreview(props.lockedType, { silent: true, resetSelection: true }),
       ])
       selectedType.value = props.lockedType
@@ -283,6 +349,7 @@ async function loadDashboard() {
 
     await Promise.all([
       loadStatus(),
+      loadOpenNotebookConfig(),
       loadPreview('daily', { silent: true, resetSelection: true }),
       loadPreview('weekly', { silent: true }),
     ])
@@ -302,6 +369,8 @@ watch(selectedType, async (type) => {
     selectedType.value = props.lockedType
     return
   }
+
+  clearOpenNotebookResult()
 
   const preview = previews.value[type]
   if (!preview || preview.anchor_date !== selectedDates.value[type]) {
@@ -376,6 +445,14 @@ onMounted(loadDashboard)
               {{ refreshingType === selectedType ? '刷新中...' : '刷新这版' }}
             </button>
             <button
+              class="btn-secondary min-h-11 px-4"
+              type="button"
+              :disabled="openNotebookSending || !openNotebookReady"
+              @click="sendToOpenNotebook"
+            >
+              {{ openNotebookSending ? '发送中...' : '丢给 Open Notebook' }}
+            </button>
+            <button
               class="btn-primary min-h-11 px-4"
               type="button"
               :disabled="runningType === selectedType"
@@ -404,9 +481,9 @@ onMounted(loadDashboard)
         <Icon icon="mdi:loading" width="44" class="animate-spin text-ink-medium" />
       </div>
 
-      <main v-else class="grid gap-5 xl:grid-cols-[260px_360px_minmax(0,1fr)]">
-        <aside class="digest-panel paper-card rounded-[34px] px-5 py-6 md:px-6">
-          <div class="space-y-5">
+      <main v-else class="digest-main-grid grid min-h-0 gap-5 xl:h-[calc(100vh-18rem)] xl:grid-cols-[260px_360px_minmax(0,1fr)]">
+        <aside class="digest-column digest-column--meta digest-panel paper-card rounded-[34px] px-5 py-6 md:px-6 xl:flex xl:min-h-0 xl:flex-col xl:overflow-hidden">
+          <div class="digest-column__scroll space-y-5 xl:min-h-0 xl:overflow-y-auto xl:pr-1">
             <section class="space-y-3">
               <p class="text-xs uppercase tracking-[0.3em] text-ink-light">{{ activeMeta.short }}</p>
               <div>
@@ -463,8 +540,8 @@ onMounted(loadDashboard)
           </div>
         </aside>
 
-        <section class="digest-panel paper-card rounded-[34px] px-5 py-6 md:px-6">
-          <div class="space-y-4">
+        <section class="digest-column digest-column--list digest-panel paper-card rounded-[34px] px-5 py-6 md:px-6 xl:flex xl:min-h-0 xl:flex-col xl:overflow-hidden">
+          <div class="digest-column__scroll space-y-4 xl:min-h-0 xl:overflow-y-auto xl:pr-1">
             <div>
               <p class="text-xs uppercase tracking-[0.28em] text-ink-light">AI 总结列表</p>
               <h2 class="mt-2 text-2xl font-black text-ink-dark">{{ activeCategory?.name || '还没选分类' }}</h2>
@@ -495,6 +572,23 @@ onMounted(loadDashboard)
                   <span>·</span>
                   <span>{{ summary.created_at }}</span>
                 </div>
+                <div v-if="summary.topics?.length" class="mt-2 flex flex-wrap items-center gap-1.5">
+                  <button
+                    v-for="topic in summary.topics.slice(0, 5)"
+                    :key="topic.slug"
+                    class="digest-topic-tag"
+                    :style="{ borderColor: getTopicCategoryMeta(topic.category).color + '40', backgroundColor: getTopicCategoryMeta(topic.category).color + '12' }"
+                    type="button"
+                  >
+                    <Icon
+                      :icon="topic.icon || getTopicCategoryMeta(topic.category).defaultIcon"
+                      width="12"
+                      :style="{ color: getTopicCategoryMeta(topic.category).color }"
+                    />
+                    <span :style="{ color: getTopicCategoryMeta(topic.category).color }">{{ topic.label }}</span>
+                  </button>
+                  <span v-if="summary.topics.length > 5" class="text-xs text-ink-light">+{{ summary.topics.length - 5 }}</span>
+                </div>
               </button>
             </div>
 
@@ -521,6 +615,41 @@ onMounted(loadDashboard)
           </article>
         </div>
       </footer>
+
+      <section v-if="activeOpenNotebookResult" class="paper-card rounded-[34px] px-5 py-5 md:px-6 md:py-6">
+        <div class="grid gap-5 xl:grid-cols-[280px_minmax(0,1fr)]">
+          <aside class="open-notebook-meta rounded-[28px] px-5 py-5">
+            <p class="text-xs uppercase tracking-[0.3em] text-ink-light">Open Notebook</p>
+            <h3 class="mt-3 text-3xl font-black leading-none text-ink-dark">二次总结</h3>
+            <p class="mt-3 text-sm leading-7 text-ink-medium">这版更短。适合扫一眼。</p>
+
+            <div class="mt-5 space-y-3">
+              <div class="digest-chip-row">
+                <span class="text-xs text-ink-light">类型</span>
+                <span class="text-sm font-semibold text-ink-dark">{{ activeOpenNotebookResult.digest_type }}</span>
+              </div>
+              <div class="digest-chip-row">
+                <span class="text-xs text-ink-light">日期</span>
+                <span class="text-sm font-semibold text-ink-dark">{{ activeOpenNotebookResult.anchor_date }}</span>
+              </div>
+              <a
+                v-if="activeOpenNotebookResult.remote_url"
+                class="open-notebook-link"
+                :href="activeOpenNotebookResult.remote_url"
+                target="_blank"
+                rel="noreferrer"
+              >
+                去外部笔记看
+                <Icon icon="mdi:arrow-top-right" width="16" />
+              </a>
+            </div>
+          </aside>
+
+          <div class="open-notebook-surface rounded-[28px] px-5 py-5 md:px-6">
+            <div class="open-notebook-content max-w-none" v-html="renderedOpenNotebookResult" />
+          </div>
+        </div>
+      </section>
     </div>
 
     <div
@@ -730,6 +859,48 @@ onMounted(loadDashboard)
   transition: border-color 180ms ease, background 180ms ease, transform 180ms ease;
 }
 
+.open-notebook-meta,
+.open-notebook-surface,
+.open-notebook-link {
+  border: 1px solid var(--color-border-subtle);
+  background: rgba(255, 255, 255, 0.74);
+}
+
+.open-notebook-meta {
+  background:
+    radial-gradient(circle at top left, rgba(193, 47, 47, 0.08), transparent 42%),
+    rgba(255, 250, 244, 0.94);
+}
+
+.open-notebook-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  border-radius: 18px;
+  padding: 0.9rem 1rem;
+  color: var(--color-ink-dark);
+  font-size: 0.92rem;
+  font-weight: 700;
+}
+
+.open-notebook-content :deep(h1),
+.open-notebook-content :deep(h2),
+.open-notebook-content :deep(h3) {
+  color: var(--color-ink-dark);
+  font-weight: 900;
+}
+
+.open-notebook-content :deep(p),
+.open-notebook-content :deep(li) {
+  color: var(--color-ink-medium);
+  line-height: 1.9;
+}
+
+.open-notebook-content :deep(ul),
+.open-notebook-content :deep(ol) {
+  padding-left: 1.25rem;
+}
+
 .digest-footer__item {
   border-radius: 24px;
   padding: 1rem 1.1rem;
@@ -767,5 +938,21 @@ onMounted(loadDashboard)
   .digest-stage {
     padding-bottom: 2rem;
   }
+}
+
+.digest-topic-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  border-radius: 999px;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+
+.digest-topic-tag:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
 }
 </style>

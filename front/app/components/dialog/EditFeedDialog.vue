@@ -23,7 +23,7 @@ const deleting = ref(false)
 const error = ref<string | null>(null)
 const showDeleteConfirm = ref(false)
 
-const contentCompletionEnabled = ref(props.feed.contentCompletionEnabled ?? false)
+const articleSummaryEnabled = ref(props.feed.articleSummaryEnabled ?? false)
 const completionOnRefresh = ref(props.feed.completionOnRefresh ?? true)
 const maxCompletionRetries = ref(props.feed.maxCompletionRetries ?? 3)
 const firecrawlEnabled = ref(props.feed.firecrawlEnabled ?? false)
@@ -35,7 +35,7 @@ watch(() => props.feed, (newFeed) => {
   categoryId.value = newFeed.category ? Number(newFeed.category) : undefined
   title.value = newFeed.title
   description.value = newFeed.description
-  contentCompletionEnabled.value = newFeed.contentCompletionEnabled ?? false
+  articleSummaryEnabled.value = newFeed.articleSummaryEnabled ?? false
   completionOnRefresh.value = newFeed.completionOnRefresh ?? true
   maxCompletionRetries.value = newFeed.maxCompletionRetries ?? 3
   firecrawlEnabled.value = newFeed.firecrawlEnabled ?? false
@@ -44,7 +44,7 @@ watch(() => props.feed, (newFeed) => {
 const capabilityItems = computed(() => [
   {
     label: '自动总结',
-    enabled: contentCompletionEnabled.value,
+    enabled: articleSummaryEnabled.value,
     icon: 'mdi:brain',
   },
   {
@@ -68,7 +68,7 @@ async function handleSubmit() {
   const response = await apiStore.updateFeed(props.feed.id, {
     url: url.value,
     category_id: categoryId.value,
-    content_completion_enabled: contentCompletionEnabled.value,
+    article_summary_enabled: articleSummaryEnabled.value,
     completion_on_refresh: completionOnRefresh.value,
     max_completion_retries: maxCompletionRetries.value,
     firecrawl_enabled: firecrawlEnabled.value,
@@ -209,7 +209,7 @@ async function handleDelete() {
                       <div class="text-sm font-medium text-gray-800">启用自动总结</div>
                       <div class="text-xs text-gray-500">Firecrawl 完成后进入总结队列</div>
                     </div>
-                    <input v-model="contentCompletionEnabled" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500">
+                    <input v-model="articleSummaryEnabled" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500">
                   </label>
 
                   <label class="flex cursor-pointer items-center justify-between gap-4">

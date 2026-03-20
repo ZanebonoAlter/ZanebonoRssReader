@@ -3,12 +3,14 @@ package summaries
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 	"my-robot-backend/internal/app/runtimeinfo"
 	"my-robot-backend/internal/domain/models"
+	"my-robot-backend/internal/platform/airouter"
 	"my-robot-backend/internal/platform/aisettings"
 	"my-robot-backend/internal/platform/database"
 )
@@ -154,25 +156,40 @@ type AutoSummaryConfig struct {
 }
 
 func GetAutoSummaryStatus(c *gin.Context) {
-	var settings models.AISettings
-	err := database.DB.Where("key = ?", "summary_config").First(&settings).Error
+	config := AutoSummaryConfig{TimeRange: 180}
+	if autoSummaryConfig, _, err := aisettings.LoadAutoSummaryConfig(); err == nil {
+		if timeRange, ok := autoSummaryConfig["time_range"].(float64); ok && int(timeRange) > 0 {
+			config.TimeRange = int(timeRange)
+		}
+	}
 
-	if err != nil {
+	provider, route, err := airouter.NewRouter().ResolvePrimaryProvider(airouter.CapabilitySummary)
+	if err != nil || provider == nil || route == nil {
+		var settings models.AISettings
+		legacyErr := database.DB.Where("key = ?", "summary_config").First(&settings).Error
+		if legacyErr != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": true,
+				"data": gin.H{
+					"enabled": false,
+					"status":  "not_configured",
+				},
+			})
+			return
+		}
+		if parseErr := settings.ParseValue(&config); parseErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "Failed to parse configuration"})
+			return
+		}
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
 			"data": gin.H{
-				"enabled": false,
-				"status":  "not_configured",
+				"enabled":    true,
+				"status":     "configured",
+				"base_url":   config.BaseURL,
+				"model":      config.Model,
+				"time_range": config.TimeRange,
 			},
-		})
-		return
-	}
-
-	var config AutoSummaryConfig
-	if err := settings.ParseValue(&config); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"error":   "Failed to parse configuration",
 		})
 		return
 	}
@@ -180,11 +197,13 @@ func GetAutoSummaryStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
-			"enabled":    true,
-			"status":     "configured",
-			"base_url":   config.BaseURL,
-			"model":      config.Model,
-			"time_range": config.TimeRange,
+			"enabled":     true,
+			"status":      "configured",
+			"base_url":    provider.BaseURL,
+			"model":       provider.Model,
+			"route_name":  route.Name,
+			"provider_id": provider.ID,
+			"time_range":  config.TimeRange,
 		},
 	})
 }
@@ -199,8 +218,16 @@ func UpdateAutoSummaryConfig(c *gin.Context) {
 		return
 	}
 
-	configJSON, _, err := aisettings.LoadSummaryConfig()
-	if err != nil {
+	if req.TimeRange <= 0 {
+		req.TimeRange = 180
+		if existingConfig, _, err := aisettings.LoadAutoSummaryConfig(); err == nil {
+			if currentRange, ok := existingConfig["time_range"].(float64); ok && int(currentRange) > 0 {
+				req.TimeRange = int(currentRange)
+			}
+		}
+	}
+
+	if err := aisettings.SaveAutoSummaryConfig(map[string]interface{}{"time_range": req.TimeRange}, "Auto summary configuration"); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
 			"error":   err.Error(),
@@ -208,24 +235,37 @@ func UpdateAutoSummaryConfig(c *gin.Context) {
 		return
 	}
 
-	configJSON["base_url"] = req.BaseURL
-	configJSON["api_key"] = req.APIKey
-	configJSON["model"] = req.Model
-	configJSON["time_range"] = req.TimeRange
+	if strings.TrimSpace(req.BaseURL) != "" && strings.TrimSpace(req.APIKey) != "" && strings.TrimSpace(req.Model) != "" {
+		store := airouter.NewStore(database.DB)
+		if _, err := store.EnsureLegacyProviderAndRoutes(req.BaseURL, req.APIKey, req.Model); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"error":   err.Error(),
+			})
+			return
+		}
 
-	if err := aisettings.SaveSummaryConfig(configJSON, "AI summary generation configuration (including auto-summary)"); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"error":   err.Error(),
-		})
-		return
+		configJSON, _, err := aisettings.LoadSummaryConfig()
+		if err == nil {
+			configJSON["base_url"] = req.BaseURL
+			configJSON["api_key"] = req.APIKey
+			configJSON["model"] = req.Model
+			configJSON["time_range"] = req.TimeRange
+			_ = aisettings.SaveSummaryConfig(configJSON, "AI summary generation configuration (legacy compatibility)")
+		}
 	}
 
 	if runtimeinfo.AutoSummarySchedulerInterface != nil {
 		if scheduler, ok := runtimeinfo.AutoSummarySchedulerInterface.(interface {
 			SetAIConfig(baseURL, apiKey, model string, timeRange int) error
 		}); ok {
-			scheduler.SetAIConfig(req.BaseURL, req.APIKey, req.Model, req.TimeRange)
+			if err := scheduler.SetAIConfig(req.BaseURL, req.APIKey, req.Model, req.TimeRange); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"success": false,
+					"error":   err.Error(),
+				})
+				return
+			}
 		}
 	}
 
@@ -240,7 +280,7 @@ type QueueSummaryRequest struct {
 	FeedIDs     []uint `json:"feed_ids"`
 	TimeRange   int    `json:"time_range"`
 	BaseURL     string `json:"base_url"`
-	APIKey      string `json:"api_key" binding:"required"`
+	APIKey      string `json:"api_key"`
 	Model       string `json:"model"`
 }
 
@@ -270,7 +310,7 @@ func SubmitQueueSummary(c *gin.Context) {
 		TimeRange: req.TimeRange,
 	}
 
-	batch := queue.SubmitBatch(req.CategoryIDs, config)
+	batch := queue.SubmitBatch(req.CategoryIDs, req.FeedIDs, config)
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"success": true,

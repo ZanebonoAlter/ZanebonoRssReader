@@ -52,6 +52,21 @@ const expandedErrors = ref<Set<string>>(new Set())
 
 // WebSocket
 const ws = useSummaryWebSocket()
+const currentProcessingJob = computed(() => ws.lastMessage.value?.current_job || null)
+const failedJobs = computed(() => currentBatch.value?.jobs.filter(job => job.status === 'failed') || [])
+const queueProgressPercent = computed(() => {
+  const batch = currentBatch.value
+  if (!batch || batch.total_jobs === 0) return 0
+  return Math.round(((batch.completed_jobs + batch.failed_jobs) / batch.total_jobs) * 100)
+})
+const queueConnectionText = computed(() => {
+  switch (ws.status.value) {
+    case 'connected': return '已连上实时进度'
+    case 'connecting': return '正在连进度通道'
+    case 'error': return '进度通道出错了'
+    default: return '进度通道已断开'
+  }
+})
 
 // Pagination
 const currentPage = ref(1)
@@ -185,12 +200,7 @@ const errorCodeMap: Record<string, string> = {
   'UNKNOWN': '未知错误'
 }
 
-// Load settings from localStorage
-const aiSettings = ref({
-  baseURL: '',
-  apiKey: '',
-  model: ''
-})
+const { aiSettings, loadSettings: loadAISettings } = useAI()
 
 // Time range options
 const timeRangeOptions = [
@@ -206,6 +216,7 @@ const selectedTimeRange = ref(180)
 onMounted(() => {
   loadAISettings()
   fetchSummaries()
+  restoreQueueBatch()
 })
 
 onUnmounted(() => {
@@ -215,9 +226,10 @@ onUnmounted(() => {
 
 // 监听WebSocket消息
 watch(() => ws.lastMessage.value, (message) => {
-  if (message && generating.value) {
+  if (message && currentBatch.value && message.batch_id === currentBatch.value.id) {
     const batch = ws.toBatchData(message)
     currentBatch.value = batch
+    generating.value = batch.status !== 'completed'
 
     // 如果已完成，更新状态
     if (batch.status === 'completed') {
@@ -250,18 +262,6 @@ watch(() => props.categoryId, () => {
 watch([startDate, endDate], () => {
   currentPage.value = 1
 })
-
-function loadAISettings() {
-  const settings = localStorage.getItem('aiSettings')
-  if (settings) {
-    const parsed = JSON.parse(settings)
-    aiSettings.value = {
-      baseURL: parsed.baseURL || 'https://api.openai.com/v1',
-      apiKey: parsed.apiKey || '',
-      model: parsed.model || 'gpt-4o-mini'
-    }
-  }
-}
 
 async function fetchSummaries(resetPage = false) {
   if (resetPage) {
@@ -361,9 +361,6 @@ async function generateSummaryWithTimeout(
     apiStore.generateSummary({
       category_id: categoryId,
       time_range: selectedTimeRange.value,
-      base_url: aiSettings.value.baseURL,
-      api_key: aiSettings.value.apiKey,
-      model: aiSettings.value.model
     }).then(response => ({
       success: response.success,
       error: response.error,
@@ -381,7 +378,7 @@ async function generateSummaryWithTimeout(
 
 // 打开分类选择对话框
 function openCategorySelect() {
-  if (!aiSettings.value.apiKey) {
+  if (!aiSettings.value.apiKeyConfigured) {
     error.value = '请先在设置中配置 AI'
     setTimeout(() => error.value = null, 3000)
     return
@@ -390,6 +387,21 @@ function openCategorySelect() {
 }
 
 // 提交队列任务（多分类）
+async function restoreQueueBatch() {
+  const response = await apiStore.getQueueStatus()
+  if (!response.success || !response.data) return
+
+  currentBatch.value = response.data
+  generating.value = response.data.status !== 'completed'
+  if (generating.value) {
+    try {
+      await ws.connect()
+    } catch (err) {
+      console.error('Failed to reconnect summary websocket:', err)
+    }
+  }
+}
+
 async function submitQueueSummary(selectedCategoryIds: string[]) {
   if (selectedCategoryIds.length === 0) return
 
@@ -401,19 +413,17 @@ async function submitQueueSummary(selectedCategoryIds: string[]) {
     const categoryIds = selectedCategoryIds.map(id => parseInt(id))
 
     // 先连接WebSocket
-    ws.connect()
+    ws.clearLastMessage()
+    await ws.connect()
 
     const response = await apiStore.submitQueueSummary({
       category_ids: categoryIds,
       time_range: selectedTimeRange.value,
-      base_url: aiSettings.value.baseURL,
-      api_key: aiSettings.value.apiKey,
-      model: aiSettings.value.model
     })
 
     if (response.success && response.data) {
       currentBatch.value = response.data
-      // WebSocket会自动接收进度更新
+      generating.value = response.data.status !== 'completed'
     } else {
       error.value = response.error || '提交任务失败'
       generating.value = false
@@ -422,6 +432,42 @@ async function submitQueueSummary(selectedCategoryIds: string[]) {
     }
   } catch (err) {
     error.value = '提交失败：' + (err as Error).message
+    generating.value = false
+    ws.disconnect()
+    setTimeout(() => error.value = null, 3000)
+  }
+}
+
+async function retryFailedJobs() {
+  if (!failedJobs.value.length) return
+
+  generating.value = true
+  error.value = null
+
+  try {
+    ws.clearLastMessage()
+    await ws.connect()
+
+    const response = await apiStore.submitQueueSummary({
+      feed_ids: failedJobs.value
+        .map(job => job.feed_id)
+        .filter((feedId): feedId is number => typeof feedId === 'number'),
+      time_range: selectedTimeRange.value,
+    })
+
+    if (response.success && response.data) {
+      currentBatch.value = response.data
+      generating.value = response.data.status !== 'completed'
+      expandedErrors.value.clear()
+      return
+    }
+
+    error.value = response.error || '重试失败'
+    generating.value = false
+    ws.disconnect()
+    setTimeout(() => error.value = null, 3000)
+  } catch (err) {
+    error.value = '重试失败：' + (err as Error).message
     generating.value = false
     ws.disconnect()
     setTimeout(() => error.value = null, 3000)
@@ -468,7 +514,7 @@ function getErrorMessage(job: SummaryJob): string {
 
 // 旧版生成函数（保留兼容）
 async function generateSummary() {
-  if (!aiSettings.value.apiKey) {
+  if (!aiSettings.value.apiKeyConfigured) {
     error.value = '请先在设置中配置 AI'
     setTimeout(() => error.value = null, 3000)
     return
@@ -586,7 +632,7 @@ defineExpose({
           </select>
           <button
             class="px-3 py-1.5 text-xs font-medium bg-ink-600 text-white rounded-lg hover:bg-ink-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
-            :disabled="generating || !aiSettings.apiKey"
+            :disabled="generating || !aiSettings.apiKeyConfigured"
             @click="generateSummary"
           >
             <Icon
@@ -821,6 +867,14 @@ defineExpose({
           ({{ currentBatch.completed_jobs }}/{{ currentBatch.total_jobs }})
         </span>
         <div class="flex items-center gap-2">
+          <button
+            v-if="currentBatch.status === 'completed' && failedJobs.length"
+            class="rounded-md bg-white px-2 py-1 text-[11px] font-medium text-blue-700 transition hover:bg-blue-100 disabled:opacity-50"
+            :disabled="generating"
+            @click="retryFailedJobs"
+          >
+            重试失败项
+          </button>
           <Icon 
             :icon="currentBatch.status === 'completed' ? 'mdi:check-circle' : 'mdi:loading'" 
             width="14" 
@@ -835,6 +889,21 @@ defineExpose({
           >
             <Icon icon="mdi:close" width="14" height="14" class="text-blue-600" />
           </button>
+        </div>
+      </div>
+      <div class="mb-2 space-y-2">
+        <div class="h-2 overflow-hidden rounded-full bg-blue-100">
+          <div class="h-full rounded-full bg-blue-500 transition-all duration-300" :style="{ width: `${queueProgressPercent}%` }" />
+        </div>
+        <div class="flex items-center justify-between text-[11px] text-blue-700">
+          <span>{{ queueConnectionText }}</span>
+          <span>{{ queueProgressPercent }}%</span>
+        </div>
+        <div v-if="currentProcessingJob" class="rounded-md bg-white/70 px-2 py-1 text-xs text-ink-dark">
+          正在跑：{{ currentProcessingJob.feed_name || currentProcessingJob.category_name || '当前任务' }}
+        </div>
+        <div v-if="failedJobs.length" class="rounded-md bg-red-50 px-2 py-1 text-xs text-red-600">
+          失败 {{ failedJobs.length }} 个。展开下面可看原因。
         </div>
       </div>
       <div class="space-y-1 max-h-40 overflow-y-auto">
@@ -885,7 +954,7 @@ defineExpose({
 
     <!-- AI Key warning -->
     <div
-      v-if="!aiSettings.apiKey"
+      v-if="!aiSettings.apiKeyConfigured"
       class="mx-4 mt-3 p-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-600 flex-shrink-0"
     >
       请先在设置中配置 AI API 密钥

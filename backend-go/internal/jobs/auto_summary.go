@@ -2,19 +2,25 @@ package jobs
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/robfig/cron/v3"
+	"gorm.io/gorm"
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/domain/preferences"
 	"my-robot-backend/internal/domain/summaries"
+	"my-robot-backend/internal/domain/topicextraction"
+	"my-robot-backend/internal/platform/airouter"
 	"my-robot-backend/internal/platform/aisettings"
 	"my-robot-backend/internal/platform/database"
 )
@@ -33,6 +39,25 @@ type AIConfig struct {
 	APIKey    string `json:"api_key"`
 	Model     string `json:"model"`
 	TimeRange int    `json:"time_range"`
+}
+
+var requestAutoSummaryChat = func(prompt string, metadata map[string]any) (string, error) {
+	maxTokens := 16000
+	temperature := 0.7
+	result, err := airouter.NewRouter().Chat(context.Background(), airouter.ChatRequest{
+		Capability: airouter.CapabilitySummary,
+		Messages: []airouter.Message{
+			{Role: "system", Content: "你是一名专业的新闻分析助手，擅长总结和对比多篇文章。"},
+			{Role: "user", Content: prompt},
+		},
+		Temperature: &temperature,
+		MaxTokens:   &maxTokens,
+		Metadata:    metadata,
+	})
+	if err != nil {
+		return "", err
+	}
+	return result.Content, nil
 }
 
 type AutoSummaryRunSummary struct {
@@ -87,6 +112,59 @@ func (s *AutoSummaryScheduler) Stop() {
 	log.Println("Auto-summary scheduler stopped")
 }
 
+func (s *AutoSummaryScheduler) UpdateInterval(interval int) error {
+	if interval <= 0 {
+		return fmt.Errorf("interval must be positive")
+	}
+
+	wasRunning := s.isRunning
+	if wasRunning {
+		s.Stop()
+	}
+
+	s.cron = cron.New()
+	s.checkInterval = time.Duration(interval) * time.Second
+
+	if wasRunning {
+		return s.Start()
+	}
+
+	var task models.SchedulerTask
+	if err := database.DB.Where("name = ?", "auto_summary").First(&task).Error; err == nil {
+		nextRun := time.Now().Add(s.checkInterval)
+		database.DB.Model(&task).Updates(map[string]interface{}{
+			"check_interval":      interval,
+			"next_execution_time": &nextRun,
+		})
+	}
+
+	return nil
+}
+
+func (s *AutoSummaryScheduler) ResetStats() error {
+	var task models.SchedulerTask
+	if err := database.DB.Where("name = ?", "auto_summary").First(&task).Error; err != nil {
+		return err
+	}
+
+	nextRun := time.Now().Add(s.checkInterval)
+	updates := map[string]interface{}{
+		"status":                  "idle",
+		"last_error":              "",
+		"last_error_time":         nil,
+		"total_executions":        0,
+		"successful_executions":   0,
+		"failed_executions":       0,
+		"consecutive_failures":    0,
+		"last_execution_time":     nil,
+		"last_execution_duration": nil,
+		"last_execution_result":   "",
+		"next_execution_time":     &nextRun,
+	}
+
+	return database.DB.Model(&task).Updates(updates).Error
+}
+
 func (s *AutoSummaryScheduler) SetAIConfig(baseURL, apiKey, model string, timeRange int) error {
 	if timeRange <= 0 {
 		timeRange = 180
@@ -100,6 +178,11 @@ func (s *AutoSummaryScheduler) SetAIConfig(baseURL, apiKey, model string, timeRa
 	}
 
 	s.aiConfig = config
+
+	store := airouter.NewStore(database.DB)
+	if _, err := store.EnsureLegacyProviderAndRoutes(baseURL, apiKey, model); err != nil {
+		return fmt.Errorf("failed to save AI route config: %w", err)
+	}
 
 	settingsJSON, _, err := aisettings.LoadSummaryConfig()
 	if err != nil {
@@ -115,11 +198,37 @@ func (s *AutoSummaryScheduler) SetAIConfig(baseURL, apiKey, model string, timeRa
 		return fmt.Errorf("failed to save AI config: %w", err)
 	}
 
+	if err := aisettings.SaveAutoSummaryConfig(map[string]interface{}{"time_range": config.TimeRange}, "Auto summary configuration"); err != nil {
+		return fmt.Errorf("failed to save auto summary config: %w", err)
+	}
+
 	log.Println("AI configuration updated and saved to database")
 	return nil
 }
 
 func (s *AutoSummaryScheduler) loadAIConfig() error {
+	store := airouter.NewStore(database.DB)
+	provider, _, routeErr := store.ResolvePrimaryProvider(airouter.CapabilitySummary)
+	autoSummaryConfig, _, autoErr := aisettings.LoadAutoSummaryConfig()
+	if autoErr == nil {
+		if timeRange, ok := autoSummaryConfig["time_range"].(float64); ok {
+			s.aiConfig = &AIConfig{TimeRange: int(timeRange)}
+		}
+	}
+	if routeErr == nil && provider != nil {
+		if s.aiConfig == nil {
+			s.aiConfig = &AIConfig{}
+		}
+		s.aiConfig.BaseURL = provider.BaseURL
+		s.aiConfig.APIKey = provider.APIKey
+		s.aiConfig.Model = provider.Model
+		if s.aiConfig.TimeRange <= 0 {
+			s.aiConfig.TimeRange = 180
+		}
+		log.Println("AI route configuration loaded from database")
+		return nil
+	}
+
 	var settings models.AISettings
 	err := database.DB.Where("key = ?", "summary_config").First(&settings).Error
 	if err != nil {
@@ -243,6 +352,8 @@ func (s *AutoSummaryScheduler) runSummaryCycle(triggerSource string) {
 	s.updateSchedulerStatus("idle", "", &startTime, summary)
 }
 
+const maxArticlesPerSummary = 20
+
 func (s *AutoSummaryScheduler) generateSummaryForFeed(feed *models.Feed) (bool, error) {
 	if s.aiConfig == nil {
 		return false, fmt.Errorf("AI config not set")
@@ -269,31 +380,6 @@ func (s *AutoSummaryScheduler) generateSummaryForFeed(feed *models.Feed) (bool, 
 
 	log.Printf("Found %d articles for feed %d", len(articles), feed.ID)
 
-	articleTexts := make([]string, 0, len(articles))
-	for i, article := range articles {
-		if i >= 80 {
-			break
-		}
-
-		text := "Title: " + article.Title + "\n"
-		if article.Description != "" {
-			maxDesc := 1200
-			if len(article.Description) < maxDesc {
-				maxDesc = len(article.Description)
-			}
-			text += "Description: " + article.Description[:maxDesc] + "\n"
-		}
-		if article.Content != "" {
-			maxContent := 2400
-			if len(article.Content) < maxContent {
-				maxContent = len(article.Content)
-			}
-			text += "Content: " + article.Content[:maxContent] + "\n"
-		}
-		text += "Link: " + article.Link + "\n"
-		articleTexts = append(articleTexts, text)
-	}
-
 	feedName := feed.Title
 	if feedName == "" {
 		feedName = "Unknown feed"
@@ -304,57 +390,177 @@ func (s *AutoSummaryScheduler) generateSummaryForFeed(feed *models.Feed) (bool, 
 		categoryName = feed.Category.Name
 	}
 
-	title := feedName + " - " + time.Now().Format("2006-01-02 15:04") + " News Summary"
-	articlesText := joinStrings(articleTexts, "\n---\n")
+	batches := chunkArticles(articles, maxArticlesPerSummary)
+	totalBatches := len(batches)
+	allArticleIDs := make([]uint, 0, len(articles))
 
-	preferenceService := preferences.NewPreferenceService(database.DB)
-	promptBuilder := summaries.NewAISummaryPromptBuilder(preferenceService, database.DB)
-	summaryPrompt, promptContext, err := promptBuilder.BuildPersonalizedPrompt(feedName, categoryName, articlesText, len(articles), "en")
-	if err != nil {
-		return false, fmt.Errorf("failed to build prompt: %w", err)
+	for batchIndex, batch := range batches {
+		batchNum := batchIndex + 1
+		log.Printf("Processing batch %d/%d with %d articles for feed %d", batchNum, totalBatches, len(batch), feed.ID)
+
+		articleTexts := make([]string, 0, len(batch))
+		batchArticleIDs := make([]uint, len(batch))
+		for _, article := range batch {
+			articleTexts = append(articleTexts, buildAutoSummaryArticleText(article))
+		}
+		for i, article := range batch {
+			batchArticleIDs[i] = article.ID
+		}
+		articleIDsJSON, _ := json.Marshal(batchArticleIDs)
+
+		existingSummary, err := findExistingSummaryBatch(&feed.ID, string(articleIDsJSON))
+		if err != nil {
+			return false, fmt.Errorf("failed to check existing summary batch: %w", err)
+		}
+		if existingSummary != nil {
+			allArticleIDs = append(allArticleIDs, batchArticleIDs...)
+			log.Printf("Skipping existing summary for feed %d batch %d/%d (ID: %d)", feed.ID, batchNum, totalBatches, existingSummary.ID)
+			if err := topicextraction.TagSummary(existingSummary); err != nil {
+				log.Printf("[WARN] Failed to backfill tags for existing auto summary %d: %v", existingSummary.ID, err)
+			}
+			if err := topicextraction.TagArticles(batch, feedName, categoryName); err != nil {
+				log.Printf("[WARN] Failed to tag articles for existing summary feed %d batch %d: %v", feed.ID, batchNum, err)
+			}
+			continue
+		}
+
+		title := feedName + " - " + time.Now().Format("2006-01-02 15:04")
+		if totalBatches > 1 {
+			title = fmt.Sprintf("%s (Part %d/%d)", title, batchNum, totalBatches)
+		}
+		title = title + " News Summary"
+
+		articlesText := joinStrings(articleTexts, "\n---\n")
+
+		preferenceService := preferences.NewPreferenceService(database.DB)
+		promptBuilder := summaries.NewAISummaryPromptBuilder(preferenceService, database.DB)
+		summaryPrompt, promptContext, err := promptBuilder.BuildPersonalizedPrompt(feedName, categoryName, articlesText, len(batch), "en")
+		if err != nil {
+			return false, fmt.Errorf("failed to build prompt: %w", err)
+		}
+
+		log.Printf(
+			"Auto summary prompt built for feed=%s batch=%d/%d personalized=%t preferred_feeds=%d preferred_categories=%d",
+			feedName, batchNum, totalBatches,
+			promptContext.Personalized,
+			promptContext.FeedCount,
+			promptContext.CategoryCount,
+		)
+
+		summaryText, err := s.callAI(summaryPrompt, buildSummaryRequestMeta("auto_summary", &feed.ID, feedName, categoryName, timeRange, batchNum, totalBatches, batchArticleIDs))
+		if err != nil {
+			return false, fmt.Errorf("AI API call failed: %w", err)
+		}
+		allArticleIDs = append(allArticleIDs, batchArticleIDs...)
+
+		var categoryID *uint
+		if feed.CategoryID != nil {
+			catIDVal := *feed.CategoryID
+			categoryID = &catIDVal
+		}
+
+		aiSummary := models.AISummary{
+			FeedID:       &feed.ID,
+			CategoryID:   categoryID,
+			Title:        title,
+			Summary:      summaryText,
+			Articles:     string(articleIDsJSON),
+			ArticleCount: len(batch),
+			TimeRange:    timeRange,
+		}
+
+		if err := database.DB.Create(&aiSummary).Error; err != nil {
+			return false, fmt.Errorf("failed to save summary: %w", err)
+		}
+
+		if err := topicextraction.TagSummary(&aiSummary); err != nil {
+			log.Printf("[WARN] Failed to tag auto summary %d: %v", aiSummary.ID, err)
+		}
+
+		if err := topicextraction.TagArticles(batch, feedName, categoryName); err != nil {
+			log.Printf("[WARN] Failed to tag articles for feed %d batch %d: %v", feed.ID, batchNum, err)
+		}
+
+		log.Printf("Successfully generated summary for feed %d batch %d/%d (ID: %d)", feed.ID, batchNum, totalBatches, aiSummary.ID)
 	}
 
-	log.Printf(
-		"Auto summary prompt built for feed=%s personalized=%t preferred_feeds=%d preferred_categories=%d",
-		feedName,
-		promptContext.Personalized,
-		promptContext.FeedCount,
-		promptContext.CategoryCount,
-	)
-
-	summaryText, err := s.callAI(summaryPrompt)
-	if err != nil {
-		return false, fmt.Errorf("AI API call failed: %w", err)
-	}
-
-	articleIDs := make([]uint, len(articles))
-	for i, article := range articles {
-		articleIDs[i] = article.ID
-	}
-	articleIDsJSON, _ := json.Marshal(articleIDs)
-
-	var categoryID *uint
-	if feed.CategoryID != nil {
-		catIDVal := *feed.CategoryID
-		categoryID = &catIDVal
-	}
-
-	aiSummary := models.AISummary{
-		FeedID:       &feed.ID,
-		CategoryID:   categoryID,
-		Title:        title,
-		Summary:      summaryText,
-		Articles:     string(articleIDsJSON),
-		ArticleCount: len(articles),
-		TimeRange:    timeRange,
-	}
-
-	if err := database.DB.Create(&aiSummary).Error; err != nil {
-		return false, fmt.Errorf("failed to save summary: %w", err)
-	}
-
-	log.Printf("Successfully generated and saved summary for feed %d (ID: %d)", feed.ID, aiSummary.ID)
+	log.Printf("Completed %d summary batches for feed %d, total %d articles", totalBatches, feed.ID, len(allArticleIDs))
 	return true, nil
+}
+
+func chunkArticles(articles []models.Article, chunkSize int) [][]models.Article {
+	if len(articles) <= chunkSize {
+		return [][]models.Article{articles}
+	}
+
+	chunks := make([][]models.Article, 0, (len(articles)+chunkSize-1)/chunkSize)
+	for i := 0; i < len(articles); i += chunkSize {
+		end := i + chunkSize
+		if end > len(articles) {
+			end = len(articles)
+		}
+		chunks = append(chunks, articles[i:end])
+	}
+	return chunks
+}
+
+func buildAutoSummaryArticleText(article models.Article) string {
+	text := "Title: " + article.Title + "\n"
+
+	if article.Description != "" {
+		text += "Description: " + truncateAutoSummaryText(article.Description, 1200) + "\n"
+	}
+
+	content := strings.TrimSpace(article.FirecrawlContent)
+	if content == "" {
+		content = strings.TrimSpace(article.Content)
+	}
+	if content != "" {
+		text += "Content: " + truncateAutoSummaryText(content, 2400) + "\n"
+	}
+
+	text += "Link: " + article.Link + "\n"
+	return text
+}
+
+func truncateAutoSummaryText(text string, limit int) string {
+	if len(text) <= limit {
+		return text
+	}
+	return text[:limit]
+}
+
+func buildSummaryRequestMeta(source string, feedID *uint, feedName string, categoryName string, timeRange int, batchNum int, totalBatches int, articleIDs []uint) map[string]any {
+	meta := map[string]any{
+		"article_ids":   articleIDs,
+		"batch_num":     batchNum,
+		"category_name": categoryName,
+		"feed_name":     feedName,
+		"source":        source,
+		"time_range":    timeRange,
+		"total_batches": totalBatches,
+	}
+	if feedID != nil {
+		meta["feed_id"] = *feedID
+	}
+	return meta
+}
+
+func findExistingSummaryBatch(feedID *uint, articleIDsJSON string) (*models.AISummary, error) {
+	if feedID == nil || articleIDsJSON == "" {
+		return nil, nil
+	}
+
+	var summary models.AISummary
+	err := database.DB.Where("feed_id = ? AND articles = ?", *feedID, articleIDsJSON).Order("id DESC").First(&summary).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	return &summary, nil
 }
 
 func buildFeedSummaryPrompt(feedName string, categoryName string, articleCount int, articlesText string) string {
@@ -363,45 +569,53 @@ func buildFeedSummaryPrompt(feedName string, categoryName string, articleCount i
 		catInfo = " (Category: " + categoryName + ")"
 	}
 
-	return `Please summarize the following ` + strconv.Itoa(articleCount) + ` articles from "` + feedName + `"` + catInfo + `.
+	return `请总结来自 "` + feedName + `"` + catInfo + ` 的 ` + strconv.Itoa(articleCount) + ` 篇文章。
 
-Articles (newest first):
+文章列表（按时间倒序）：
 ` + articlesText + `
 
-Use this format:
+请按以下格式输出：
 
-## Core Theme
-Summarize the main theme in one sentence.
+## 核心主题
+用一句话概括这批文章的核心主题。
 
-## Important News
+## 重要新闻
 
-### Top Stories
-List 2-3 key stories. For each story include:
-- A bold title
-- A short explanation in 2-3 sentences
-- A source citation in the form > [Article Title](Link)
+### 热点事件
+列出 2-3 个最重要的事件。每个事件包含：
+- 加粗标题
+- 2-3 句简述
+- 引用来源，格式为 > [文章标题](链接)
 
-### Other News
-List the other important stories. For each story include:
-- A bold title
-- A short explanation in 1-2 sentences
-- A source citation in the form > [Article Title](Link)
+### 其他重要新闻
+列出其余值得关注的新闻。每条包含：
+- 加粗标题
+- 1-2 句简述
+- 引用来源
 
-## Key Takeaways
-Summarize 3-5 important takeaways or trends.
+## 核心观点
+总结 3-5 个关键信号或趋势。
 
-## Tags
-#` + feedName + ` #tag1 #tag2 #tag3
+## 相关标签
+#` + feedName + ` #标签1 #标签2 #标签3
 
-Important:
-1. Every news item must include a source citation.
-2. Use the format > [Article Title](Article Link).
-3. Keep the summary concise and focused.
-4. Stay objective and neutral.
-5. Include the feed name as one of the tags: #` + feedName
+注意：
+1. 每条新闻都必须带来源引用。
+2. 引用格式固定为 > [文章标题](文章链接)。
+3. 总结要短，重点要清楚。
+4. 保持客观、中立。
+5. 将订阅源名称作为一个标签：#` + feedName
 }
 
-func (s *AutoSummaryScheduler) callAI(prompt string) (string, error) {
+func (s *AutoSummaryScheduler) callAI(prompt string, metadata map[string]any) (string, error) {
+	if _, _, err := airouter.NewStore(database.DB).ResolvePrimaryProvider(airouter.CapabilitySummary); err == nil {
+		result, routeErr := requestAutoSummaryChat(prompt, metadata)
+		if routeErr == nil {
+			return result, nil
+		}
+		log.Printf("[WARN] auto-summary route call failed, falling back to direct provider: %v", routeErr)
+	}
+
 	type openAIMessage struct {
 		Role    string `json:"role"`
 		Content string `json:"content"`

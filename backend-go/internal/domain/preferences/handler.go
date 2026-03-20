@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"my-robot-backend/internal/app/runtimeinfo"
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/platform/database"
 )
@@ -246,6 +247,29 @@ func GetUserPreferences(c *gin.Context) {
 }
 
 func TriggerPreferenceUpdate(c *gin.Context) {
+	if runtimeinfo.PreferenceUpdateSchedulerInterface != nil {
+		if scheduler, ok := runtimeinfo.PreferenceUpdateSchedulerInterface.(interface{ TriggerNow() map[string]interface{} }); ok {
+			result := scheduler.TriggerNow()
+			message, _ := result["message"].(string)
+			accepted, _ := result["accepted"].(bool)
+			if accepted {
+				c.JSON(http.StatusOK, gin.H{
+					"success": true,
+					"message": message,
+					"data":    result,
+				})
+				return
+			}
+
+			c.JSON(http.StatusConflict, gin.H{
+				"success": false,
+				"error":   message,
+				"data":    result,
+			})
+			return
+		}
+	}
+
 	go func() {
 		service := NewPreferenceService(database.DB)
 		service.UpdateAllPreferences()

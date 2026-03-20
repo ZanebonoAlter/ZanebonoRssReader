@@ -10,7 +10,7 @@ func (s *ContentCompletionService) AutoCompleteCompletePendingArticles(limit int
 
 	err := database.DB.
 		Joins("Feed").
-		Where("articles.content_status = ? AND feeds.content_completion_enabled = ?", "incomplete", true).
+		Where("articles.summary_status = ? AND feeds.article_summary_enabled = ?", "incomplete", true).
 		Where("articles.completion_attempts < feeds.max_completion_retries").
 		Limit(limit).
 		Find(&articles).Error

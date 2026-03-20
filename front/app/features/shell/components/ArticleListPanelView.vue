@@ -32,6 +32,7 @@ const startDate = ref<string>('')
 const endDate = ref<string>('')
 const showDateFilter = ref(false)
 const selectedQuickDate = ref<number | null>(null)
+const feedStatusExpanded = ref(true)
 
 interface QuickDateOption {
   label: string
@@ -135,8 +136,8 @@ const feedStatusItems = computed(() => {
     },
     {
       label: '总结',
-      value: currentFeed.value.contentCompletionEnabled ? '开启' : '关闭',
-      tone: currentFeed.value.contentCompletionEnabled ? 'emerald' : 'stone',
+      value: currentFeed.value.articleSummaryEnabled ? '开启' : '关闭',
+      tone: currentFeed.value.articleSummaryEnabled ? 'emerald' : 'stone',
       icon: 'mdi:brain',
       spinning: false,
     },
@@ -220,13 +221,25 @@ import '~/components/layout/ArticleListPanel.css'
       </div>
     </div>
 
-    <div v-if="currentFeed" class="mx-4 mt-4 rounded-2xl border border-ink-200 bg-white/75 p-3 shadow-subtle">
-      <div class="flex flex-wrap items-center gap-2">
-        <div class="mr-1 text-sm font-semibold text-ink-black">订阅源状态</div>
-        <div v-for="item in feedStatusItems" :key="item.label" class="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold" :class="statusToneClasses(item.tone)">
-          <Icon :icon="item.icon" width="14" height="14" :class="{ 'animate-spin': item.spinning }" />
-          <span>{{ item.label }}</span>
-          <span>{{ item.value }}</span>
+    <div v-if="currentFeed" class="mx-4 mt-4">
+      <button
+        v-if="!feedStatusExpanded"
+        class="flex items-center gap-2 rounded-full border border-ink-200 bg-white/75 px-3 py-1.5 shadow-subtle transition-colors hover:bg-white"
+        @click="feedStatusExpanded = true"
+      >
+        <Icon icon="mdi:information-slab-circle" width="18" height="18" class="text-ink-400" />
+      </button>
+      <div v-else class="rounded-2xl border border-ink-200 bg-white/75 p-3 shadow-subtle">
+        <div class="flex flex-wrap items-center gap-2">
+          <button @click="feedStatusExpanded = false">
+            <Icon icon="mdi:chevron-up" width="16" height="16" class="text-ink-400" />
+          </button>
+          <span class="mr-1 text-sm font-semibold text-ink-black">订阅源状态</span>
+          <div v-for="item in feedStatusItems" :key="item.label" class="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold" :class="statusToneClasses(item.tone)">
+            <Icon :icon="item.icon" width="14" height="14" :class="{ 'animate-spin': item.spinning }" />
+            <span>{{ item.label }}</span>
+            <span>{{ item.value }}</span>
+          </div>
         </div>
       </div>
     </div>

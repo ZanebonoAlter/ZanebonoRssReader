@@ -64,6 +64,7 @@ func (g *DigestGenerator) fetchSummariesInRange(start, end time.Time) ([]models.
 	err := database.DB.Where("created_at >= ? AND created_at < ?", start, end).
 		Preload("Feed").
 		Preload("Category").
+		Preload("SummaryTopics.TopicTag").
 		Order("created_at DESC").
 		Find(&summaries).Error
 	return summaries, err

@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -14,7 +15,7 @@ import (
 func setupSchedulersTestDB(t *testing.T) {
 	t.Helper()
 
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
@@ -29,11 +30,11 @@ func TestContentCompletionSchedulerGetStatusIncludesOverviewAndCurrentArticle(t 
 	setupSchedulersTestDB(t)
 
 	feed := models.Feed{
-		Title:                    "Feed",
-		URL:                      "https://feed.example/rss",
-		ContentCompletionEnabled: true,
-		FirecrawlEnabled:         true,
-		MaxCompletionRetries:     3,
+		Title:                 "Feed",
+		URL:                   "https://feed.example/rss",
+		ArticleSummaryEnabled: true,
+		FirecrawlEnabled:      true,
+		MaxCompletionRetries:  3,
 	}
 	if err := database.DB.Create(&feed).Error; err != nil {
 		t.Fatalf("create feed: %v", err)
@@ -44,7 +45,7 @@ func TestContentCompletionSchedulerGetStatusIncludesOverviewAndCurrentArticle(t 
 		Title:            "Queue me",
 		Link:             "https://feed.example/a1",
 		FirecrawlStatus:  "completed",
-		ContentStatus:    "incomplete",
+		SummaryStatus:    "incomplete",
 		FirecrawlContent: "ready",
 	}
 	if err := database.DB.Create(&article).Error; err != nil {
@@ -121,5 +122,96 @@ func TestParseLastRunSummaryFromSchedulerTask(t *testing.T) {
 	}
 	if len(summary.ErrorSamples) != 1 || summary.ErrorSamples[0].Category != "network" {
 		t.Fatalf("error samples = %#v, want network category", summary.ErrorSamples)
+	}
+}
+
+func TestContentCompletionSchedulerStartRepairsLegacyTaskRows(t *testing.T) {
+	setupSchedulersTestDB(t)
+
+	now := time.Now()
+	staleRun := now.Add(-2 * time.Hour)
+	legacyNextRun := now.Add(15 * time.Minute)
+
+	primary := models.SchedulerTask{
+		Name:              "ai_summary",
+		Description:       "primary",
+		CheckInterval:     3600,
+		Status:            "running",
+		LastExecutionTime: &staleRun,
+		NextExecutionTime: &legacyNextRun,
+	}
+	if err := database.DB.Create(&primary).Error; err != nil {
+		t.Fatalf("create primary task: %v", err)
+	}
+
+	legacy := models.SchedulerTask{
+		Name:                "content_completion",
+		Description:         "legacy",
+		CheckInterval:       900,
+		Status:              "idle",
+		LastExecutionResult: `{"completed_count":1}`,
+	}
+	if err := database.DB.Create(&legacy).Error; err != nil {
+		t.Fatalf("create legacy task: %v", err)
+	}
+
+	scheduler := NewContentCompletionScheduler(contentprocessing.NewContentCompletionService("http://localhost:11235"), 60)
+	if err := scheduler.Start(); err != nil {
+		t.Fatalf("start scheduler: %v", err)
+	}
+	defer scheduler.Stop()
+
+	if scheduler.checkInterval != 15*time.Minute {
+		t.Fatalf("check interval = %v, want 15m", scheduler.checkInterval)
+	}
+
+	var repaired models.SchedulerTask
+	if err := database.DB.Where("name = ?", "ai_summary").First(&repaired).Error; err != nil {
+		t.Fatalf("load repaired task: %v", err)
+	}
+	if repaired.Status != "idle" {
+		t.Fatalf("repaired status = %q, want idle", repaired.Status)
+	}
+	if repaired.CheckInterval != 900 {
+		t.Fatalf("repaired check interval = %d, want 900", repaired.CheckInterval)
+	}
+
+	var legacyCount int64
+	if err := database.DB.Model(&models.SchedulerTask{}).Where("name = ?", "content_completion").Count(&legacyCount).Error; err != nil {
+		t.Fatalf("count legacy tasks: %v", err)
+	}
+	if legacyCount != 0 {
+		t.Fatalf("legacy content_completion rows = %d, want 0", legacyCount)
+	}
+}
+
+func TestContentCompletionSchedulerSkipsCycleWhenAlreadyRunning(t *testing.T) {
+	setupSchedulersTestDB(t)
+
+	task := models.SchedulerTask{
+		Name:          "ai_summary",
+		Description:   "AI summarize Firecrawl content",
+		CheckInterval: 3600,
+		Status:        "idle",
+	}
+	if err := database.DB.Create(&task).Error; err != nil {
+		t.Fatalf("create scheduler task: %v", err)
+	}
+
+	scheduler := NewContentCompletionScheduler(contentprocessing.NewContentCompletionService("http://localhost:11235"), 60)
+	scheduler.executionMutex.Lock()
+	defer scheduler.executionMutex.Unlock()
+
+	scheduler.checkAndCompleteArticles()
+
+	var refreshed models.SchedulerTask
+	if err := database.DB.Where("name = ?", "ai_summary").First(&refreshed).Error; err != nil {
+		t.Fatalf("reload scheduler task: %v", err)
+	}
+	if refreshed.LastExecutionTime != nil {
+		t.Fatalf("last execution time = %v, want nil when cycle is skipped", refreshed.LastExecutionTime)
+	}
+	if refreshed.Status != "idle" {
+		t.Fatalf("status = %q, want idle when cycle is skipped", refreshed.Status)
 	}
 }

@@ -14,9 +14,8 @@ export interface Article {
   category: string
   read?: boolean
   favorite?: boolean
-  contentStatus?: 'complete' | 'incomplete' | 'pending' | 'failed'
-  fullContent?: string
-  contentFetchedAt?: string
+  summaryStatus?: 'complete' | 'incomplete' | 'pending' | 'failed'
+  summaryGeneratedAt?: string
   completionAttempts?: number
   completionError?: string
   aiContentSummary?: string

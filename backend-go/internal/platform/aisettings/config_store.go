@@ -10,10 +10,13 @@ import (
 )
 
 const summaryConfigKey = "summary_config"
+const openNotebookConfigKey = "open_notebook_config"
+const autoSummaryConfigKey = "auto_summary_config"
+const firecrawlConfigKey = "firecrawl_config"
 
-func LoadSummaryConfig() (map[string]interface{}, *models.AISettings, error) {
+func loadConfigByKey(key string) (map[string]interface{}, *models.AISettings, error) {
 	var settings models.AISettings
-	err := database.DB.Where("key = ?", summaryConfigKey).First(&settings).Error
+	err := database.DB.Where("key = ?", key).First(&settings).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return map[string]interface{}{}, nil, nil
@@ -31,16 +34,17 @@ func LoadSummaryConfig() (map[string]interface{}, *models.AISettings, error) {
 	}
 
 	return config, &settings, nil
+
 }
 
-func SaveSummaryConfig(config map[string]interface{}, description string) error {
+func saveConfigByKey(key string, config map[string]interface{}, description string) error {
 	configJSON, err := models.ToJSONValue(config)
 	if err != nil {
 		return err
 	}
 
 	var settings models.AISettings
-	dbErr := database.DB.Where("key = ?", summaryConfigKey).First(&settings).Error
+	dbErr := database.DB.Where("key = ?", key).First(&settings).Error
 	if dbErr == nil {
 		settings.Value = configJSON
 		if description != "" {
@@ -54,10 +58,42 @@ func SaveSummaryConfig(config map[string]interface{}, description string) error 
 	}
 
 	settings = models.AISettings{
-		Key:         summaryConfigKey,
+		Key:         key,
 		Value:       configJSON,
 		Description: description,
 	}
 
 	return database.DB.Create(&settings).Error
+}
+
+func LoadSummaryConfig() (map[string]interface{}, *models.AISettings, error) {
+	return loadConfigByKey(summaryConfigKey)
+}
+
+func SaveSummaryConfig(config map[string]interface{}, description string) error {
+	return saveConfigByKey(summaryConfigKey, config, description)
+}
+
+func LoadAutoSummaryConfig() (map[string]interface{}, *models.AISettings, error) {
+	return loadConfigByKey(autoSummaryConfigKey)
+}
+
+func SaveAutoSummaryConfig(config map[string]interface{}, description string) error {
+	return saveConfigByKey(autoSummaryConfigKey, config, description)
+}
+
+func LoadFirecrawlConfig() (map[string]interface{}, *models.AISettings, error) {
+	return loadConfigByKey(firecrawlConfigKey)
+}
+
+func SaveFirecrawlConfig(config map[string]interface{}, description string) error {
+	return saveConfigByKey(firecrawlConfigKey, config, description)
+}
+
+func LoadOpenNotebookConfig() (map[string]interface{}, *models.AISettings, error) {
+	return loadConfigByKey(openNotebookConfigKey)
+}
+
+func SaveOpenNotebookConfig(config map[string]interface{}, description string) error {
+	return saveConfigByKey(openNotebookConfigKey, config, description)
 }

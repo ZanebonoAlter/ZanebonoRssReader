@@ -81,6 +81,8 @@ start-all.bat
 - AI 总结 WebSocket：默认 `ws://localhost:5000/ws`
 - 后端 ID 是数字
 - 前端 store 内统一转成字符串
+- feed 文章总结开关统一使用 `article_summary_enabled` / `articleSummaryEnabled`
+- 文章总结状态统一使用 `summary_status` / `summaryStatus`
 
 ## 前端开发约束
 
@@ -103,6 +105,7 @@ start-all.bat
 - 类型定义集中在 `front/app/types`
 - API 返回值统一通过 `ApiResponse<T>` 包装
 - `snake_case -> camelCase` 的映射集中在 API 或 store 层
+- 字段重命名不在组件里做兼容，直接在类型和 store 映射层切换
 
 ### 样式约束
 

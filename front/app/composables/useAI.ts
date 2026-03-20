@@ -1,9 +1,6 @@
-const API_BASE = 'http://localhost:5000/api'
+import { useAIAdminApi } from '~/api'
 
 interface AISummaryRequest {
-  base_url: string
-  api_key: string
-  model: string
   title: string
   content: string
   language?: string
@@ -23,57 +20,75 @@ interface ApiResponse<T> {
   error?: string
 }
 
+interface AISettingsState {
+  baseURL: string
+  model: string
+  providerId: number | null
+  providerName: string
+  routeName: string
+  summaryEnabled: boolean
+  apiKeyConfigured: boolean
+  timeRange: number
+}
+
+function createDefaultSettings(): AISettingsState {
+  return {
+    baseURL: '',
+    model: '',
+    providerId: null,
+    providerName: '',
+    routeName: '',
+    summaryEnabled: false,
+    apiKeyConfigured: false,
+    timeRange: 180,
+  }
+}
+
+function normalizeSettings(payload: any): AISettingsState {
+  return {
+    baseURL: payload?.base_url || '',
+    model: payload?.model || '',
+    providerId: typeof payload?.provider_id === 'number' ? payload.provider_id : null,
+    providerName: payload?.provider_name || '',
+    routeName: payload?.route_name || '',
+    summaryEnabled: Boolean(payload?.provider_id || payload?.base_url),
+    apiKeyConfigured: Boolean(payload?.api_key_configured),
+    timeRange: typeof payload?.time_range === 'number' ? payload.time_range : 180,
+  }
+}
+
 export const useAI = () => {
+  const settingsState = useState<AISettingsState>('ai-settings', createDefaultSettings)
+  const settingsLoaded = useState<boolean>('ai-settings-loaded', () => false)
   const loading = ref(false)
   const error = ref<string | null>(null)
+  const aiSettings = computed(() => settingsState.value)
+  const isAIEnabled = computed(() => settingsState.value.summaryEnabled && settingsState.value.apiKeyConfigured)
 
-  // Reactive AI settings
-  const aiSettings = ref<any>(null)
-
-  // Load settings on client side
-  if (import.meta.client) {
-    const loadSettings = () => {
-      const settings = localStorage.getItem('aiSettings')
-      if (settings) {
-        try {
-          aiSettings.value = JSON.parse(settings)
-        } catch (e) {
-          console.error('Failed to parse AI settings:', e)
-          aiSettings.value = null
-        }
-      } else {
-        aiSettings.value = null
-      }
+  async function loadSettings(force = false) {
+    if (settingsLoaded.value && !force) {
+      return settingsState.value
     }
 
-    // Load initially
-    loadSettings()
+    const aiAdminApi = useAIAdminApi()
+    const response = await aiAdminApi.getSettings()
+    if (response.success) {
+      settingsState.value = normalizeSettings(response.data)
+      settingsLoaded.value = true
+    } else {
+      settingsState.value = normalizeSettings(null)
+      settingsLoaded.value = false
+    }
 
-    // Listen for storage changes
-    window.addEventListener('storage', (e) => {
-      if (e.key === 'aiSettings') {
-        loadSettings()
-      }
+    return settingsState.value
+  }
+
+  if (import.meta.client && !settingsLoaded.value) {
+    loadSettings().catch(() => {
+      settingsLoaded.value = false
     })
   }
 
-  // Get AI settings from localStorage (non-reactive version for API calls)
-  const getAISettings = () => {
-    if (import.meta.client) {
-      const settings = localStorage.getItem('aiSettings')
-      if (settings) {
-        return JSON.parse(settings)
-      }
-    }
-    return null
-  }
-
-  // Check if AI is enabled (reactive computed)
-  const isAIEnabled = computed(() => {
-    return aiSettings.value?.summaryEnabled || false
-  })
-
-  // Summarize an article
   const summarizeArticle = async (
     title: string,
     content: string,
@@ -83,35 +98,24 @@ export const useAI = () => {
     error.value = null
 
     try {
-      const settings = getAISettings()
-
-      if (!settings || !settings.summaryEnabled) {
-        throw new Error('AI 功能未启用')
+      const settings = await loadSettings()
+      if (!settings.apiKeyConfigured) {
+        throw new Error('AI 配置未完成，请先在设置中配置可用模型')
       }
 
-      if (!settings.baseURL || !settings.apiKey || !settings.model) {
-        throw new Error('AI 配置不完整，请检查设置')
-      }
-
-      const requestData: AISummaryRequest = {
-        base_url: settings.baseURL,
-        api_key: settings.apiKey,
-        model: settings.model,
-        title,
-        content,
-        language
-      }
-
-      const response = await fetch(`${API_BASE}/ai/summarize`, {
+      const response = await fetch('http://localhost:5000/api/ai/summarize', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(requestData),
+        body: JSON.stringify({
+          title,
+          content,
+          language,
+        } satisfies AISummaryRequest),
       })
 
       const data = await response.json()
-
       if (!response.ok) {
         return {
           success: false,
@@ -119,79 +123,79 @@ export const useAI = () => {
         }
       }
 
-      loading.value = false
       return {
         success: true,
         data: data.data,
       }
     } catch (err) {
-      loading.value = false
       const errorMessage = err instanceof Error ? err.message : '未知错误'
       error.value = errorMessage
       return {
         success: false,
         error: errorMessage,
       }
+    } finally {
+      loading.value = false
     }
   }
 
-  // Test AI connection
-  const testConnection = async (): Promise<ApiResponse<void>> => {
+  const testConnection = async (config?: {
+    baseURL?: string
+    apiKey?: string
+    model?: string
+  }): Promise<ApiResponse<void>> => {
     loading.value = true
     error.value = null
 
     try {
-      const settings = getAISettings()
+      const loadedSettings = await loadSettings()
+      const settings = {
+        baseURL: config?.baseURL || loadedSettings.baseURL,
+        apiKey: config?.apiKey || '',
+        model: config?.model || loadedSettings.model,
+      }
 
-      if (!settings || !settings.baseURL || !settings.apiKey || !settings.model) {
+      if (!settings.baseURL || !settings.apiKey || !settings.model) {
         throw new Error('AI 配置不完整')
       }
 
-      const response = await fetch(`${API_BASE}/ai/test`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          base_url: settings.baseURL,
-          api_key: settings.apiKey,
-          model: settings.model,
-        }),
+      const aiAdminApi = useAIAdminApi()
+      const response = await aiAdminApi.testConnection({
+        base_url: settings.baseURL,
+        api_key: settings.apiKey,
+        model: settings.model,
       })
 
-      const data = await response.json()
-
-      loading.value = false
-
-      if (!response.ok) {
+      if (!response.success) {
         return {
           success: false,
-          error: data.error || '连接测试失败',
+          error: response.error || '连接测试失败',
         }
       }
 
       return {
         success: true,
-        message: data.message,
+        message: response.message,
       }
     } catch (err) {
-      loading.value = false
       const errorMessage = err instanceof Error ? err.message : '未知错误'
       error.value = errorMessage
       return {
         success: false,
         error: errorMessage,
       }
+    } finally {
+      loading.value = false
     }
   }
 
   return {
     loading,
     error,
+    aiSettings,
     isAIEnabled,
+    loadSettings,
     summarizeArticle,
     testConnection,
-    getAISettings,
-    aiSettings,
   }
 }
