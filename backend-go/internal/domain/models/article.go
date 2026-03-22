@@ -28,6 +28,7 @@ type Article struct {
 	FirecrawlContent           string     `gorm:"type:text" json:"firecrawl_content"`
 	FirecrawlCrawledAt         *time.Time `json:"firecrawl_crawled_at"`
 	CreatedAt                  time.Time  `json:"created_at"`
+	TagCount                   int        `gorm:"->;column:tag_count" json:"tag_count"`
 	Feed                       Feed       `gorm:"foreignKey:FeedID" json:"feed,omitempty"`
 }
 
@@ -56,5 +57,6 @@ func (a *Article) ToDict() map[string]interface{} {
 		"firecrawl_content":             a.FirecrawlContent,
 		"firecrawl_crawled_at":          FormatDatetimeCSTPtr(a.FirecrawlCrawledAt),
 		"created_at":                    FormatDatetimeCST(a.CreatedAt),
+		"tag_count":                     a.TagCount,
 	}
 }

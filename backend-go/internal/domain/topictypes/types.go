@@ -24,6 +24,17 @@ type TopicTag struct {
 	Kind      string   `json:"kind,omitempty"`       // Legacy: maps to Category for backward compat
 }
 
+type AggregatedTopicTag struct {
+	Slug         string   `json:"slug"`
+	Label        string   `json:"label"`
+	Category     string   `json:"category"`
+	Kind         string   `json:"kind,omitempty"`
+	Icon         string   `json:"icon,omitempty"`
+	Aliases      []string `json:"aliases,omitempty"`
+	Score        float64  `json:"score"`
+	ArticleCount int      `json:"article_count"`
+}
+
 // ExtractedTag is the raw output from AI extraction
 type ExtractedTag struct {
 	Label      string   `json:"label"`
@@ -85,16 +96,17 @@ type GraphEdge struct {
 
 // TopicSummaryCard represents a summary card with tags
 type TopicSummaryCard struct {
-	ID           uint               `json:"id"`
-	Title        string             `json:"title"`
-	Summary      string             `json:"summary"`
-	FeedName     string             `json:"feed_name"`
-	FeedColor    string             `json:"feed_color"`
-	CategoryName string             `json:"category_name"`
-	ArticleCount int                `json:"article_count"`
-	CreatedAt    string             `json:"created_at"`
-	Topics       []TopicTag         `json:"topics"`
-	Articles     []TopicArticleCard `json:"articles"`
+	ID             uint                 `json:"id"`
+	Title          string               `json:"title"`
+	Summary        string               `json:"summary"`
+	FeedName       string               `json:"feed_name"`
+	FeedColor      string               `json:"feed_color"`
+	CategoryName   string               `json:"category_name"`
+	ArticleCount   int                  `json:"article_count"`
+	CreatedAt      string               `json:"created_at"`
+	Topics         []TopicTag           `json:"topics"`
+	AggregatedTags []AggregatedTopicTag `json:"aggregated_tags"`
+	Articles       []TopicArticleCard   `json:"articles"`
 }
 
 // TopicArticleCard represents an article in a topic context

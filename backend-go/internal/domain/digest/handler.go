@@ -13,6 +13,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"my-robot-backend/internal/app/runtimeinfo"
 	"my-robot-backend/internal/domain/models"
+	"my-robot-backend/internal/domain/topicextraction"
+	"my-robot-backend/internal/domain/topictypes"
 	"my-robot-backend/internal/platform/aisettings"
 	"my-robot-backend/internal/platform/database"
 	"my-robot-backend/internal/platform/opennotebook"
@@ -147,18 +149,19 @@ type digestPreviewTopicTag struct {
 }
 
 type digestPreviewSummary struct {
-	ID           uint                    `json:"id"`
-	FeedID       *uint                   `json:"feed_id"`
-	FeedName     string                  `json:"feed_name"`
-	FeedIcon     string                  `json:"feed_icon"`
-	FeedColor    string                  `json:"feed_color"`
-	CategoryID   uint                    `json:"category_id"`
-	CategoryName string                  `json:"category_name"`
-	SummaryText  string                  `json:"summary_text"`
-	ArticleCount int                     `json:"article_count"`
-	ArticleIDs   []uint                  `json:"article_ids"`
-	Topics       []digestPreviewTopicTag `json:"topics"`
-	CreatedAt    string                  `json:"created_at"`
+	ID             uint                            `json:"id"`
+	FeedID         *uint                           `json:"feed_id"`
+	FeedName       string                          `json:"feed_name"`
+	FeedIcon       string                          `json:"feed_icon"`
+	FeedColor      string                          `json:"feed_color"`
+	CategoryID     uint                            `json:"category_id"`
+	CategoryName   string                          `json:"category_name"`
+	SummaryText    string                          `json:"summary_text"`
+	ArticleCount   int                             `json:"article_count"`
+	ArticleIDs     []uint                          `json:"article_ids"`
+	Topics         []digestPreviewTopicTag         `json:"topics"`
+	AggregatedTags []topictypes.AggregatedTopicTag `json:"aggregated_tags"`
+	CreatedAt      string                          `json:"created_at"`
 }
 
 type digestPreviewCategory struct {
@@ -494,20 +497,25 @@ func buildPreviewCategories(digests []CategoryDigest) ([]digestPreviewCategory, 
 
 			articleIDs := parseSummaryArticleIDs(summary.Articles)
 			topics := extractSummaryTopics(summary)
+			aggregatedTags, err := topicextraction.AggregateArticleTags(articleIDs)
+			if err != nil {
+				aggregatedTags = []topictypes.AggregatedTopicTag{}
+			}
 
 			summaryItem := digestPreviewSummary{
-				ID:           summary.ID,
-				FeedID:       summary.FeedID,
-				FeedName:     feedName,
-				FeedIcon:     feedIcon,
-				FeedColor:    feedColor,
-				CategoryID:   item.CategoryID,
-				CategoryName: item.CategoryName,
-				SummaryText:  summary.Summary,
-				ArticleCount: summary.ArticleCount,
-				ArticleIDs:   articleIDs,
-				Topics:       topics,
-				CreatedAt:    models.FormatDatetimeCST(summary.CreatedAt),
+				ID:             summary.ID,
+				FeedID:         summary.FeedID,
+				FeedName:       feedName,
+				FeedIcon:       feedIcon,
+				FeedColor:      feedColor,
+				CategoryID:     item.CategoryID,
+				CategoryName:   item.CategoryName,
+				SummaryText:    summary.Summary,
+				ArticleCount:   summary.ArticleCount,
+				ArticleIDs:     articleIDs,
+				Topics:         topics,
+				AggregatedTags: aggregatedTags,
+				CreatedAt:      models.FormatDatetimeCST(summary.CreatedAt),
 			}
 			summaries = append(summaries, summaryItem)
 

@@ -2,6 +2,8 @@
 import { Icon } from '@iconify/vue'
 import { marked } from 'marked'
 import type { Article, RssFeed } from '~/types'
+import ArticleTagList from './ArticleTagList.vue'
+import { useArticlesApi } from '~/api/articles'
 import { useReadingTracker, useScrollDepthTracker } from '~/features/preferences/composables/useReadingTracker'
 import { useContentCompletion, type ContentCompletionStatus } from '~/features/articles/composables/useContentCompletion'
 import { useFirecrawlApi } from '~/api/firecrawl'
@@ -25,12 +27,14 @@ interface Props {
   article: Article | null
   articles?: Article[]
   onClose?: () => void
+  highlightedTagSlugs?: string[]
 }
 
 const props = withDefaults(defineProps<Props>(), {
   article: null,
   articles: () => [],
   onClose: () => {},
+  highlightedTagSlugs: () => [],
 })
 
 const emit = defineEmits<{
@@ -42,6 +46,7 @@ const apiStore = useApiStore()
 const feedsStore = useFeedsStore()
 const { isAIEnabled } = useAI()
 const { $dayjs } = useNuxtApp()
+const articlesApi = useArticlesApi()
 const { crawlArticle } = useFirecrawlApi()
 const { getCompletionStatus, completeArticle } = useContentCompletion()
 
@@ -53,6 +58,7 @@ const liveStatus = ref<ContentCompletionStatus | null>(null)
 const selectedContentSource = ref<ArticleContentSource>('firecrawl')
 const manualFirecrawlLoading = ref(false)
 const manualSummaryLoading = ref(false)
+const manualTaggingLoading = ref(false)
 const manualActionError = ref<string | null>(null)
 
 const feed = computed(() => {
@@ -115,7 +121,7 @@ const showProcessingPanel = computed(() => {
     || detailLines.value.length > 0
     || Boolean(manualActionError.value || mergedArticle.value.firecrawlError || mergedArticle.value.completionError)
 })
-const actionBusy = computed(() => manualFirecrawlLoading.value || manualSummaryLoading.value)
+const actionBusy = computed(() => manualFirecrawlLoading.value || manualSummaryLoading.value || manualTaggingLoading.value)
 
 const manualFirecrawlLabel = computed(() => {
   if (manualFirecrawlLoading.value) return '抓取中...'
@@ -125,6 +131,11 @@ const manualFirecrawlLabel = computed(() => {
 const manualSummaryLabel = computed(() => {
   if (manualSummaryLoading.value) return '总结中...'
   return mergedArticle.value?.aiContentSummary ? '重新生成总结' : '手动生成总结'
+})
+
+const manualTaggingLabel = computed(() => {
+  if (manualTaggingLoading.value) return '打标签中...'
+  return (mergedArticle.value?.tagCount ?? 0) > 0 ? '重新打标签' : '手动打标签'
 })
 
 function syncCurrentArticle(updates: Partial<Article>) {
@@ -226,6 +237,29 @@ async function handleManualSummary() {
   }
 }
 
+async function handleManualTagging() {
+  if (!props.article || manualTaggingLoading.value) return
+
+  manualTaggingLoading.value = true
+  manualActionError.value = null
+
+  try {
+    const response = await articlesApi.retagArticle(Number(props.article.id))
+    if (!response.success || !response.data) {
+      throw new Error(response.error || '手动打标签失败')
+    }
+
+    syncCurrentArticle({
+      tags: response.data.tags || [],
+      tagCount: response.data.tag_count,
+    })
+  } catch (error) {
+    manualActionError.value = error instanceof Error ? error.message : '手动打标签失败'
+  } finally {
+    manualTaggingLoading.value = false
+  }
+}
+
 watch(() => props.article, (newArticle) => {
   if (newArticle && !newArticle.read) {
     apiStore.markAsRead(newArticle.id)
@@ -238,6 +272,7 @@ watch(() => props.article, (newArticle) => {
   manualActionError.value = null
   manualFirecrawlLoading.value = false
   manualSummaryLoading.value = false
+  manualTaggingLoading.value = false
   selectedContentSource.value = getArticleContentSources({
     firecrawlContent: newArticle?.firecrawlContent,
     content: newArticle?.content,
@@ -477,7 +512,19 @@ import '~/components/article/ArticleContent.css'
               <Icon icon="mdi:brain" width="14" height="14" :class="{ 'animate-spin': manualSummaryLoading }" />
               {{ manualSummaryLabel }}
             </button>
+            <button
+              class="inline-flex items-center gap-1.5 rounded-full border border-ink-200 bg-white px-3 py-1.5 text-xs font-semibold text-ink-700 transition hover:border-ink-300 hover:text-ink-900 disabled:cursor-not-allowed disabled:opacity-50"
+              :disabled="actionBusy"
+              @click="handleManualTagging"
+            >
+              <Icon icon="mdi:tag-sync-outline" width="14" height="14" :class="{ 'animate-spin': manualTaggingLoading }" />
+              {{ manualTaggingLabel }}
+            </button>
           </div>
+        </div>
+
+        <div v-if="manualTaggingLoading" class="mt-3 text-sm text-ink-medium">
+          正在分析正文并生成标签...
         </div>
 
         <div v-if="detailLines.length" class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink-medium">
@@ -511,6 +558,14 @@ import '~/components/article/ArticleContent.css'
           <Icon icon="mdi:brain" width="18" height="18" />
           <span class="text-sm font-semibold">AI 整理稿</span>
         </div>
+        <ArticleTagList
+          v-if="article.tags?.length"
+          class="mb-3"
+          :tags="article.tags"
+          :highlighted-slugs="highlightedTagSlugs"
+          compact
+          :show-article-count="false"
+        />
         <div class="summary-surface">
           <div class="markdown-body markdown-summary" v-html="renderedStoredSummary" />
         </div>
@@ -534,6 +589,14 @@ import '~/components/article/ArticleContent.css'
       </div>
 
       <h1 class="article-title-full">{{ article.title }}</h1>
+
+      <ArticleTagList
+        v-if="article.tags?.length"
+        class="mb-4"
+        :tags="article.tags"
+        :highlighted-slugs="highlightedTagSlugs"
+        compact
+      />
 
       <div v-if="showDescription" class="article-description">
         <div v-html="article.description" />
@@ -665,7 +728,19 @@ import '~/components/article/ArticleContent.css'
                 <Icon icon="mdi:brain" width="14" height="14" :class="{ 'animate-spin': manualSummaryLoading }" />
                 {{ manualSummaryLabel }}
               </button>
+              <button
+                class="inline-flex items-center gap-1.5 rounded-full border border-ink-200 bg-white px-3 py-1.5 text-xs font-semibold text-ink-700 transition hover:border-ink-300 hover:text-ink-900 disabled:cursor-not-allowed disabled:opacity-50"
+                :disabled="actionBusy"
+                @click="handleManualTagging"
+              >
+                <Icon icon="mdi:tag-sync-outline" width="14" height="14" :class="{ 'animate-spin': manualTaggingLoading }" />
+                {{ manualTaggingLabel }}
+              </button>
             </div>
+          </div>
+
+          <div v-if="manualTaggingLoading" class="mt-3 text-sm text-ink-medium">
+            正在分析正文并生成标签...
           </div>
 
           <div v-if="detailLines.length" class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink-medium">
@@ -699,6 +774,14 @@ import '~/components/article/ArticleContent.css'
             <Icon icon="mdi:brain" width="18" height="18" />
             <span class="text-sm font-semibold">AI 整理稿</span>
           </div>
+          <ArticleTagList
+            v-if="article.tags?.length"
+            class="mb-3"
+            :tags="article.tags"
+            :highlighted-slugs="highlightedTagSlugs"
+            compact
+            :show-article-count="false"
+          />
           <div class="summary-surface">
           <div class="markdown-body markdown-summary" v-html="renderedStoredSummary" />
         </div>
@@ -716,6 +799,14 @@ import '~/components/article/ArticleContent.css'
         </div>
 
         <h1 class="article-title-full">{{ article.title }}</h1>
+
+        <ArticleTagList
+          v-if="article.tags?.length"
+          class="mb-4"
+          :tags="article.tags"
+          :highlighted-slugs="highlightedTagSlugs"
+          compact
+        />
 
         <div v-if="showDescription" class="article-description">
           <div v-html="article.description" />

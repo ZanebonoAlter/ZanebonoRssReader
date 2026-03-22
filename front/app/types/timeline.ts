@@ -31,6 +31,7 @@ export interface TimelineDigest {
   summary: string
   createdAt: string
   feedName: string
+  feedColor?: string
   categoryName: string
   articleCount: number
   tags: TimelineArticleTag[]

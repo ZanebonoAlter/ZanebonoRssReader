@@ -2,6 +2,7 @@
 import { Icon } from '@iconify/vue'
 import { marked } from 'marked'
 import { computed, onMounted, ref, watch } from 'vue'
+import ArticleTagList from '../../articles/components/ArticleTagList.vue'
 import DigestDetail from '~/features/digest/components/DigestDetail.vue'
 import DigestSettings from '~/features/digest/components/DigestSettings.vue'
 import {
@@ -110,23 +111,6 @@ const statusChips = computed(() => {
       label: '任务数',
       value: String(status.value.active_jobs ?? 0),
     },
-  ]
-})
-
-const bottomFacts = computed(() => {
-  const preview = activePreview.value
-  if (!preview) {
-    return [
-      { label: '当前状态', value: '还没取到内容' },
-      { label: '建议动作', value: '先执行一版' },
-      { label: '备用动作', value: '检查设置' },
-    ]
-  }
-
-  return [
-    { label: '分类数', value: `${preview.category_count}` },
-    { label: '总结数', value: `${preview.summary_count}` },
-    { label: '当前焦点', value: activeSummary.value?.feed_name || '还没选中' },
   ]
 })
 
@@ -572,23 +556,7 @@ onMounted(loadDashboard)
                   <span>·</span>
                   <span>{{ summary.created_at }}</span>
                 </div>
-                <div v-if="summary.topics?.length" class="mt-2 flex flex-wrap items-center gap-1.5">
-                  <button
-                    v-for="topic in summary.topics.slice(0, 5)"
-                    :key="topic.slug"
-                    class="digest-topic-tag"
-                    :style="{ borderColor: getTopicCategoryMeta(topic.category).color + '40', backgroundColor: getTopicCategoryMeta(topic.category).color + '12' }"
-                    type="button"
-                  >
-                    <Icon
-                      :icon="topic.icon || getTopicCategoryMeta(topic.category).defaultIcon"
-                      width="12"
-                      :style="{ color: getTopicCategoryMeta(topic.category).color }"
-                    />
-                    <span :style="{ color: getTopicCategoryMeta(topic.category).color }">{{ topic.label }}</span>
-                  </button>
-                  <span v-if="summary.topics.length > 5" class="text-xs text-ink-light">+{{ summary.topics.length - 5 }}</span>
-                </div>
+                <ArticleTagList v-if="summary.aggregated_tags?.length" class="mt-2" :tags="summary.aggregated_tags" compact :max-visible="5" />
               </button>
             </div>
 
@@ -606,15 +574,6 @@ onMounted(loadDashboard)
           @open-settings="openSettings"
         />
       </main>
-
-      <footer class="digest-footer paper-card rounded-[34px] px-5 py-5 md:px-6">
-        <div class="grid gap-4 md:grid-cols-3">
-          <article v-for="fact in bottomFacts" :key="fact.label" class="digest-footer__item">
-            <p class="text-xs uppercase tracking-[0.24em] text-ink-light">{{ fact.label }}</p>
-            <p class="mt-2 text-lg font-bold text-ink-dark">{{ fact.value }}</p>
-          </article>
-        </div>
-      </footer>
 
       <section v-if="activeOpenNotebookResult" class="paper-card rounded-[34px] px-5 py-5 md:px-6 md:py-6">
         <div class="grid gap-5 xl:grid-cols-[280px_minmax(0,1fr)]">

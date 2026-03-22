@@ -68,6 +68,8 @@ Topic Graph 的前端数据面主要集中在 `useTopicGraphApi()`。
 
 另外文章预览不会走 topic graph API，而是复用 `useArticlesApi().getArticle(articleId)` 拉标准 article 详情。
 
+补充：article tags 的生成已经改成“主路径 + 兜底”模式：普通 refresh 文章会尽快打标签，`Firecrawl + 自动补全` 的文章会在补全完成后打标签，summary 阶段只补漏。
+
 ## 首次进入页面时会发生什么
 
 场景：用户第一次打开 `/topics`。
@@ -185,6 +187,8 @@ Topic Graph 当前的状态主源放在 `TopicGraphPage.vue`，不是 Pinia。
 4. 同时调用 `loadTopicDetail(slug)` 更新 sidebar 详情
 5. 时间线区域优先展示 `hotspotDigests` 转换后的 `hotspotTimelineItems`
 
+这里的 digest tags 现在不是 digest 自己的 summary topics，而是 digest 覆盖 article 的 `aggregated_tags`。
+
 所以热点标签点击后，页面会同时切换两套内容：
 
 - 右侧还是 topic detail
@@ -207,6 +211,7 @@ Topic Graph 当前的状态主源放在 `TopicGraphPage.vue`，不是 Pinia。
    - AI 内容整理状态
    - 内容源切换
    - 手动抓取 / 手动整理动作
+   - article tags 通用展示
 
 这也是 topic graph 页面和主阅读链路复用最深的一段。
 
@@ -258,6 +263,8 @@ Topic Graph 当前的状态主源放在 `TopicGraphPage.vue`，不是 Pinia。
 - 展示 topic 关联 digest 或热点反查 digest
 - 支持 timeline filters
 - 选择 digest 后驱动底部与预览区域
+- digest 卡片里的 tags 使用 `aggregated_tags`，表达“这份 digest 覆盖到的 article tag 索引”
+- digest 下单篇文章打开后，文章弹窗展示 article 自身 tags，并对当前选中 topic 做高亮
 
 ### Footer Panels
 

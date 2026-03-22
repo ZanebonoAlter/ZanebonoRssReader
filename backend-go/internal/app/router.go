@@ -74,6 +74,7 @@ func SetupRoutes(r *gin.Engine) {
 			articles.GET("/stats", articlesdomain.GetArticlesStats)
 			articles.GET("", articlesdomain.GetArticles)
 			articles.GET("/:article_id", articlesdomain.GetArticle)
+			articles.POST("/:article_id/tags", articlesdomain.RetagArticleHandler)
 			articles.PUT("/:article_id", articlesdomain.UpdateArticle)
 			articles.PUT("/bulk-update", articlesdomain.BulkUpdateArticles)
 		}

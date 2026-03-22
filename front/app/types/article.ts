@@ -24,6 +24,18 @@ export interface Article {
   firecrawlContent?: string
   firecrawlCrawledAt?: string
   imageUrl?: string
+  tagCount?: number
+  tags?: ArticleTag[]
+}
+
+export interface ArticleTag {
+  slug: string
+  label: string
+  category: string
+  kind?: string
+  icon?: string
+  score?: number
+  articleCount?: number
 }
 
 export interface ArticleFilters {

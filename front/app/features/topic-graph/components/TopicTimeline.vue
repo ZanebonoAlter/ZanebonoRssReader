@@ -139,6 +139,7 @@ function handlePreviewDigest(digestId: string) {
           :is-first="index === 0"
           :is-last="index === items.length - 1"
           :is-active="props.activeDigestId === item.id"
+          :highlighted-tag-slugs="selectedTopic ? [selectedTopic.slug] : []"
           @open-article="handleOpenArticle"
           @select="handleSelectDigest"
           @preview-digest="handlePreviewDigest"

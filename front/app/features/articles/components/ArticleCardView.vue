@@ -109,6 +109,13 @@ const errorHint = computed(() => props.article.completionError || props.article.
                   />
                   {{ summaryMeta.label }}
                 </span>
+                <span
+                  class="inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-medium"
+                  :class="article.tagCount ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-stone-200 bg-stone-100 text-stone-600'"
+                >
+                  <Icon :icon="article.tagCount ? 'mdi:tag-multiple' : 'mdi:tag-off-outline'" width="12" height="12" />
+                  {{ article.tagCount ? `已标记 ${article.tagCount}` : '待打标签' }}
+                </span>
               </div>
 
               <div

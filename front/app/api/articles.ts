@@ -22,6 +22,10 @@ export function useArticlesApi() {
     return apiClient.put<Article>(`/articles/${id}`, data)
   }
 
+  async function retagArticle(id: number): Promise<ApiResponse<{ tag_count: number; tags: Article['tags'] }>> {
+    return apiClient.post<{ tag_count: number; tags: Article['tags'] }>(`/articles/${id}/tags`)
+  }
+
   async function bulkUpdateArticles(data: BulkUpdateArticlesData): Promise<ApiResponse<void>> {
     return apiClient.put<void>('/articles/bulk-update', data)
   }
@@ -34,6 +38,7 @@ export function useArticlesApi() {
     getArticles,
     getArticle,
     updateArticle,
+    retagArticle,
     bulkUpdateArticles,
     getArticlesStats,
   }

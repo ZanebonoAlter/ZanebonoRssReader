@@ -1,10 +1,12 @@
 ﻿<script setup lang="ts">
 import { Icon } from '@iconify/vue'
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { onBeforeUnmount, ref, watch } from 'vue'
 import { marked } from 'marked'
+import ArticleTagList from '../../articles/components/ArticleTagList.vue'
 import ArticleContentView from '~/features/articles/components/ArticleContentView.vue'
 import { useArticlesApi } from '~/api/articles'
 import type { DigestPreviewSummary } from '~/api/digest'
+import { normalizeArticle } from '../../articles/utils/normalizeArticle'
 import { useApiStore } from '~/stores/api'
 import type { Article } from '~/types'
 
@@ -33,24 +35,6 @@ const renderedSummary = computed(() => {
   return String(marked.parse(props.summary.summary_text))
 })
 
-const metaFacts = computed(() => {
-  if (!props.summary) return []
-  return [
-    { label: '分类', value: props.summary.category_name },
-    { label: '文章数', value: `${props.summary.article_count}` },
-    { label: '生成时间', value: props.summary.created_at },
-  ]
-})
-
-function getTopicCategoryMeta(category: string) {
-  const meta: Record<string, { label: string, color: string, defaultIcon: string }> = {
-    event: { label: '事件', color: '#f59e0b', defaultIcon: 'mdi:calendar-star' },
-    person: { label: '人物', color: '#10b981', defaultIcon: 'mdi:account' },
-    keyword: { label: '关键词', color: '#6366f1', defaultIcon: 'mdi:tag' },
-  }
-  return (meta[category] || meta.keyword)!
-}
-
 async function loadRelatedArticles(summary: DigestPreviewSummary | null) {
   if (!summary?.article_ids?.length) {
     relatedArticles.value = []
@@ -63,7 +47,7 @@ async function loadRelatedArticles(summary: DigestPreviewSummary | null) {
     const responses = await Promise.all(summary.article_ids.map(id => articlesApi.getArticle(id)))
     relatedArticles.value = responses
       .filter(response => response.success && response.data)
-      .map(response => response.data as Article)
+      .map(response => normalizeArticle(response.data))
     selectedArticle.value = null
   } catch (error) {
     console.error('Failed to load related articles:', error)
@@ -184,6 +168,12 @@ onBeforeUnmount(() => {
               <p class="mt-2 text-sm leading-7 text-ink-medium">总结不动，文章盖上来。少来回切。</p>
             </div>
 
+            <div v-if="summary.aggregated_tags?.length" class="rounded-[20px] border border-[var(--color-border-subtle)] bg-white/70 px-4 py-4">
+              <p class="text-[11px] uppercase tracking-[0.24em] text-ink-light">索引标签</p>
+              <p class="mt-2 text-sm leading-6 text-ink-medium">这组标签来自当前总结覆盖文章的聚合索引。</p>
+              <ArticleTagList class="mt-3" :tags="summary.aggregated_tags" compact />
+            </div>
+
             <div v-if="loadingArticles" class="flex items-center gap-2 rounded-[20px] border border-[var(--color-border-subtle)] bg-white/70 px-4 py-4 text-sm text-ink-medium">
               <Icon icon="mdi:loading" width="18" class="animate-spin" />
               正在拉文章...
@@ -194,6 +184,7 @@ onBeforeUnmount(() => {
                 <div class="space-y-2 text-left">
                   <p class="line-clamp-2 text-sm font-semibold leading-6 text-ink-dark">{{ article.title }}</p>
                   <p class="text-xs text-ink-medium">{{ article.pubDate || '没有时间' }}</p>
+                  <ArticleTagList v-if="article.tags?.length" :tags="article.tags" compact :max-visible="4" :show-article-count="false" />
                 </div>
                 <div class="mt-3 flex items-center justify-between text-xs text-ink-medium">
                   <span>{{ article.favorite ? '已收藏' : '未收藏' }}</span>
@@ -251,6 +242,7 @@ onBeforeUnmount(() => {
           <ArticleContentView
             :article="selectedArticle"
             :articles="relatedArticles"
+            :highlighted-tag-slugs="summary?.aggregated_tags?.map(tag => tag.slug) || []"
             @favorite="handleFavorite"
             @navigate="handleNavigate"
           />
@@ -483,7 +475,4 @@ onBeforeUnmount(() => {
   }
 }
 </style>
-
-
-
 

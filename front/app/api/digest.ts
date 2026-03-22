@@ -28,6 +28,16 @@ export interface DigestPreviewTopicTag {
   score: number
 }
 
+export interface DigestAggregatedTag {
+  slug: string
+  label: string
+  category: string
+  kind?: string
+  icon?: string
+  score: number
+  article_count: number
+}
+
 export interface DigestPreviewSummary {
   id: number
   feed_id: number | null
@@ -40,6 +50,7 @@ export interface DigestPreviewSummary {
   article_count: number
   article_ids: number[]
   topics: DigestPreviewTopicTag[]
+  aggregated_tags: DigestAggregatedTag[]
   created_at: string
 }
 

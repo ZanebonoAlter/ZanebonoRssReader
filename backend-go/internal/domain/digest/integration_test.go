@@ -4,9 +4,15 @@ import (
 	"my-robot-backend/internal/domain/models"
 	"testing"
 	"time"
+
+	"my-robot-backend/internal/platform/database"
 )
 
 func TestDigestWorkflow(t *testing.T) {
+	setupDigestGeneratorTestDB(t)
+	defaultConfig := defaultDigestConfig()
+	requireNoError(t, database.DB.Create(&defaultConfig).Error)
+
 	config := &DigestConfig{
 		DailyEnabled:    true,
 		DailyTime:       "09:00",
@@ -35,31 +41,37 @@ func TestDigestWorkflow(t *testing.T) {
 }
 
 func TestDigestIntegrationWorkflow(t *testing.T) {
+	setupDigestGeneratorTestDB(t)
 	config := &DigestConfig{}
 	generator := NewDigestGenerator(config)
 
 	category1 := &models.Category{ID: 1, Name: "AI技术"}
 	category2 := &models.Category{ID: 2, Name: "前端开发"}
 	feed1 := &models.Feed{ID: 1, Title: "Feed 1"}
+	feed2 := &models.Feed{ID: 2, Title: "Feed 2"}
+	feed3 := &models.Feed{ID: 3, Title: "Feed 3"}
 
 	summaries := []models.AISummary{
 		{
 			ID:       1,
+			FeedID:   &feed1.ID,
 			Title:    "Test Summary 1",
 			Category: category1,
 			Feed:     feed1,
 		},
 		{
 			ID:       2,
+			FeedID:   &feed2.ID,
 			Title:    "Test Summary 2",
 			Category: category1,
-			Feed:     feed1,
+			Feed:     feed2,
 		},
 		{
 			ID:       3,
+			FeedID:   &feed3.ID,
 			Title:    "Test Summary 3",
 			Category: category2,
-			Feed:     feed1,
+			Feed:     feed3,
 		},
 	}
 
@@ -76,5 +88,12 @@ func TestDigestIntegrationWorkflow(t *testing.T) {
 		if catDigest.CategoryName == "前端开发" && catDigest.FeedCount != 1 {
 			t.Errorf("前端开发 category should have 1 feed, got %d", catDigest.FeedCount)
 		}
+	}
+}
+
+func requireNoError(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

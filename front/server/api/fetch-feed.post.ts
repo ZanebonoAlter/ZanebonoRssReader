@@ -15,16 +15,17 @@ export default defineEventHandler(async (event) => {
     // Using RSS2JSON API as a CORS proxy
     const apiUrl = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(url)}`
 
-    const response: FeedResponse = await $fetch(apiUrl)
+    const response = await fetch(apiUrl)
+    const payload = await response.json() as FeedResponse
 
-    if (response.status !== 'ok') {
+    if (!response.ok || payload.status !== 'ok') {
       throw createError({
         statusCode: 400,
         statusMessage: 'Failed to parse RSS feed'
       })
     }
 
-    return response
+    return payload
   } catch (e) {
     throw createError({
       statusCode: 500,

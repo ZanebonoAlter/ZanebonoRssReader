@@ -3,7 +3,9 @@ import { Icon } from '@iconify/vue'
 import LayoutAppHeader from '~/features/shell/components/AppHeaderShell.vue'
 import LayoutAppSidebar from '~/features/shell/components/AppSidebarShell.vue'
 import LayoutArticleListPanel from '~/features/shell/components/ArticleListPanelShell.vue'
+import { useArticlesApi } from '~/api/articles'
 import ArticleContent from '~/features/articles/components/ArticleContentView.vue'
+import { normalizeArticle } from '../../articles/utils/normalizeArticle'
 import { useGlobalAutoRefresh } from '~/features/feeds/composables/useAutoRefresh'
 import AISummariesList from '~/features/summaries/components/AISummariesListView.vue'
 import AISummaryDetail from '~/features/summaries/components/AISummaryDetailView.vue'
@@ -12,6 +14,7 @@ import { SIDEBAR_DEFAULT_WIDTH, MAX_POLLING_TIME, REFRESH_POLLING_INTERVAL } fro
 const apiStore = useApiStore()
 const feedsStore = useFeedsStore()
 const articlesStore = useArticlesStore()
+const articlesApi = useArticlesApi()
 
 // 初始化全局自动刷新
 useGlobalAutoRefresh()
@@ -84,9 +87,22 @@ onUnmounted(() => {
   stopPollingRefreshStatus()
 })
 
+async function hydrateSelectedArticle(article: any) {
+  selectedArticle.value = article
+
+  try {
+    const response = await articlesApi.getArticle(Number(article.id))
+    if (response.success && response.data && selectedArticle.value?.id === article.id) {
+      selectedArticle.value = normalizeArticle(response.data)
+    }
+  } catch (error) {
+    console.error('Failed to load article detail:', error)
+  }
+}
+
 // 处理文章点击
 function handleArticleClick(article: any) {
-  selectedArticle.value = article
+  void hydrateSelectedArticle(article)
   // 标记为已读
   if (!article.read) {
     apiStore.markAsRead(article.id)

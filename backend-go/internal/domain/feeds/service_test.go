@@ -2,6 +2,8 @@ package feeds
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -20,7 +22,7 @@ func setupFeedsTestDB(t *testing.T) {
 	}
 
 	database.DB = db
-	if err := database.DB.AutoMigrate(&models.Feed{}, &models.Article{}); err != nil {
+	if err := database.DB.AutoMigrate(&models.Feed{}, &models.Article{}, &models.TopicTag{}, &models.ArticleTopicTag{}); err != nil {
 		t.Fatalf("migrate test db: %v", err)
 	}
 }
@@ -108,6 +110,58 @@ func TestCleanupOldArticlesKeepsActiveCompletionArticles(t *testing.T) {
 	}
 	if titles["middle complete"] {
 		t.Fatalf("expected oldest removable complete article to be deleted, remaining = %#v", titles)
+	}
+}
+
+func TestRefreshFeedTagsArticlesImmediatelyWhenCompletionDisabled(t *testing.T) {
+	setupFeedsTestDB(t)
+
+	rssServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/rss+xml")
+		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>OpenAI Feed</title>
+    <description>Feed for tests</description>
+    <link>https://example.com</link>
+    <item>
+      <title>OpenAI launches new AI agent runtime</title>
+      <link>https://example.com/openai-agent</link>
+      <description>OpenAI agentic workflow update</description>
+      <pubDate>Sun, 22 Mar 2026 09:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>`))
+	}))
+	defer rssServer.Close()
+
+	feed := models.Feed{
+		Title:                 "Seed Feed",
+		URL:                   rssServer.URL,
+		MaxArticles:           10,
+		FirecrawlEnabled:      false,
+		ArticleSummaryEnabled: false,
+	}
+	if err := database.DB.Create(&feed).Error; err != nil {
+		t.Fatalf("create feed: %v", err)
+	}
+
+	service := NewFeedService()
+	if err := service.RefreshFeed(feed.ID); err != nil {
+		t.Fatalf("refresh feed: %v", err)
+	}
+
+	var article models.Article
+	if err := database.DB.First(&article).Error; err != nil {
+		t.Fatalf("load article: %v", err)
+	}
+
+	var tagCount int64
+	if err := database.DB.Model(&models.ArticleTopicTag{}).Where("article_id = ?", article.ID).Count(&tagCount).Error; err != nil {
+		t.Fatalf("count article tags: %v", err)
+	}
+	if tagCount == 0 {
+		t.Fatal("expected article tags to be created during refresh when completion is disabled")
 	}
 }
 

@@ -418,8 +418,8 @@ func (s *AutoSummaryScheduler) generateSummaryForFeed(feed *models.Feed) (bool, 
 			if err := topicextraction.TagSummary(existingSummary); err != nil {
 				log.Printf("[WARN] Failed to backfill tags for existing auto summary %d: %v", existingSummary.ID, err)
 			}
-			if err := topicextraction.TagArticles(batch, feedName, categoryName); err != nil {
-				log.Printf("[WARN] Failed to tag articles for existing summary feed %d batch %d: %v", feed.ID, batchNum, err)
+			if err := topicextraction.BackfillArticleTags(batch, feedName, categoryName); err != nil {
+				log.Printf("[WARN] Failed to backfill article tags for existing summary feed %d batch %d: %v", feed.ID, batchNum, err)
 			}
 			continue
 		}
@@ -477,8 +477,8 @@ func (s *AutoSummaryScheduler) generateSummaryForFeed(feed *models.Feed) (bool, 
 			log.Printf("[WARN] Failed to tag auto summary %d: %v", aiSummary.ID, err)
 		}
 
-		if err := topicextraction.TagArticles(batch, feedName, categoryName); err != nil {
-			log.Printf("[WARN] Failed to tag articles for feed %d batch %d: %v", feed.ID, batchNum, err)
+		if err := topicextraction.BackfillArticleTags(batch, feedName, categoryName); err != nil {
+			log.Printf("[WARN] Failed to backfill article tags for feed %d batch %d: %v", feed.ID, batchNum, err)
 		}
 
 		log.Printf("Successfully generated summary for feed %d batch %d/%d (ID: %d)", feed.ID, batchNum, totalBatches, aiSummary.ID)

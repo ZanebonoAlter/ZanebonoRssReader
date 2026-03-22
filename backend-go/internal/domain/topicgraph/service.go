@@ -442,18 +442,37 @@ func summaryTopics(summary models.AISummary) []topictypes.TopicTag {
 }
 
 func mapSummaryCard(summary models.AISummary, topics []topictypes.TopicTag, articles []topictypes.TopicArticleCard) topictypes.TopicSummaryCard {
-	return topictypes.TopicSummaryCard{
-		ID:           summary.ID,
-		Title:        summary.Title,
-		Summary:      summary.Summary,
-		FeedName:     feedLabel(summary),
-		FeedColor:    feedColor(summary),
-		CategoryName: categoryLabel(summary),
-		ArticleCount: summary.ArticleCount,
-		CreatedAt:    summary.CreatedAt.In(topictypes.TopicGraphCST).Format(time.RFC3339),
-		Topics:       topics,
-		Articles:     articles,
+	aggregatedTags, err := topicextraction.AggregateArticleTags(parseTopicSummaryArticleIDs(summary.Articles))
+	if err != nil {
+		aggregatedTags = []topictypes.AggregatedTopicTag{}
 	}
+
+	return topictypes.TopicSummaryCard{
+		ID:             summary.ID,
+		Title:          summary.Title,
+		Summary:        summary.Summary,
+		FeedName:       feedLabel(summary),
+		FeedColor:      feedColor(summary),
+		CategoryName:   categoryLabel(summary),
+		ArticleCount:   summary.ArticleCount,
+		CreatedAt:      summary.CreatedAt.In(topictypes.TopicGraphCST).Format(time.RFC3339),
+		Topics:         topics,
+		AggregatedTags: aggregatedTags,
+		Articles:       articles,
+	}
+}
+
+func parseTopicSummaryArticleIDs(raw string) []uint {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+
+	var articleIDs []uint
+	if err := json.Unmarshal([]byte(raw), &articleIDs); err != nil {
+		return nil
+	}
+
+	return articleIDs
 }
 
 func containsTopic(items []topictypes.TopicTag, slug string) bool {

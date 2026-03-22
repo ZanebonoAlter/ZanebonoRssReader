@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"my-robot-backend/internal/domain/models"
+	"my-robot-backend/internal/domain/topicextraction"
 	"my-robot-backend/internal/domain/topictypes"
 	"my-robot-backend/internal/platform/database"
 )
@@ -13,15 +14,16 @@ import (
 // HotspotDigestCard represents a digest summary for hotspot display
 // Returned when tracing from article tag back to containing digests
 type HotspotDigestCard struct {
-	ID              uint                `json:"id"`
-	Title           string              `json:"title"`
-	Summary         string              `json:"summary"`
-	FeedName        string              `json:"feed_name"`
-	FeedColor       string              `json:"feed_color"`
-	CategoryName    string              `json:"category_name"`
-	ArticleCount    int                 `json:"article_count"`
-	CreatedAt       time.Time           `json:"created_at"`
-	MatchedArticles []HotspotArticleRef `json:"matched_articles,omitempty"`
+	ID              uint                            `json:"id"`
+	Title           string                          `json:"title"`
+	Summary         string                          `json:"summary"`
+	FeedName        string                          `json:"feed_name"`
+	FeedColor       string                          `json:"feed_color"`
+	CategoryName    string                          `json:"category_name"`
+	ArticleCount    int                             `json:"article_count"`
+	CreatedAt       time.Time                       `json:"created_at"`
+	AggregatedTags  []topictypes.AggregatedTopicTag `json:"aggregated_tags"`
+	MatchedArticles []HotspotArticleRef             `json:"matched_articles,omitempty"`
 }
 
 // HotspotArticleRef represents a matched article reference
@@ -90,6 +92,11 @@ func GetDigestsByArticleTag(tagSlug string, kind string, anchor time.Time, limit
 			MatchedArticles: matchedArticles,
 		}
 
+		aggregatedTags, err := topicextraction.AggregateArticleTags(parseSummaryArticleIDs(summary.Articles))
+		if err == nil {
+			card.AggregatedTags = aggregatedTags
+		}
+
 		if summary.Feed != nil {
 			card.FeedName = summary.Feed.Title
 			card.FeedColor = summary.Feed.Color
@@ -106,6 +113,19 @@ func GetDigestsByArticleTag(tagSlug string, kind string, anchor time.Time, limit
 	}
 
 	return result, nil
+}
+
+func parseSummaryArticleIDs(raw string) []uint {
+	if raw == "" {
+		return nil
+	}
+
+	var articleIDs []uint
+	if err := json.Unmarshal([]byte(raw), &articleIDs); err != nil {
+		return nil
+	}
+
+	return articleIDs
 }
 
 // getMatchedArticlesFromSummary extracts matched articles from a summary's articles JSON field

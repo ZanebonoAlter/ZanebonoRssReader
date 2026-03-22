@@ -30,6 +30,16 @@ export interface TopicTag {
   score: number
 }
 
+export interface AggregatedTopicTag {
+  slug: string
+  label: string
+  category: TopicCategory
+  kind?: TopicKind
+  icon?: string
+  score: number
+  article_count: number
+}
+
 export interface GraphNode {
   id: string
   label: string
@@ -81,6 +91,7 @@ export interface HotspotDigestCard {
   category_name: string
   article_count: number
   created_at: string
+  aggregated_tags: AggregatedTopicTag[]
   matched_articles?: Array<{
     id: number
     title: string
@@ -102,6 +113,7 @@ export interface TopicGraphSummaryCard {
   article_count: number
   created_at: string
   topics: TopicTag[]
+  aggregated_tags: AggregatedTopicTag[]
   articles: Array<{
     id: number
     title: string

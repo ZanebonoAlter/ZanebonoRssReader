@@ -12,7 +12,11 @@ import {
 } from '~/api/topicGraph'
 import type { Article } from '~/types'
 import type { TimelineDigest, TimelineDigestSelection, TimelineFilters } from '~/types/timeline'
+import ArticleTagList from '../../articles/components/ArticleTagList.vue'
 import ArticleContentView from '~/features/articles/components/ArticleContentView.vue'
+import DigestDetail from '../../digest/components/DigestDetail.vue'
+import { normalizeArticle } from '../../articles/utils/normalizeArticle'
+import type { DigestPreviewSummary } from '~/api/digest'
 import TopicGraphCanvas from '~/features/topic-graph/components/TopicGraphCanvas.client.vue'
 import TopicGraphFooterPanels from '~/features/topic-graph/components/TopicGraphFooterPanels.vue'
 import TopicGraphHeader from '~/features/topic-graph/components/TopicGraphHeader.vue'
@@ -182,11 +186,11 @@ const hotspotCategories = computed(() => ([
     icon: 'mdi:calendar-alert-outline',
     headerClass: 'topic-category-header--event',
     topics: hotspotData.value?.events || [],
-    filteredTopics: filterTopics(hotspotData.value?.events || [], hotspotSearchQueries.value.event),
+    filteredTopics: filterTopics(hotspotData.value?.events || [], hotspotSearchQueries.value.event || ''),
     displayTopics: hotspotShowAll.value.event 
-      ? filterTopics(hotspotData.value?.events || [], hotspotSearchQueries.value.event)
-      : filterTopics(hotspotData.value?.events || [], hotspotSearchQueries.value.event).slice(0, 8),
-    hasMore: filterTopics(hotspotData.value?.events || [], hotspotSearchQueries.value.event).length > 8,
+      ? filterTopics(hotspotData.value?.events || [], hotspotSearchQueries.value.event || '')
+      : filterTopics(hotspotData.value?.events || [], hotspotSearchQueries.value.event || '').slice(0, 8),
+    hasMore: filterTopics(hotspotData.value?.events || [], hotspotSearchQueries.value.event || '').length > 8,
     showAll: hotspotShowAll.value.event,
   },
   {
@@ -195,11 +199,11 @@ const hotspotCategories = computed(() => ([
     icon: 'mdi:account-voice-outline',
     headerClass: 'topic-category-header--person',
     topics: hotspotData.value?.people || [],
-    filteredTopics: filterTopics(hotspotData.value?.people || [], hotspotSearchQueries.value.person),
+    filteredTopics: filterTopics(hotspotData.value?.people || [], hotspotSearchQueries.value.person || ''),
     displayTopics: hotspotShowAll.value.person
-      ? filterTopics(hotspotData.value?.people || [], hotspotSearchQueries.value.person)
-      : filterTopics(hotspotData.value?.people || [], hotspotSearchQueries.value.person).slice(0, 8),
-    hasMore: filterTopics(hotspotData.value?.people || [], hotspotSearchQueries.value.person).length > 8,
+      ? filterTopics(hotspotData.value?.people || [], hotspotSearchQueries.value.person || '')
+      : filterTopics(hotspotData.value?.people || [], hotspotSearchQueries.value.person || '').slice(0, 8),
+    hasMore: filterTopics(hotspotData.value?.people || [], hotspotSearchQueries.value.person || '').length > 8,
     showAll: hotspotShowAll.value.person,
   },
   {
@@ -208,11 +212,11 @@ const hotspotCategories = computed(() => ([
     icon: 'mdi:key-variant',
     headerClass: 'topic-category-header--keyword',
     topics: hotspotData.value?.keywords || [],
-    filteredTopics: filterTopics(hotspotData.value?.keywords || [], hotspotSearchQueries.value.keyword),
+    filteredTopics: filterTopics(hotspotData.value?.keywords || [], hotspotSearchQueries.value.keyword || ''),
     displayTopics: hotspotShowAll.value.keyword
-      ? filterTopics(hotspotData.value?.keywords || [], hotspotSearchQueries.value.keyword)
-      : filterTopics(hotspotData.value?.keywords || [], hotspotSearchQueries.value.keyword).slice(0, 8),
-    hasMore: filterTopics(hotspotData.value?.keywords || [], hotspotSearchQueries.value.keyword).length > 8,
+      ? filterTopics(hotspotData.value?.keywords || [], hotspotSearchQueries.value.keyword || '')
+      : filterTopics(hotspotData.value?.keywords || [], hotspotSearchQueries.value.keyword || '').slice(0, 8),
+    hasMore: filterTopics(hotspotData.value?.keywords || [], hotspotSearchQueries.value.keyword || '').length > 8,
     showAll: hotspotShowAll.value.keyword,
   },
 ]))
@@ -229,7 +233,7 @@ const timelineItems = computed((): TimelineDigest[] => {
       feedName: summary.feed_name,
       categoryName: summary.category_name,
       articleCount: summary.article_count,
-      tags: summary.topics.map(topic => ({
+      tags: summary.aggregated_tags.map(topic => ({
         slug: topic.slug,
         label: topic.label,
         category: normalizeTopicCategory(topic.category, topic.kind),
@@ -256,7 +260,11 @@ const hotspotTimelineItems = computed((): TimelineDigest[] => {
       feedName: digest.feed_name,
       categoryName: digest.category_name,
       articleCount: digest.article_count,
-      tags: [], // Hotspot digests don't have tags in the response
+      tags: digest.aggregated_tags.map(tag => ({
+        slug: tag.slug,
+        label: tag.label,
+        category: normalizeTopicCategory(tag.category, tag.kind),
+      })),
       articles: digest.matched_articles?.map(article => ({
         id: article.id,
         title: article.title,
@@ -306,6 +314,34 @@ const selectedDigest = computed<TimelineDigestSelection | null>(() => {
 const previewDigest = computed(() => {
   if (!previewDigestId.value) return null
   return effectiveTimelineItems.value.find(item => item.id === previewDigestId.value) || null
+})
+const previewDigestSummary = computed<DigestPreviewSummary | null>(() => {
+  if (!previewDigest.value) return null
+
+  const summarySource = detail.value?.summaries.find(item => String(item.id) === previewDigest.value?.id)
+  const hotspotSource = hotspotDigests.value.find(item => String(item.id) === previewDigest.value?.id)
+
+  return {
+    id: Number(previewDigest.value.id),
+    feed_id: null,
+    feed_name: previewDigest.value.feedName,
+    feed_icon: 'mdi:rss',
+    feed_color: summarySource?.feed_color || hotspotSource?.feed_color || '#3b6b87',
+    category_id: 0,
+    category_name: previewDigest.value.categoryName,
+    summary_text: previewDigest.value.summary,
+    article_count: previewDigest.value.articleCount,
+    article_ids: previewDigest.value.articles.map(article => article.id),
+    topics: [],
+    aggregated_tags: previewDigest.value.tags.map(tag => ({
+      slug: tag.slug,
+      label: tag.label,
+      category: tag.category,
+      score: 0,
+      article_count: 0,
+    })),
+    created_at: previewDigest.value.createdAt,
+  }
 })
 const statCards = computed(() => ([
   { label: '主题数', value: viewModel.value.stats.topicCount },
@@ -524,7 +560,7 @@ async function openArticlePreview(articleId: number) {
       return
     }
 
-    selectedPreviewArticle.value = normalizeArticle(response.data as any)
+    selectedPreviewArticle.value = normalizeArticle(response.data)
 
     if (detail.value) {
       const ids = detail.value.summaries.flatMap(summary => summary.articles.map(article => article.id))
@@ -532,7 +568,7 @@ async function openArticlePreview(articleId: number) {
       const articleResponses = await Promise.all(uniqueIds.slice(0, 12).map(id => articlesApi.getArticle(id)))
       previewArticles.value = articleResponses
         .filter(item => item.success && item.data)
-        .map(item => normalizeArticle(item.data as any))
+        .map(item => normalizeArticle(item.data))
     }
   } catch (error) {
     console.error('Failed to open article preview:', error)
@@ -544,32 +580,6 @@ async function openArticlePreview(articleId: number) {
 
 function closeArticlePreview() {
   selectedPreviewArticle.value = null
-}
-
-function normalizeArticle(article: any): Article {
-  return {
-    id: String(article.id),
-    feedId: String(article.feed_id),
-    title: article.title,
-    description: article.description || '',
-    content: article.content || '',
-    link: article.link,
-    pubDate: article.pub_date || article.created_at || '',
-    author: article.author,
-    category: article.category_id ? String(article.category_id) : '',
-    read: article.read || false,
-    favorite: article.favorite || false,
-    summaryStatus: article.summary_status,
-    summaryGeneratedAt: article.summary_generated_at,
-    completionAttempts: article.completion_attempts,
-    completionError: article.completion_error,
-    aiContentSummary: article.ai_content_summary,
-    firecrawlStatus: article.firecrawl_status,
-    firecrawlError: article.firecrawl_error,
-    firecrawlContent: article.firecrawl_content,
-    firecrawlCrawledAt: article.firecrawl_crawled_at,
-    imageUrl: article.image_url,
-  }
 }
 
 function handleTimelineFilterChange(filters: TimelineFilters) {
@@ -1069,46 +1079,20 @@ await loadGraph()
         data-testid="topic-graph-digest-preview"
         @click.self="closeDigestPreview"
       >
-        <div class="topic-digest-modal__panel">
-          <header class="topic-digest-modal__header">
-            <div>
-              <p class="text-xs uppercase tracking-[0.24em] text-white/42">日报预览</p>
-              <h3 class="mt-3 font-serif text-2xl text-white">{{ previewDigest.title }}</h3>
-              <p class="mt-2 text-sm text-white/58">{{ previewDigest.feedName }} · {{ previewDigest.createdAt }}</p>
-            </div>
+        <div class="topic-digest-modal__panel topic-digest-modal__panel--detail">
+          <button
+            class="topic-digest-modal__close btn-ghost min-h-11 min-w-11 px-0"
+            type="button"
+            aria-label="关闭日报弹窗"
+            @click="closeDigestPreview"
+          >
+            <Icon icon="mdi:close" width="18" />
+          </button>
 
-            <button
-              class="btn-ghost min-h-11 min-w-11 px-0"
-              type="button"
-              aria-label="关闭日报弹窗"
-              @click="closeDigestPreview"
-            >
-              <Icon icon="mdi:close" width="18" />
-            </button>
-          </header>
-
-          <div class="topic-digest-modal__body">
-            <p class="topic-digest-modal__summary">{{ previewDigest.summary }}</p>
-
-            <div v-if="previewDigest.tags.length" class="topic-digest-modal__tags">
-              <span v-for="tag in previewDigest.tags" :key="tag.slug" class="topic-digest-modal__tag">
-                {{ tag.label }}
-              </span>
-            </div>
-
-            <div class="topic-digest-modal__sources">
-              <p class="text-xs uppercase tracking-[0.22em] text-white/42">来源文章</p>
-              <button
-                v-for="article in previewDigest.articles"
-                :key="article.id"
-                type="button"
-                class="topic-digest-modal__source"
-                @click="openArticlePreview(article.id)"
-              >
-                {{ article.title }}
-              </button>
-            </div>
-          </div>
+          <DigestDetail
+            :summary="previewDigestSummary"
+            active-type-label="日报"
+          />
         </div>
       </div>
     </Teleport>
@@ -1141,6 +1125,7 @@ await loadGraph()
             <ArticleContentView
               :article="selectedPreviewArticle"
               :articles="previewArticles"
+              :highlighted-tag-slugs="selectedTopicSlug ? [selectedTopicSlug] : []"
               @navigate="selectedPreviewArticle = $event"
             />
           </div>

@@ -369,8 +369,8 @@ func (q *SummaryQueue) generateSummaryForFeed(feedID *uint, categoryID *uint, fe
 			if err := topicextraction.TagSummary(existingSummary); err != nil {
 				log.Printf("[WARN] Failed to backfill tags for existing summary %d: %v", existingSummary.ID, err)
 			}
-			if err := topicextraction.TagArticles(batch, displayName, categoryName); err != nil {
-				log.Printf("[WARN] Failed to tag articles for existing feed %d batch %d: %v", *feedID, batchNum, err)
+			if err := topicextraction.BackfillArticleTags(batch, displayName, categoryName); err != nil {
+				log.Printf("[WARN] Failed to backfill article tags for existing feed %d batch %d: %v", *feedID, batchNum, err)
 			}
 			lastSummary = existingSummary
 			continue
@@ -422,8 +422,8 @@ func (q *SummaryQueue) generateSummaryForFeed(feedID *uint, categoryID *uint, fe
 			log.Printf("[WARN] Failed to tag summary %d: %v", aiSummary.ID, err)
 		}
 
-		if err := topicextraction.TagArticles(batch, displayName, categoryName); err != nil {
-			log.Printf("[WARN] Failed to tag articles for feed %d batch %d: %v", *feedID, batchNum, err)
+		if err := topicextraction.BackfillArticleTags(batch, displayName, categoryName); err != nil {
+			log.Printf("[WARN] Failed to backfill article tags for feed %d batch %d: %v", *feedID, batchNum, err)
 		}
 
 		lastSummary = &aiSummary

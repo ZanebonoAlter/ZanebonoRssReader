@@ -25,6 +25,9 @@ func setupServicesTestDB(t *testing.T) {
 	}
 
 	database.DB = db
+	if err := database.DB.AutoMigrate(&models.TopicTag{}, &models.ArticleTopicTag{}); err != nil {
+		t.Fatalf("migrate topic tag tables: %v", err)
+	}
 	if err := database.DB.AutoMigrate(&models.Feed{}, &models.Article{}, &models.SchedulerTask{}, &models.AIProvider{}, &models.AIRoute{}, &models.AIRouteProvider{}, &models.AICallLog{}); err != nil {
 		t.Fatalf("migrate test db: %v", err)
 	}
@@ -378,5 +381,50 @@ func TestCompleteArticleWithMetadataAddsSchedulerRunIDToCallLogs(t *testing.T) {
 	}
 	if meta["trigger_source"] != "scheduler" {
 		t.Fatalf("trigger_source = %v, want scheduler", meta["trigger_source"])
+	}
+}
+
+func TestCompleteArticleTagsArticleAfterSuccessfulCompletion(t *testing.T) {
+	setupServicesTestDB(t)
+
+	aiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"# OpenAI Agent Brief\n\n- OpenAI shipped an AI agent workflow."}}]}`))
+	}))
+	defer aiServer.Close()
+
+	provider := models.AIProvider{Name: "completion-primary", ProviderType: airouter.ProviderTypeOpenAICompatible, BaseURL: aiServer.URL, APIKey: "token", Model: "test-model", Enabled: true}
+	if err := database.DB.Create(&provider).Error; err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+	route := models.AIRoute{Name: airouter.DefaultRouteName, Capability: string(airouter.CapabilityArticleCompletion), Enabled: true, Strategy: "ordered_failover"}
+	if err := database.DB.Create(&route).Error; err != nil {
+		t.Fatalf("create route: %v", err)
+	}
+	if err := database.DB.Create(&models.AIRouteProvider{RouteID: route.ID, ProviderID: provider.ID, Priority: 1, Enabled: true}).Error; err != nil {
+		t.Fatalf("create route provider: %v", err)
+	}
+
+	feed := models.Feed{Title: "OpenAI Feed", URL: fmt.Sprintf("https://example.com/%s", t.Name()), ArticleSummaryEnabled: true, FirecrawlEnabled: true, MaxCompletionRetries: 2}
+	if err := database.DB.Create(&feed).Error; err != nil {
+		t.Fatalf("create feed: %v", err)
+	}
+
+	article := models.Article{FeedID: feed.ID, Title: "Daily brief", Link: "https://example.com/tag-after-completion", FirecrawlStatus: "completed", FirecrawlContent: "OpenAI built an AI agent runtime.", SummaryStatus: "incomplete"}
+	if err := database.DB.Create(&article).Error; err != nil {
+		t.Fatalf("create article: %v", err)
+	}
+
+	service := NewContentCompletionService("http://localhost:11235")
+	if err := service.CompleteArticle(article.ID); err != nil {
+		t.Fatalf("complete article: %v", err)
+	}
+
+	var tagCount int64
+	if err := database.DB.Model(&models.ArticleTopicTag{}).Where("article_id = ?", article.ID).Count(&tagCount).Error; err != nil {
+		t.Fatalf("count article tags: %v", err)
+	}
+	if tagCount == 0 {
+		t.Fatal("expected article tags to be created after successful completion")
 	}
 }

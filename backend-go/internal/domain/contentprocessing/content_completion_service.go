@@ -8,6 +8,7 @@ import (
 
 	"gorm.io/gorm"
 	"my-robot-backend/internal/domain/models"
+	"my-robot-backend/internal/domain/topicextraction"
 	platformai "my-robot-backend/internal/platform/ai"
 	"my-robot-backend/internal/platform/airouter"
 	"my-robot-backend/internal/platform/database"
@@ -178,6 +179,10 @@ func (s *ContentCompletionService) CompleteArticleWithMetadata(articleID uint, f
 
 	if err := database.DB.Save(&article).Error; err != nil {
 		return fmt.Errorf("failed to save article: %w", err)
+	}
+
+	if err := topicextraction.RetagArticle(&article, feed.Title, ""); err != nil {
+		return fmt.Errorf("retag article after completion: %w", err)
 	}
 
 	return nil

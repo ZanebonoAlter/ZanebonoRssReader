@@ -5,18 +5,36 @@ import (
 	"encoding/json"
 	"fmt"
 	"my-robot-backend/internal/domain/topictypes"
+	"sort"
 	"strings"
 
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/platform/database"
 )
 
-// TagArticle extracts and stores tags for a single article
-// This is called during auto_summary to tag individual articles
-// Skips if the article already has tags (dedup)
+type tagArticleOptions struct {
+	Force bool
+}
+
+// TagArticle extracts and stores tags for a single article.
 func TagArticle(article *models.Article, feedName, categoryName string) error {
+	return tagArticle(article, feedName, categoryName, tagArticleOptions{})
+}
+
+// RetagArticle replaces existing tags using the latest article content.
+func RetagArticle(article *models.Article, feedName, categoryName string) error {
+	return tagArticle(article, feedName, categoryName, tagArticleOptions{Force: true})
+}
+
+func tagArticle(article *models.Article, feedName, categoryName string, options tagArticleOptions) error {
 	if article == nil || article.ID == 0 {
 		return nil
+	}
+
+	if options.Force {
+		if err := database.DB.Where("article_id = ?", article.ID).Delete(&models.ArticleTopicTag{}).Error; err != nil {
+			return err
+		}
 	}
 
 	// Skip if already tagged
@@ -79,12 +97,15 @@ func TagArticle(article *models.Article, feedName, categoryName string) error {
 
 // buildArticleSummary builds a summary text from article fields
 func buildArticleSummary(article models.Article) string {
-	summary := article.Description
+	summary := strings.TrimSpace(article.AIContentSummary)
 	if summary == "" {
-		summary = article.Content
+		summary = strings.TrimSpace(article.FirecrawlContent)
 	}
-	if summary == "" && article.FirecrawlContent != "" {
-		summary = article.FirecrawlContent
+	if summary == "" {
+		summary = strings.TrimSpace(article.Content)
+	}
+	if summary == "" {
+		summary = strings.TrimSpace(article.Description)
 	}
 	return summary
 }
@@ -100,6 +121,31 @@ func TagArticles(articles []models.Article, feedName, categoryName string) error
 		if err := TagArticle(&articles[i], feedName, categoryName); err != nil {
 			// Log error but continue processing other articles
 			fmt.Printf("[WARN] Failed to tag article %d: %v\n", articles[i].ID, err)
+		}
+	}
+
+	return nil
+}
+
+// BackfillArticleTags only tags articles that currently have no article tags.
+// This is a fallback path for summary-time repair, not the main tagging flow.
+func BackfillArticleTags(articles []models.Article, feedName, categoryName string) error {
+	if len(articles) == 0 {
+		return nil
+	}
+
+	for i := range articles {
+		var existingCount int64
+		if err := database.DB.Model(&models.ArticleTopicTag{}).Where("article_id = ?", articles[i].ID).Count(&existingCount).Error; err != nil {
+			fmt.Printf("[WARN] Failed to inspect article tags for %d: %v\n", articles[i].ID, err)
+			continue
+		}
+		if existingCount > 0 {
+			continue
+		}
+
+		if err := TagArticle(&articles[i], feedName, categoryName); err != nil {
+			fmt.Printf("[WARN] Failed to backfill article %d tags: %v\n", articles[i].ID, err)
 		}
 	}
 
@@ -130,6 +176,92 @@ func GetArticleTags(articleID uint) ([]topictypes.TopicTag, error) {
 			Score:    link.Score,
 		})
 	}
+
+	return result, nil
+}
+
+func AggregateArticleTags(articleIDs []uint) ([]topictypes.AggregatedTopicTag, error) {
+	if len(articleIDs) == 0 {
+		return []topictypes.AggregatedTopicTag{}, nil
+	}
+
+	uniqueIDs := make([]uint, 0, len(articleIDs))
+	seenArticleIDs := make(map[uint]struct{}, len(articleIDs))
+	for _, articleID := range articleIDs {
+		if articleID == 0 {
+			continue
+		}
+		if _, exists := seenArticleIDs[articleID]; exists {
+			continue
+		}
+		seenArticleIDs[articleID] = struct{}{}
+		uniqueIDs = append(uniqueIDs, articleID)
+	}
+
+	if len(uniqueIDs) == 0 {
+		return []topictypes.AggregatedTopicTag{}, nil
+	}
+
+	var links []models.ArticleTopicTag
+	err := database.DB.Where("article_id IN ?", uniqueIDs).
+		Preload("TopicTag").
+		Find(&links).Error
+	if err != nil {
+		return nil, err
+	}
+
+	aggregatedBySlug := make(map[string]*topictypes.AggregatedTopicTag)
+	articleSeenBySlug := make(map[string]map[uint]struct{})
+
+	for _, link := range links {
+		if link.TopicTag == nil {
+			continue
+		}
+
+		slug := link.TopicTag.Slug
+		if slug == "" {
+			continue
+		}
+
+		item, exists := aggregatedBySlug[slug]
+		if !exists {
+			item = &topictypes.AggregatedTopicTag{
+				Slug:     slug,
+				Label:    link.TopicTag.Label,
+				Category: topictypes.NormalizeDisplayCategory(link.TopicTag.Kind, link.TopicTag.Category),
+				Kind:     topictypes.NormalizeTopicKind(link.TopicTag.Kind, link.TopicTag.Category),
+				Icon:     link.TopicTag.Icon,
+				Aliases:  parseAliasesFromJSON(link.TopicTag.Aliases),
+				Score:    0,
+			}
+			aggregatedBySlug[slug] = item
+		}
+
+		item.Score += link.Score
+
+		if articleSeenBySlug[slug] == nil {
+			articleSeenBySlug[slug] = make(map[uint]struct{})
+		}
+		if _, exists := articleSeenBySlug[slug][link.ArticleID]; !exists {
+			articleSeenBySlug[slug][link.ArticleID] = struct{}{}
+			item.ArticleCount++
+		}
+	}
+
+	result := make([]topictypes.AggregatedTopicTag, 0, len(aggregatedBySlug))
+	for _, item := range aggregatedBySlug {
+		result = append(result, *item)
+	}
+
+	sort.SliceStable(result, func(i, j int) bool {
+		if result[i].ArticleCount == result[j].ArticleCount {
+			if result[i].Score == result[j].Score {
+				return result[i].Label < result[j].Label
+			}
+			return result[i].Score > result[j].Score
+		}
+		return result[i].ArticleCount > result[j].ArticleCount
+	})
 
 	return result, nil
 }

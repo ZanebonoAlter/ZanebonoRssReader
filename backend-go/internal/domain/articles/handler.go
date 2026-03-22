@@ -7,8 +7,22 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 	"my-robot-backend/internal/domain/models"
+	"my-robot-backend/internal/domain/topicextraction"
 	"my-robot-backend/internal/platform/database"
 )
+
+func loadArticleWithTagCount(articleID uint) (*models.Article, error) {
+	var article models.Article
+	if err := database.DB.Model(&models.Article{}).
+		Joins("LEFT JOIN feeds ON articles.feed_id = feeds.id").
+		Joins("LEFT JOIN (SELECT article_id, COUNT(*) AS tag_count FROM article_topic_tags GROUP BY article_id) tag_stats ON tag_stats.article_id = articles.id").
+		Select("articles.*, feeds.category_id AS category_id, COALESCE(tag_stats.tag_count, 0) AS tag_count").
+		First(&article, articleID).Error; err != nil {
+		return nil, err
+	}
+
+	return &article, nil
+}
 
 type UpdateArticleRequest struct {
 	Read     *bool `json:"read"`
@@ -50,7 +64,8 @@ func GetArticles(c *gin.Context) {
 
 	query := database.DB.Model(&models.Article{}).
 		Joins("LEFT JOIN feeds ON articles.feed_id = feeds.id").
-		Select("articles.*, feeds.category_id AS category_id")
+		Joins("LEFT JOIN (SELECT article_id, COUNT(*) AS tag_count FROM article_topic_tags GROUP BY article_id) tag_stats ON tag_stats.article_id = articles.id").
+		Select("articles.*, feeds.category_id AS category_id, COALESCE(tag_stats.tag_count, 0) AS tag_count")
 
 	if feedID > 0 {
 		query = query.Where("articles.feed_id = ?", feedID)
@@ -151,11 +166,8 @@ func GetArticle(c *gin.Context) {
 		return
 	}
 
-	var article models.Article
-	if err := database.DB.Model(&models.Article{}).
-		Joins("LEFT JOIN feeds ON articles.feed_id = feeds.id").
-		Select("articles.*, feeds.category_id AS category_id").
-		First(&article, uint(id)).Error; err != nil {
+	article, err := loadArticleWithTagCount(uint(id))
+	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			c.JSON(http.StatusNotFound, gin.H{
 				"success": false,
@@ -170,9 +182,70 @@ func GetArticle(c *gin.Context) {
 		return
 	}
 
+	articleData := article.ToDict()
+	tags, err := topicextraction.GetArticleTags(article.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+	articleData["tags"] = tags
+
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"data":    article.ToDict(),
+		"data":    articleData,
+	})
+}
+
+func RetagArticleHandler(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("article_id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Invalid article ID"})
+		return
+	}
+
+	var article models.Article
+	if err := database.DB.First(&article, uint(id)).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "Article not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	var feed models.Feed
+	if err := database.DB.First(&feed, article.FeedID).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	if err := topicextraction.RetagArticle(&article, feed.Title, ""); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	refreshedArticle, err := loadArticleWithTagCount(article.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	tags, err := topicextraction.GetArticleTags(article.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "文章标签已更新",
+		"data": gin.H{
+			"tag_count": refreshedArticle.TagCount,
+			"tags":      tags,
+		},
 	})
 }
 
@@ -231,7 +304,8 @@ func UpdateArticle(c *gin.Context) {
 
 	database.DB.Model(&models.Article{}).
 		Joins("LEFT JOIN feeds ON articles.feed_id = feeds.id").
-		Select("articles.*, feeds.category_id AS category_id").
+		Joins("LEFT JOIN (SELECT article_id, COUNT(*) AS tag_count FROM article_topic_tags GROUP BY article_id) tag_stats ON tag_stats.article_id = articles.id").
+		Select("articles.*, feeds.category_id AS category_id, COALESCE(tag_stats.tag_count, 0) AS tag_count").
 		First(&article, uint(id))
 
 	c.JSON(http.StatusOK, gin.H{

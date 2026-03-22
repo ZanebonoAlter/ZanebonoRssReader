@@ -291,7 +291,7 @@ topictypes
 5. 结果写入 `ai_summaries`
 6. 新摘要写入后调用：
    - `topicextraction.TagSummary(&aiSummary)`
-   - `topicextraction.TagArticles(batch, feedName, categoryName)`
+   - `topicextraction.BackfillArticleTags(batch, feedName, categoryName)`（仅兜底补齐 article tags）
 7. topic extraction 产出的标签会继续驱动 `topicanalysis` 的分析任务
 8. 前端再通过 `/api/topic-graph/*` 和 `/api/topic-graph/analysis/*` 读取图谱和分析结果
 
@@ -309,6 +309,7 @@ topictypes
    - 分类视图数据
    - markdown 预览正文
    - 默认选中的分类和 summary
+   - 每条 digest summary 对应 article 的 `aggregated_tags` 索引
 4. `/api/digest/run/:type` 会在预览结果基础上继续执行输出：
    - Feishu 推送
    - Obsidian 导出
@@ -317,6 +318,26 @@ topictypes
 6. `/api/schedulers/status` 已经会带上 digest 的统一状态视图，`/api/digest/status` 仍保留 digest 专用状态，`/api/digest/config` 和 `/api/digest/open-notebook/config` 返回配置状态
 
 这条链路的重点是：digest 不是简单拼 markdown，而是一个“聚合 + 预览 + 多出口分发”的完整运行链。
+
+补充：digest 不再被视为“单独打 tag 的对象”，topic graph 和 digest 页里展示的 digest tags 来自其覆盖 article 的 `article_topic_tags` 聚合结果；标准文章详情接口 `/api/articles/:id` 也会直接返回 article tags，供前端通用展示。
+
+### Article 打标签时机
+
+文章标签现在按以下中文规则运行：
+
+1. 普通 refresh 新文章：入库后立即打标签
+2. 若 feed 同时开启 `Firecrawl + 自动补全`：refresh 阶段先不打，等补全成功后重打标签
+3. `auto_summary` / `summary_queue` 阶段：只做兜底补齐，只处理当前没有 article tags 的文章
+4. 前端文章详情支持手动打标签 / 重新打标签，接口为 `POST /api/articles/:article_id/tags`
+
+当前正文提取优先级为：
+
+- `AIContentSummary`
+- `FirecrawlContent`
+- `Content`
+- `Description`
+
+因此完整补全链路的文章会优先基于 AI 整理稿或 Firecrawl 全文得到标签，而 summary 阶段不再承担文章打标签主流程。
 
 ## 当前边界上的真实问题
 

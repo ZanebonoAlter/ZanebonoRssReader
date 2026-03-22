@@ -6,6 +6,7 @@ import (
 
 	"gorm.io/gorm"
 	"my-robot-backend/internal/domain/models"
+	"my-robot-backend/internal/domain/topicextraction"
 	"my-robot-backend/internal/platform/database"
 )
 
@@ -86,6 +87,12 @@ func (s *FeedService) RefreshFeed(feedID uint) error {
 			continue
 		}
 
+		if !shouldDelayArticleTagging(feed) {
+			if err := topicextraction.TagArticle(&article, feed.Title, ""); err != nil {
+				fmt.Printf("[WARN] Failed to tag article %d during refresh: %v\n", article.ID, err)
+			}
+		}
+
 		articlesAdded++
 		if articlesAdded >= feed.MaxArticles {
 			break
@@ -160,4 +167,8 @@ func (s *FeedService) buildArticleFromEntry(feed models.Feed, entry ParsedEntry)
 	}
 
 	return article
+}
+
+func shouldDelayArticleTagging(feed models.Feed) bool {
+	return feed.FirecrawlEnabled && feed.ArticleSummaryEnabled
 }
