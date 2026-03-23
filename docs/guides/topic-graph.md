@@ -268,9 +268,9 @@ Topic Graph 当前的状态主源放在 `TopicGraphPage.vue`，不是 Pinia。
 
 ### Footer Panels
 
-- 展示 history
-- 展示 analysis tabs 与分析结果
-- 提供分析刷新 / 重建入口
+- 当前显示占位信息，分析功能已禁用
+- 后续将提供独立的主题分析看板入口
+- 分析相关 API 和逻辑保留在后端，前端入口待后续实现
 
 ## 当前与 Pinia 的关系
 

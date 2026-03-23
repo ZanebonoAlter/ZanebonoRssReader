@@ -18,6 +18,7 @@ type HotspotDigestCard struct {
 	Title           string                          `json:"title"`
 	Summary         string                          `json:"summary"`
 	FeedName        string                          `json:"feed_name"`
+	FeedIcon        string                          `json:"feed_icon"`
 	FeedColor       string                          `json:"feed_color"`
 	CategoryName    string                          `json:"category_name"`
 	ArticleCount    int                             `json:"article_count"`
@@ -99,6 +100,7 @@ func GetDigestsByArticleTag(tagSlug string, kind string, anchor time.Time, limit
 
 		if summary.Feed != nil {
 			card.FeedName = summary.Feed.Title
+			card.FeedIcon = summary.Feed.Icon
 			card.FeedColor = summary.Feed.Color
 		}
 

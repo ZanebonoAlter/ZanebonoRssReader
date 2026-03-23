@@ -280,6 +280,7 @@ func GetArticlesByTag(slug, category string, limit int) ([]models.Article, error
 	}
 
 	err := query.
+		Omit("tag_count").
 		Order("articles.pub_date DESC").
 		Limit(limit).
 		Find(&articles).Error

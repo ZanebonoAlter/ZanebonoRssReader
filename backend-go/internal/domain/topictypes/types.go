@@ -100,6 +100,7 @@ type TopicSummaryCard struct {
 	Title          string               `json:"title"`
 	Summary        string               `json:"summary"`
 	FeedName       string               `json:"feed_name"`
+	FeedIcon       string               `json:"feed_icon"`
 	FeedColor      string               `json:"feed_color"`
 	CategoryName   string               `json:"category_name"`
 	ArticleCount   int                  `json:"article_count"`

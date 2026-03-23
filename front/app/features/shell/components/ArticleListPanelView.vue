@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { Icon } from '@iconify/vue'
+import { UseVirtualList } from '@vueuse/components'
 import ArticleCard from '~/features/articles/components/ArticleCardView.vue'
 import type { Article } from '~/types'
 
@@ -9,6 +10,10 @@ interface Props {
   selectedFeed?: string | null
   selectedArticle?: Article | null
   loading?: boolean
+  hasMore?: boolean
+  total?: number
+  startDate?: string
+  endDate?: string
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -16,23 +21,29 @@ const props = withDefaults(defineProps<Props>(), {
   selectedFeed: null,
   selectedArticle: null,
   loading: false,
+  hasMore: false,
+  total: 0,
+  startDate: '',
+  endDate: '',
 })
 
 const emit = defineEmits<{
   articleClick: [article: Article]
   articleFavorite: [id: string]
+  loadMore: []
+  dateFilterChange: [startDate: string, endDate: string]
+  dateFilterClear: []
 }>()
 
 const apiStore = useApiStore()
 const feedsStore = useFeedsStore()
 
-const currentPage = ref(1)
-const pageSize = ref(20)
-const startDate = ref<string>('')
-const endDate = ref<string>('')
 const showDateFilter = ref(false)
+const localStartDate = ref(props.startDate)
+const localEndDate = ref(props.endDate)
 const selectedQuickDate = ref<number | null>(null)
 const feedStatusExpanded = ref(true)
+const listContainerRef = ref<HTMLElement | null>(null)
 
 interface QuickDateOption {
   label: string
@@ -48,59 +59,12 @@ const quickDateOptions: QuickDateOption[] = [
 
 const currentFeed = computed(() => props.selectedFeed ? feedsStore.feeds.find(feed => feed.id === props.selectedFeed) ?? null : null)
 
-const dateFilteredArticles = computed(() => {
-  let result = props.articles
-
-  if (startDate.value || endDate.value) {
-    result = result.filter(article => {
-      const articleDate = new Date(article.pubDate || '')
-      if (startDate.value) {
-        const start = new Date(startDate.value)
-        start.setHours(0, 0, 0, 0)
-        if (articleDate < start) return false
-      }
-      if (endDate.value) {
-        const end = new Date(endDate.value)
-        end.setHours(23, 59, 59, 999)
-        if (articleDate > end) return false
-      }
-      return true
-    })
-  }
-
-  return result
+watch(() => props.startDate, (val) => {
+  localStartDate.value = val
 })
 
-const totalItems = computed(() => dateFilteredArticles.value.length)
-const totalPages = computed(() => Math.ceil(totalItems.value / pageSize.value))
-
-const paginatedArticles = computed(() => {
-  const start = (currentPage.value - 1) * pageSize.value
-  const end = start + pageSize.value
-  return dateFilteredArticles.value.slice(start, end)
-})
-
-const pageNumbers = computed(() => {
-  const pages: (number | string)[] = []
-  const current = currentPage.value
-  const total = totalPages.value
-  const delta = 1
-
-  if (total <= 7) {
-    for (let i = 1; i <= total; i++) pages.push(i)
-    return pages
-  }
-
-  pages.push(1)
-  const rangeStart = Math.max(2, current - delta)
-  const rangeEnd = Math.min(total - 1, current + delta)
-
-  if (rangeStart > 2) pages.push('...')
-  for (let i = rangeStart; i <= rangeEnd; i++) pages.push(i)
-  if (rangeEnd < total - 1) pages.push('...')
-  pages.push(total)
-
-  return pages
+watch(() => props.endDate, (val) => {
+  localEndDate.value = val
 })
 
 const panelTitle = computed(() => {
@@ -151,25 +115,6 @@ const feedStatusItems = computed(() => {
   ]
 })
 
-watch(() => props.articles, () => {
-  currentPage.value = 1
-}, { deep: true })
-
-watch([startDate, endDate], () => {
-  currentPage.value = 1
-})
-
-function changePage(page: number) {
-  if (page >= 1 && page <= totalPages.value) {
-    currentPage.value = page
-  }
-}
-
-function changePageSize(size: number) {
-  pageSize.value = size
-  currentPage.value = 1
-}
-
 function applyQuickDateFilter(days: number) {
   if (selectedQuickDate.value === days) {
     selectedQuickDate.value = null
@@ -182,16 +127,21 @@ function applyQuickDateFilter(days: number) {
   const start = new Date()
   start.setDate(start.getDate() - days)
 
-  endDate.value = end.toISOString().split('T')[0] || ''
-  startDate.value = start.toISOString().split('T')[0] || ''
-  currentPage.value = 1
+  localStartDate.value = start.toISOString().split('T')[0] || ''
+  localEndDate.value = end.toISOString().split('T')[0] || ''
+  emit('dateFilterChange', localStartDate.value, localEndDate.value)
+}
+
+function applyCustomDateFilter() {
+  emit('dateFilterChange', localStartDate.value, localEndDate.value)
 }
 
 function clearDateFilter() {
-  startDate.value = ''
-  endDate.value = ''
+  localStartDate.value = ''
+  localEndDate.value = ''
   showDateFilter.value = false
   selectedQuickDate.value = null
+  emit('dateFilterClear')
 }
 
 function handleArticleClick(article: Article) {
@@ -209,6 +159,16 @@ function statusToneClasses(tone: string) {
   return 'border-stone-200 bg-stone-100 text-stone-700'
 }
 
+function handleScroll(event: Event) {
+  const target = event.target as HTMLElement
+  if (!target) return
+
+  const scrollBottom = target.scrollHeight - target.scrollTop - target.clientHeight
+  if (scrollBottom < 100 && props.hasMore && !props.loading) {
+    emit('loadMore')
+  }
+}
+
 import '~/components/layout/ArticleListPanel.css'
 </script>
 
@@ -217,7 +177,7 @@ import '~/components/layout/ArticleListPanel.css'
     <div class="panel-header">
       <div class="header-content">
         <h2 class="header-title">{{ panelTitle }}</h2>
-        <span class="article-count">{{ totalItems }}</span>
+        <span class="article-count">{{ props.total }}</span>
       </div>
     </div>
 
@@ -246,21 +206,11 @@ import '~/components/layout/ArticleListPanel.css'
 
     <div class="filter-bar">
       <div class="filter-left">
-        <button class="filter-toggle-btn" :class="{ active: showDateFilter || startDate || endDate || selectedQuickDate }" @click="showDateFilter = !showDateFilter">
+        <button class="filter-toggle-btn" :class="{ active: showDateFilter || localStartDate || localEndDate || selectedQuickDate }" @click="showDateFilter = !showDateFilter">
           <Icon :icon="showDateFilter ? 'mdi:chevron-up' : 'mdi:chevron-down'" width="14" height="14" class="toggle-icon" />
           <Icon icon="mdi:calendar-filter" width="14" height="14" />
           <span>日期筛选</span>
         </button>
-      </div>
-
-      <div class="page-size-selector">
-        <span class="text-xs text-gray-500">每页</span>
-        <select v-model="pageSize" class="page-size-select" @change="changePageSize(Number((($event.target as HTMLSelectElement).value)))">
-          <option :value="10">10</option>
-          <option :value="20">20</option>
-          <option :value="50">50</option>
-        </select>
-        <span class="text-xs text-gray-500">条</span>
       </div>
     </div>
 
@@ -277,38 +227,54 @@ import '~/components/layout/ArticleListPanel.css'
       <div class="custom-date-row-vertical">
         <div class="date-input-row">
           <span class="row-label">开始日期</span>
-          <input v-model="startDate" type="date" class="date-input" @change="selectedQuickDate = null" />
+          <input v-model="localStartDate" type="date" class="date-input" @change="selectedQuickDate = null" />
         </div>
         <div class="date-input-row">
           <span class="row-label">结束日期</span>
-          <input v-model="endDate" type="date" class="date-input" @change="selectedQuickDate = null" />
+          <input v-model="localEndDate" type="date" class="date-input" @change="selectedQuickDate = null" />
         </div>
       </div>
 
       <div class="panel-actions">
         <button class="btn-secondary-sm" @click="clearDateFilter">清除筛选</button>
-        <button class="btn-secondary-sm" @click="showDateFilter = false">收起</button>
+        <button class="btn-primary-sm" @click="applyCustomDateFilter">应用筛选</button>
       </div>
     </div>
 
-    <div class="panel-content">
-      <div v-if="loading" class="loading-state">
+    <div ref="listContainerRef" class="panel-content" @scroll="handleScroll">
+      <div v-if="props.loading && props.articles.length === 0" class="loading-state">
         <div class="text-center">
           <Icon icon="mdi:loading" width="32" height="32" class="animate-spin text-blue-600 mx-auto mb-2" />
           <p class="text-sm text-gray-500">加载中...</p>
         </div>
       </div>
 
-      <div v-else-if="paginatedArticles.length > 0" class="articles-list">
-        <ArticleCard
-          v-for="article in paginatedArticles"
-          :key="article.id"
-          :article="article"
-          :selected="props.selectedArticle?.id === article.id"
-          compact
-          @click="handleArticleClick"
-          @favorite="handleFavorite"
-        />
+      <div v-else-if="props.articles.length > 0" class="articles-list">
+        <UseVirtualList
+          :list="props.articles"
+          :options="{ itemHeight: 120, overscan: 5 }"
+          height="100%"
+          class="virtual-list"
+        >
+          <template #default="{ data: article }">
+            <ArticleCard
+              :article="article"
+              :selected="props.selectedArticle?.id === article.id"
+              compact
+              @click="handleArticleClick"
+              @favorite="handleFavorite"
+            />
+          </template>
+        </UseVirtualList>
+
+        <div v-if="props.loading" class="loading-more">
+          <Icon icon="mdi:loading" width="20" height="20" class="animate-spin text-blue-600" />
+          <span class="text-sm text-gray-500">加载更多...</span>
+        </div>
+
+        <div v-else-if="!props.hasMore && props.articles.length > 0" class="no-more">
+          <span class="text-xs text-gray-400">已加载全部文章</span>
+        </div>
       </div>
 
       <div v-else class="empty-state">
@@ -316,29 +282,50 @@ import '~/components/layout/ArticleListPanel.css'
           <Icon icon="mdi:file-document-outline" width="48" height="48" class="text-gray-300 mx-auto mb-2" />
           <h3 class="mb-1 text-base font-semibold text-gray-700">暂无文章</h3>
           <p class="text-sm text-gray-500">
-            {{ startDate || endDate ? '当前筛选条件下没有文章，请调整日期范围。' : '添加一些 RSS 订阅源开始阅读吧。' }}
+            {{ localStartDate || localEndDate ? '当前筛选条件下没有文章，请调整日期范围。' : '添加一些 RSS 订阅源开始阅读吧。' }}
           </p>
         </div>
       </div>
     </div>
-
-    <div v-if="!loading && paginatedArticles.length > 0 && totalPages > 1" class="pagination-bar">
-      <span class="pagination-text">共 {{ totalItems }} 条</span>
-      <div class="pagination-controls">
-        <button class="pagination-btn" :disabled="currentPage <= 1" @click="changePage(currentPage - 1)">
-          <Icon icon="mdi:chevron-left" width="16" height="16" class="text-gray-600" />
-        </button>
-
-        <div class="pagination-pages">
-          <button v-for="page in pageNumbers" :key="page" class="page-btn" :class="{ active: page === currentPage, ellipsis: page === '...' }" :disabled="page === '...'" @click="page !== '...' && changePage(page as number)">
-            {{ page }}
-          </button>
-        </div>
-
-        <button class="pagination-btn" :disabled="currentPage >= totalPages" @click="changePage(currentPage + 1)">
-          <Icon icon="mdi:chevron-right" width="16" height="16" class="text-gray-600" />
-        </button>
-      </div>
-    </div>
   </div>
 </template>
+
+<style scoped>
+.virtual-list {
+  height: 100%;
+  overflow-y: auto;
+}
+
+.virtual-list::-webkit-scrollbar {
+  width: 0.375rem;
+}
+
+.virtual-list::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 4px;
+}
+
+.virtual-list::-webkit-scrollbar-thumb {
+  background: rgba(26, 26, 26, 0.1);
+  border-radius: 4px;
+}
+
+.virtual-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(26, 26, 26, 0.18);
+}
+
+.loading-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 1rem;
+}
+
+.no-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+</style>

@@ -87,6 +87,7 @@ export interface HotspotDigestCard {
   title: string
   summary: string
   feed_name: string
+  feed_icon: string
   feed_color: string
   category_name: string
   article_count: number
@@ -108,6 +109,7 @@ export interface TopicGraphSummaryCard {
   title: string
   summary: string
   feed_name: string
+  feed_icon: string
   feed_color: string
   category_name: string
   article_count: number
@@ -171,6 +173,18 @@ export interface TopicAnalysisRecord {
   version: number
   created_at: string
   updated_at: string
+  // 支持后端PascalCase格式
+  ID?: number
+  TopicTagID?: number
+  AnalysisType?: TopicAnalysisType
+  WindowType?: TopicGraphType
+  AnchorDate?: string
+  SummaryCount?: number
+  PayloadJSON?: string
+  Source?: string
+  Version?: number
+  CreatedAt?: string
+  UpdatedAt?: string
 }
 
 export interface RebuildAnalysisParams extends RebuildAnalysisRequest {

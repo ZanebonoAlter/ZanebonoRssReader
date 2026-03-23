@@ -151,15 +151,11 @@ func extractItemImage(item *gofeed.Item) string {
 func (p *RSSParser) FetchFaviconURL(feedURL string) string {
 	parsedURL, err := url.Parse(feedURL)
 	if err != nil {
-		return "rss"
+		return "mdi:rss"
 	}
 
-	scheme := "https"
-	if parsedURL.Scheme == "http" {
-		scheme = "http"
-	}
-
-	return fmt.Sprintf("%s://%s/favicon.ico", scheme, parsedURL.Host)
+	// Use Google's favicon service as it's more reliable
+	return fmt.Sprintf("https://www.google.com/s2/favicons?domain=%s&sz=32", parsedURL.Host)
 }
 
 func (p *RSSParser) ValidateFeedURL(feedURL string) bool {

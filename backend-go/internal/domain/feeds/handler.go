@@ -199,7 +199,7 @@ func CreateFeed(c *gin.Context) {
 		feed.Title = "Untitled Feed"
 	}
 	if feed.Icon == "" {
-		feed.Icon = "rss"
+		feed.Icon = "mdi:rss"
 	}
 	if feed.Color == "" {
 		feed.Color = "#8b5cf6"

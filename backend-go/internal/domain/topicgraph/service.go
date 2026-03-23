@@ -176,7 +176,7 @@ func getTopicArticles(topicID uint, startDate, endDate time.Time, page, pageSize
 		return nil, 0, fmt.Errorf("failed to count articles: %w", err)
 	}
 
-	// Query articles
+	// Query articles (tag_count is virtual, computed via subquery in other contexts)
 	err = database.DB.Model(&models.Article{}).
 		Joins("JOIN article_topic_tags ON articles.id = article_topic_tags.article_id").
 		Where("article_topic_tags.topic_tag_id = ?", topicID).
@@ -184,6 +184,7 @@ func getTopicArticles(topicID uint, startDate, endDate time.Time, page, pageSize
 		Order("articles.created_at DESC").
 		Offset(offset).
 		Limit(pageSize).
+		Omit("tag_count").
 		Find(&articles).Error
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to query articles: %w", err)
@@ -452,6 +453,7 @@ func mapSummaryCard(summary models.AISummary, topics []topictypes.TopicTag, arti
 		Title:          summary.Title,
 		Summary:        summary.Summary,
 		FeedName:       feedLabel(summary),
+		FeedIcon:       feedIcon(summary),
 		FeedColor:      feedColor(summary),
 		CategoryName:   categoryLabel(summary),
 		ArticleCount:   summary.ArticleCount,
@@ -512,6 +514,13 @@ func feedColor(summary models.AISummary) string {
 		return summary.Feed.Color
 	}
 	return "#3b6b87"
+}
+
+func feedIcon(summary models.AISummary) string {
+	if summary.Feed != nil && strings.TrimSpace(summary.Feed.Icon) != "" {
+		return summary.Feed.Icon
+	}
+	return "mdi:rss"
 }
 
 func categoryLabel(summary models.AISummary) string {

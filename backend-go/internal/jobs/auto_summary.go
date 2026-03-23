@@ -367,7 +367,7 @@ func (s *AutoSummaryScheduler) generateSummaryForFeed(feed *models.Feed) (bool, 
 	log.Printf("Using time range: %d minutes (threshold: %s)", timeRange, timeThreshold.Format("2006-01-02 15:04:05"))
 
 	var articles []models.Article
-	if err := database.DB.Where("feed_id = ? AND pub_date >= ?", feed.ID, timeThreshold).
+	if err := database.DB.Omit("tag_count").Where("feed_id = ? AND pub_date >= ?", feed.ID, timeThreshold).
 		Order("pub_date DESC").
 		Find(&articles).Error; err != nil {
 		return false, fmt.Errorf("failed to fetch articles: %w", err)

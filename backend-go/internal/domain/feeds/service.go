@@ -50,7 +50,7 @@ func (s *FeedService) RefreshFeed(feedID uint) error {
 		}
 	}
 
-	if feed.Icon == "" || feed.Icon == "rss" {
+	if feed.Icon == "" || feed.Icon == "rss" || feed.Icon == "mdi:rss" {
 		if parsed.Image != "" {
 			feed.Icon = parsed.Image
 		} else if firstArticleImage != "" {
@@ -118,7 +118,7 @@ func (s *FeedService) updateFeedError(feed *models.Feed, err error) {
 
 func (s *FeedService) cleanupOldArticles(feed *models.Feed) {
 	var articles []models.Article
-	if err := database.DB.Where("feed_id = ?", feed.ID).Order("pub_date DESC").Find(&articles).Error; err != nil {
+	if err := database.DB.Omit("tag_count").Where("feed_id = ?", feed.ID).Order("pub_date DESC").Find(&articles).Error; err != nil {
 		return
 	}
 
@@ -170,5 +170,5 @@ func (s *FeedService) buildArticleFromEntry(feed models.Feed, entry ParsedEntry)
 }
 
 func shouldDelayArticleTagging(feed models.Feed) bool {
-	return feed.FirecrawlEnabled && feed.ArticleSummaryEnabled
+	return feed.FirecrawlEnabled
 }

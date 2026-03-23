@@ -111,7 +111,7 @@ func CompleteFeedArticles(c *gin.Context) {
 	}
 
 	var articles []models.Article
-	if err := database.DB.Where("feed_id = ? AND summary_status IN ?", feedID, []string{"incomplete", "failed"}).Find(&articles).Error; err != nil {
+	if err := database.DB.Omit("tag_count").Where("feed_id = ? AND summary_status IN ?", feedID, []string{"incomplete", "failed"}).Find(&articles).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 		return
 	}

@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import { Icon } from '@iconify/vue'
 import ArticleTagList from '../../articles/components/ArticleTagList.vue'
+import FeedIcon from '~/components/feed/FeedIcon.vue'
 import type { TimelineDigest } from '~/types/timeline'
 
 interface Props {
@@ -76,7 +77,10 @@ function handleKeydown(event: KeyboardEvent) {
       <div class="timeline-item__header">
         <time class="timeline-item__time">{{ formattedTime }}</time>
         <span class="timeline-item__date">{{ formattedDate }}</span>
-        <span class="timeline-item__source">{{ item.feedName }}</span>
+        <span class="timeline-item__source">
+          <FeedIcon :icon="item.feedIcon" :size="14" />
+          {{ item.feedName }}
+        </span>
       </div>
 
       <div
@@ -215,6 +219,9 @@ function handleKeydown(event: KeyboardEvent) {
   background: rgba(255, 255, 255, 0.04);
   font-size: 0.72rem;
   color: rgba(220, 230, 239, 0.62);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
 }
 
 .timeline-item__body {

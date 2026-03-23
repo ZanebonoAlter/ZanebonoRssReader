@@ -12,6 +12,7 @@ func (s *ContentCompletionService) AutoCompleteCompletePendingArticles(limit int
 		Joins("Feed").
 		Where("articles.summary_status = ? AND feeds.article_summary_enabled = ?", "incomplete", true).
 		Where("articles.completion_attempts < feeds.max_completion_retries").
+		Omit("tag_count").
 		Limit(limit).
 		Find(&articles).Error
 

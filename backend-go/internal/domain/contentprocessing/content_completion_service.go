@@ -222,6 +222,7 @@ func (s *ContentCompletionService) ListReadyArticles(limit int) ([]models.Articl
 		Where("articles.firecrawl_status = ?", "completed").
 		Where("feeds.article_summary_enabled = ?", true).
 		Where("articles.summary_status = ? OR (articles.summary_status = ? AND (articles.summary_processing_started_at IS NULL OR articles.summary_processing_started_at <= ?))", "incomplete", "pending", staleBefore).
+		Omit("tag_count").
 		Preload("Feed")
 
 	if limit > 0 {
@@ -237,7 +238,7 @@ func (s *ContentCompletionService) ListReadyArticles(limit int) ([]models.Articl
 
 func (s *ContentCompletionService) CheckAndMarkIncompleteArticles(feedID uint) (int, error) {
 	var articles []models.Article
-	if err := database.DB.Where("feed_id = ?", feedID).Find(&articles).Error; err != nil {
+	if err := database.DB.Omit("tag_count").Where("feed_id = ?", feedID).Find(&articles).Error; err != nil {
 		return 0, err
 	}
 

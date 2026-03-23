@@ -22,11 +22,13 @@ import TopicGraphFooterPanels from '~/features/topic-graph/components/TopicGraph
 import TopicGraphHeader from '~/features/topic-graph/components/TopicGraphHeader.vue'
 import TopicGraphSidebar from '~/features/topic-graph/components/TopicGraphSidebar.vue'
 import TopicTimeline from '~/features/topic-graph/components/TopicTimeline.vue'
+import { buildDisplayedTopicGraph, collectRelatedTopicSlugs } from '~/features/topic-graph/utils/buildDisplayedTopicGraph'
 import { buildTopicGraphViewModel } from '~/features/topic-graph/utils/buildTopicGraphViewModel'
 import { normalizeTopicCategory } from '~/features/topic-graph/utils/normalizeTopicCategory'
 
 const topicGraphApi = useTopicGraphApi()
 const articlesApi = useArticlesApi()
+const MAX_GRAPH_TOPICS_PER_CATEGORY = 10
 
 function formatDateInput(date = new Date()) {
   const year = date.getFullYear()
@@ -43,6 +45,7 @@ const selectedCategory = ref<TopicCategory | null>(null)
 const selectedKeywordSlug = ref<string | null>(null)
 const selectedDigestId = ref<string | null>(null)
 const previewDigestId = ref<string | null>(null)
+const graphFocusRequestKey = ref(0)
 const detail = ref<TopicGraphDetailPayload | null>(null)
 const loadingGraph = ref(false)
 const loadingDetail = ref(false)
@@ -54,6 +57,8 @@ const previewArticles = ref<Article[]>([])
 // Hotspot topics state (from getTopicsByCategory API)
 const hotspotData = ref<TopicsByCategoryPayload | null>(null)
 const loadingHotspots = ref(false)
+const graphVisibilityOverrides = ref<Record<string, boolean>>({})
+const expandedTopicSlugs = ref<string[]>([])
 
 // Hotspot digests state (reverse trace: tag -> articles -> digests)
 const hotspotDigests = ref<HotspotDigestCard[]>([])
@@ -89,19 +94,19 @@ const viewModel = computed(() => graphPayload.value
 
 const activeTopicNode = computed(() => {
   const focusSlug = selectedKeywordSlug.value || selectedTopicSlug.value
-  return viewModel.value.graph.nodes.find(node => node.slug === focusSlug) || null
+  return displayedGraph.value.nodes.find(node => node.slug === focusSlug) || null
 })
 const highlightedNodeIds = computed(() => {
   const highlighted = new Set<string>()
   const focusSlug = selectedKeywordSlug.value || selectedTopicSlug.value
   if (!focusSlug) return []
 
-  const focusNode = viewModel.value.graph.nodes.find(node => node.slug === focusSlug)
+  const focusNode = displayedGraph.value.nodes.find(node => node.slug === focusSlug)
   if (!focusNode) return []
 
   highlighted.add(focusNode.id)
 
-  for (const edge of viewModel.value.graph.edges) {
+  for (const edge of displayedGraph.value.edges) {
     if (edge.source === focusNode.id) {
       highlighted.add(edge.target)
     }
@@ -116,13 +121,56 @@ const relatedEdgeIds = computed(() => {
   const highlightedSet = new Set(highlightedNodeIds.value)
   if (!highlightedSet.size) return []
 
-  return viewModel.value.graph.edges
+  return displayedGraph.value.edges
     .filter(edge => {
       return highlightedSet.has(edge.source) && highlightedSet.has(edge.target)
     })
     .map(edge => edge.id)
 })
-const topTopicLabels = computed(() => viewModel.value.topTopics.slice(0, 12))
+
+function isTopicShownInGraph(slug: string) {
+  return graphVisibleTopicSlugs.value.has(slug)
+}
+
+function ensureTopicShownInGraph(slug: string) {
+  if (isTopicShownInGraph(slug)) return
+
+  graphVisibilityOverrides.value = {
+    ...graphVisibilityOverrides.value,
+    [slug]: true,
+  }
+}
+
+function toggleTopicGraphVisibility(slug: string) {
+  const nextVisible = !isTopicShownInGraph(slug)
+  const defaultVisible = defaultGraphTopicSlugs.value.has(slug)
+  const nextOverrides = { ...graphVisibilityOverrides.value }
+
+  if (nextVisible === defaultVisible) {
+    delete nextOverrides[slug]
+  } else {
+    nextOverrides[slug] = nextVisible
+  }
+
+  graphVisibilityOverrides.value = nextOverrides
+}
+
+function expandRelatedTopics(slug: string) {
+  const relatedSlugs = collectRelatedTopicSlugs(viewModel.value.graph, slug)
+  const nextExpanded = new Set(expandedTopicSlugs.value)
+  const nextOverrides = { ...graphVisibilityOverrides.value }
+
+  nextExpanded.add(slug)
+  nextOverrides[slug] = true
+
+  relatedSlugs.forEach((relatedSlug) => {
+    nextExpanded.add(relatedSlug)
+    nextOverrides[relatedSlug] = true
+  })
+
+  expandedTopicSlugs.value = Array.from(nextExpanded)
+  graphVisibilityOverrides.value = nextOverrides
+}
 
 // Hotspot categories now use data from getTopicsByCategory API
 // Hotspot search state
@@ -140,6 +188,16 @@ function filterTopics(topics: any[], query: string) {
   return topics.filter(topic =>
     topic.label.toLowerCase().includes(lowerQuery) ||
     topic.slug.toLowerCase().includes(lowerQuery)
+  )
+}
+
+function sortTopicsByFrequency<T extends { score: number }>(topics: T[]) {
+  return [...topics].sort((left, right) => right.score - left.score)
+}
+
+function buildFallbackTopics(category: TopicCategory) {
+  return sortTopicsByFrequency(
+    viewModel.value.topTopics.filter(topic => normalizeTopicCategory(topic.category, topic.kind) === category)
   )
 }
 
@@ -185,12 +243,12 @@ const hotspotCategories = computed(() => ([
     label: '事件',
     icon: 'mdi:calendar-alert-outline',
     headerClass: 'topic-category-header--event',
-    topics: hotspotData.value?.events || [],
-    filteredTopics: filterTopics(hotspotData.value?.events || [], hotspotSearchQueries.value.event || ''),
+    topics: sortTopicsByFrequency(hotspotData.value?.events || buildFallbackTopics('event')),
+    filteredTopics: filterTopics(sortTopicsByFrequency(hotspotData.value?.events || buildFallbackTopics('event')), hotspotSearchQueries.value.event || ''),
     displayTopics: hotspotShowAll.value.event 
-      ? filterTopics(hotspotData.value?.events || [], hotspotSearchQueries.value.event || '')
-      : filterTopics(hotspotData.value?.events || [], hotspotSearchQueries.value.event || '').slice(0, 8),
-    hasMore: filterTopics(hotspotData.value?.events || [], hotspotSearchQueries.value.event || '').length > 8,
+      ? filterTopics(sortTopicsByFrequency(hotspotData.value?.events || buildFallbackTopics('event')), hotspotSearchQueries.value.event || '')
+      : filterTopics(sortTopicsByFrequency(hotspotData.value?.events || buildFallbackTopics('event')), hotspotSearchQueries.value.event || '').slice(0, 8),
+    hasMore: filterTopics(sortTopicsByFrequency(hotspotData.value?.events || buildFallbackTopics('event')), hotspotSearchQueries.value.event || '').length > 8,
     showAll: hotspotShowAll.value.event,
   },
   {
@@ -198,12 +256,12 @@ const hotspotCategories = computed(() => ([
     label: '人物',
     icon: 'mdi:account-voice-outline',
     headerClass: 'topic-category-header--person',
-    topics: hotspotData.value?.people || [],
-    filteredTopics: filterTopics(hotspotData.value?.people || [], hotspotSearchQueries.value.person || ''),
+    topics: sortTopicsByFrequency(hotspotData.value?.people || buildFallbackTopics('person')),
+    filteredTopics: filterTopics(sortTopicsByFrequency(hotspotData.value?.people || buildFallbackTopics('person')), hotspotSearchQueries.value.person || ''),
     displayTopics: hotspotShowAll.value.person
-      ? filterTopics(hotspotData.value?.people || [], hotspotSearchQueries.value.person || '')
-      : filterTopics(hotspotData.value?.people || [], hotspotSearchQueries.value.person || '').slice(0, 8),
-    hasMore: filterTopics(hotspotData.value?.people || [], hotspotSearchQueries.value.person || '').length > 8,
+      ? filterTopics(sortTopicsByFrequency(hotspotData.value?.people || buildFallbackTopics('person')), hotspotSearchQueries.value.person || '')
+      : filterTopics(sortTopicsByFrequency(hotspotData.value?.people || buildFallbackTopics('person')), hotspotSearchQueries.value.person || '').slice(0, 8),
+    hasMore: filterTopics(sortTopicsByFrequency(hotspotData.value?.people || buildFallbackTopics('person')), hotspotSearchQueries.value.person || '').length > 8,
     showAll: hotspotShowAll.value.person,
   },
   {
@@ -211,15 +269,46 @@ const hotspotCategories = computed(() => ([
     label: '关键词',
     icon: 'mdi:key-variant',
     headerClass: 'topic-category-header--keyword',
-    topics: hotspotData.value?.keywords || [],
-    filteredTopics: filterTopics(hotspotData.value?.keywords || [], hotspotSearchQueries.value.keyword || ''),
+    topics: sortTopicsByFrequency(hotspotData.value?.keywords || buildFallbackTopics('keyword')),
+    filteredTopics: filterTopics(sortTopicsByFrequency(hotspotData.value?.keywords || buildFallbackTopics('keyword')), hotspotSearchQueries.value.keyword || ''),
     displayTopics: hotspotShowAll.value.keyword
-      ? filterTopics(hotspotData.value?.keywords || [], hotspotSearchQueries.value.keyword || '')
-      : filterTopics(hotspotData.value?.keywords || [], hotspotSearchQueries.value.keyword || '').slice(0, 8),
-    hasMore: filterTopics(hotspotData.value?.keywords || [], hotspotSearchQueries.value.keyword || '').length > 8,
+      ? filterTopics(sortTopicsByFrequency(hotspotData.value?.keywords || buildFallbackTopics('keyword')), hotspotSearchQueries.value.keyword || '')
+      : filterTopics(sortTopicsByFrequency(hotspotData.value?.keywords || buildFallbackTopics('keyword')), hotspotSearchQueries.value.keyword || '').slice(0, 8),
+    hasMore: filterTopics(sortTopicsByFrequency(hotspotData.value?.keywords || buildFallbackTopics('keyword')), hotspotSearchQueries.value.keyword || '').length > 8,
     showAll: hotspotShowAll.value.keyword,
   },
 ]))
+const defaultGraphTopicSlugs = computed(() => {
+  const slugs = new Set<string>()
+
+  hotspotCategories.value.forEach((category) => {
+    category.topics
+      .slice(0, MAX_GRAPH_TOPICS_PER_CATEGORY)
+      .forEach(topic => slugs.add(topic.slug))
+  })
+
+  return slugs
+})
+const graphVisibleTopicSlugs = computed(() => {
+  const slugs = new Set(defaultGraphTopicSlugs.value)
+
+  expandedTopicSlugs.value.forEach(slug => slugs.add(slug))
+
+  Object.entries(graphVisibilityOverrides.value).forEach(([slug, visible]) => {
+    if (visible) {
+      slugs.add(slug)
+      return
+    }
+
+    slugs.delete(slug)
+  })
+
+  return slugs
+})
+const displayedGraph = computed(() => buildDisplayedTopicGraph({
+  graph: viewModel.value.graph,
+  visibleTopicSlugs: graphVisibleTopicSlugs.value,
+}))
 const timelineItems = computed((): TimelineDigest[] => {
   const summaries = detail.value?.summaries || []
 
@@ -231,6 +320,7 @@ const timelineItems = computed((): TimelineDigest[] => {
       summary: summary.summary,
       createdAt: summary.created_at,
       feedName: summary.feed_name,
+      feedIcon: summary.feed_icon,
       categoryName: summary.category_name,
       articleCount: summary.article_count,
       tags: summary.aggregated_tags.map(topic => ({
@@ -258,6 +348,7 @@ const hotspotTimelineItems = computed((): TimelineDigest[] => {
       summary: digest.summary,
       createdAt: digest.created_at,
       feedName: digest.feed_name,
+      feedIcon: digest.feed_icon,
       categoryName: digest.category_name,
       articleCount: digest.article_count,
       tags: digest.aggregated_tags.map(tag => ({
@@ -419,6 +510,7 @@ async function loadGraph() {
     selectedKeywordSlug.value = null
     selectedDigestId.value = null
     previewDigestId.value = null
+    expandedTopicSlugs.value = []
 
     if (selectedTopicSlug.value) {
       void loadTopicDetail(selectedTopicSlug.value)
@@ -469,6 +561,9 @@ async function loadTopicDetail(slug: string) {
 }
 
 async function handleTagSelect(slug: string, category: TopicCategory) {
+  ensureTopicShownInGraph(slug)
+  expandRelatedTopics(slug)
+  graphFocusRequestKey.value += 1
   selectedCategory.value = category
   selectedTopicSlug.value = slug
 
@@ -504,7 +599,7 @@ async function loadHotspotDigests(tagSlug: string) {
       20
     )
     if (response.success && response.data) {
-      hotspotDigests.value = response.data.digests
+      hotspotDigests.value = response.data.digests || []
     } else {
       hotspotDigests.value = []
       console.error('Failed to load hotspot digests:', response.error)
@@ -517,12 +612,26 @@ async function loadHotspotDigests(tagSlug: string) {
   }
 }
 
-function handleNodeClick(node: { slug?: string; kind: string; category?: TopicCategory }) {
+function handleNodeClick(node: { slug?: string; kind: string; category?: TopicCategory; label?: string }) {
   if (node.kind !== 'topic' || !node.slug) return
+
+  ensureTopicShownInGraph(node.slug)
+  expandRelatedTopics(node.slug)
+  graphFocusRequestKey.value += 1
 
   if (node.category) {
     selectedCategory.value = node.category
   }
+
+  // Set hotspot tag state for the clicked node and load its digests
+  selectedHotspotTag.value = {
+    slug: node.slug,
+    label: node.label || node.slug,
+    category: node.category || 'keyword',
+  }
+
+  // Load digests for this node (similar to handleTagSelect)
+  void loadHotspotDigests(node.slug)
 
   void loadTopicDetail(node.slug)
 }
@@ -533,7 +642,7 @@ function handleKeywordHighlight(keywordSlug: string | null) {
     return
   }
 
-  const existsInGraph = viewModel.value.graph.nodes.some(node => node.kind === 'topic' && node.slug === keywordSlug)
+  const existsInGraph = displayedGraph.value.nodes.some(node => node.kind === 'topic' && node.slug === keywordSlug)
   selectedKeywordSlug.value = existsInGraph ? keywordSlug : null
 }
 
@@ -660,9 +769,12 @@ async function applyAIAnalysisResult() {
     return false
   }
 
-  const payload = typeof response.data.payload_json === 'string'
-    ? JSON.parse(response.data.payload_json)
-    : response.data.payload_json
+  // 支持后端PascalCase和snake_case两种格式
+  const data = response.data
+  const payloadJson = data.payload_json || data.PayloadJSON
+  const payload = typeof payloadJson === 'string'
+    ? JSON.parse(payloadJson)
+    : payloadJson
 
   aiAnalysisResult.value = normalizeTimelineAnalysisPayload(payload || {})
   aiAnalysisProgress.value = 100
@@ -874,7 +986,7 @@ await loadGraph()
                   <p class="text-xs uppercase tracking-[0.3em] text-white/42">Graph Field</p>
                   <h2 class="mt-2 font-serif text-2xl text-white md:text-[2.25rem]">{{ graphPayload?.period_label || '话题网络' }}</h2>
                   <p class="mt-3 text-sm leading-6 text-[rgba(255,255,255,0.68)]">
-                    默认只保留重点标签常显，点中节点后再展开完整名字和一跳关系，减少视觉重叠。
+                     默认只展示事件、人物、关键词各自出现频率最高的前 10 个节点；底部热点题材可单独控制是否进入拓扑图。
                   </p>
                 </div>
 
@@ -889,10 +1001,11 @@ await loadGraph()
 
               <div class="space-y-4">
                 <TopicGraphCanvas
-                  :nodes="viewModel.graph.nodes"
-                  :edges="viewModel.graph.edges"
-                  :featured-node-ids="viewModel.graph.featuredNodeIds"
+                  :nodes="displayedGraph.nodes"
+                  :edges="displayedGraph.edges"
+                  :featured-node-ids="displayedGraph.featuredNodeIds"
                   :active-node-id="activeTopicNode?.id || null"
+                  :focus-request-key="graphFocusRequestKey"
                   :selected-category="selectedCategory"
                   :highlighted-node-ids="highlightedNodeIds"
                   :related-edge-ids="relatedEdgeIds"
@@ -956,19 +1069,33 @@ await loadGraph()
                           @mousedown.prevent
                         >
                           <div class="topic-dropdown-scroll">
-                            <button
+                            <div
                               v-for="topic in category.displayTopics"
                               :key="topic.slug"
-                              type="button"
-                              class="topic-dropdown-item"
-                              :class="{
-                                'topic-dropdown-item--active': selectedTopicSlug === topic.slug,
-                              }"
-                              @click="handleTagSelect(topic.slug, normalizeTopicCategory(topic.category, topic.kind)); hotspotDropdownOpen[category.key] = false"
+                              class="topic-dropdown-row"
                             >
-                              <Icon v-if="topic.icon" :icon="topic.icon" width="14" />
-                              <span>{{ topic.label }}</span>
-                            </button>
+                              <button
+                                type="button"
+                                class="topic-dropdown-item"
+                                :class="{
+                                  'topic-dropdown-item--active': selectedTopicSlug === topic.slug,
+                                }"
+                                @click="handleTagSelect(topic.slug, normalizeTopicCategory(topic.category, topic.kind)); hotspotDropdownOpen[category.key] = false"
+                              >
+                                <Icon v-if="topic.icon" :icon="topic.icon" width="14" />
+                                <span>{{ topic.label }}</span>
+                              </button>
+                              <button
+                                type="button"
+                                class="topic-graph-toggle"
+                                :class="{ 'topic-graph-toggle--active': isTopicShownInGraph(topic.slug) }"
+                                :aria-label="isTopicShownInGraph(topic.slug) ? `从拓扑图隐藏 ${topic.label}` : `在拓扑图展示 ${topic.label}`"
+                                :title="isTopicShownInGraph(topic.slug) ? '从拓扑图隐藏' : '在拓扑图展示'"
+                                @click.stop="toggleTopicGraphVisibility(topic.slug)"
+                              >
+                                <Icon :icon="isTopicShownInGraph(topic.slug) ? 'mdi:eye-outline' : 'mdi:eye-off-outline'" width="14" />
+                              </button>
+                            </div>
                           </div>
                           <button
                             v-if="category.hasMore"
@@ -997,22 +1124,36 @@ await loadGraph()
 
                       <!-- Quick Tags (show top 5 without search) -->
                       <div v-if="!hotspotSearchQueries[category.key]" class="topic-quick-tags mt-3">
-                        <button
+                        <div
                           v-for="topic in category.topics.slice(0, 5)"
                           :key="topic.slug"
-                          type="button"
-                          class="topic-badge text-left"
-                          :class="{
-                            'topic-badge--event': normalizeTopicCategory(topic.category, topic.kind) === 'event',
-                            'topic-badge--person': normalizeTopicCategory(topic.category, topic.kind) === 'person',
-                            'topic-badge--keyword': normalizeTopicCategory(topic.category, topic.kind) === 'keyword',
-                            'topic-badge--active': selectedTopicSlug === topic.slug,
-                          }"
-                          @click="handleTagSelect(topic.slug, normalizeTopicCategory(topic.category, topic.kind))"
+                          class="topic-badge-row"
                         >
-                          <Icon v-if="topic.icon" :icon="topic.icon" width="14" />
-                          {{ topic.label }}
-                        </button>
+                          <button
+                            type="button"
+                            class="topic-badge text-left"
+                            :class="{
+                              'topic-badge--event': normalizeTopicCategory(topic.category, topic.kind) === 'event',
+                              'topic-badge--person': normalizeTopicCategory(topic.category, topic.kind) === 'person',
+                              'topic-badge--keyword': normalizeTopicCategory(topic.category, topic.kind) === 'keyword',
+                              'topic-badge--active': selectedTopicSlug === topic.slug,
+                            }"
+                            @click="handleTagSelect(topic.slug, normalizeTopicCategory(topic.category, topic.kind))"
+                          >
+                            <Icon v-if="topic.icon" :icon="topic.icon" width="14" />
+                            {{ topic.label }}
+                          </button>
+                          <button
+                            type="button"
+                            class="topic-badge-toggle"
+                            :class="{ 'topic-badge-toggle--active': isTopicShownInGraph(topic.slug) }"
+                            :aria-label="isTopicShownInGraph(topic.slug) ? `从拓扑图隐藏 ${topic.label}` : `在拓扑图展示 ${topic.label}`"
+                            :title="isTopicShownInGraph(topic.slug) ? '从拓扑图隐藏' : '在拓扑图展示'"
+                            @click.stop="toggleTopicGraphVisibility(topic.slug)"
+                          >
+                            <Icon :icon="isTopicShownInGraph(topic.slug) ? 'mdi:eye-outline' : 'mdi:eye-off-outline'" width="14" />
+                          </button>
+                        </div>
                         <button
                           v-if="category.topics.length > 5"
                           class="topic-more-hint"
@@ -1162,6 +1303,9 @@ await loadGraph()
 }
 
 .topic-hotspot-strip {
+  position: relative;
+  z-index: 4;
+  overflow: visible;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background:
     radial-gradient(circle at 12% 18%, rgba(240, 138, 75, 0.12), transparent 24%),
@@ -1177,6 +1321,8 @@ await loadGraph()
 }
 
 .topic-timeline-shell {
+  position: relative;
+  z-index: 1;
   border: 1px solid rgba(255, 255, 255, 0.06);
   background: rgba(11, 18, 24, 0.4);
   box-shadow: 0 40px 120px rgba(0, 0, 0, 0.4);
@@ -1381,6 +1527,8 @@ await loadGraph()
 }
 
 .topic-category-column {
+  position: relative;
+  overflow: visible;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: linear-gradient(180deg, rgba(20, 29, 40, 0.74), rgba(10, 15, 23, 0.92));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
@@ -1434,6 +1582,7 @@ await loadGraph()
 /* Hotspot Search Styles */
 .topic-search-wrapper {
   position: relative;
+  z-index: 6;
   width: 100%;
 }
 
@@ -1549,6 +1698,16 @@ await loadGraph()
   transition: all 0.15s ease;
 }
 
+.topic-dropdown-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.topic-dropdown-row + .topic-dropdown-row {
+  margin-top: 0.15rem;
+}
+
 .topic-dropdown-item:hover {
   background: rgba(255, 255, 255, 0.08);
   color: rgba(255, 255, 255, 0.95);
@@ -1557,6 +1716,51 @@ await loadGraph()
 .topic-dropdown-item--active {
   background: rgba(240, 138, 75, 0.2) !important;
   color: rgba(255, 235, 220, 0.95) !important;
+}
+
+.topic-graph-toggle,
+.topic-badge-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.55);
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    color 0.15s ease,
+    transform 0.15s ease;
+}
+
+.topic-graph-toggle:hover,
+.topic-graph-toggle:focus-visible,
+.topic-badge-toggle:hover,
+.topic-badge-toggle:focus-visible {
+  transform: translateY(-1px);
+  border-color: rgba(240, 138, 75, 0.38);
+  color: rgba(255, 238, 227, 0.92);
+}
+
+.topic-graph-toggle {
+  flex-shrink: 0;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+}
+
+.topic-badge-toggle {
+  flex-shrink: 0;
+  width: 2rem;
+  min-height: 2rem;
+  border-radius: 999px;
+}
+
+.topic-graph-toggle--active,
+.topic-badge-toggle--active {
+  border-color: rgba(240, 138, 75, 0.44);
+  background: rgba(240, 138, 75, 0.16);
+  color: rgba(255, 234, 220, 0.96);
 }
 
 .topic-dropdown-toggle {
@@ -1615,6 +1819,12 @@ await loadGraph()
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
+}
+
+.topic-badge-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
 }
 
 .topic-more-hint {

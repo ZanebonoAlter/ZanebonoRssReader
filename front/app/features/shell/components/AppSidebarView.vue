@@ -148,7 +148,7 @@ import '~/components/layout/AppSidebar.css'
       </button>
 
       <button class="sidebar-item" :class="{ active: selectedCategory === 'topic-graph' }" @click="handleTopicGraphClick">
-        <Icon icon="mdi:graph-3d-variant" width="20" height="20" class="text-ink-600" />
+        <Icon icon="mdi:graph-outline" width="20" height="20" class="text-ink-600" />
         <span v-if="!sidebarCollapsed" class="flex-1 text-left font-medium">主题图谱</span>
       </button>
 

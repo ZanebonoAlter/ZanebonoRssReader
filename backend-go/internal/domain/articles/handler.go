@@ -61,6 +61,13 @@ func GetArticles(c *gin.Context) {
 	read := c.Query("read")
 	favorite := c.Query("favorite")
 	search := c.Query("search")
+	startDate := c.Query("start_date")
+	endDate := c.Query("end_date")
+
+	maxPerPage := 100
+	if perPage <= 0 || perPage > maxPerPage {
+		perPage = maxPerPage
+	}
 
 	query := database.DB.Model(&models.Article{}).
 		Joins("LEFT JOIN feeds ON articles.feed_id = feeds.id").
@@ -92,39 +99,20 @@ func GetArticles(c *gin.Context) {
 		query = query.Where("articles.title LIKE ? OR articles.description LIKE ?", searchTerm, searchTerm)
 	}
 
+	if startDate != "" {
+		query = query.Where("DATE(articles.pub_date) >= ?", startDate)
+	}
+
+	if endDate != "" {
+		query = query.Where("DATE(articles.pub_date) <= ?", endDate)
+	}
+
 	query = query.Order("articles.pub_date DESC")
 
 	var total int64
 	query.Count(&total)
 
 	var articles []models.Article
-	if perPage >= 10000 {
-		if err := query.Find(&articles).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"success": false,
-				"error":   err.Error(),
-			})
-			return
-		}
-
-		data := make([]map[string]interface{}, len(articles))
-		for i, article := range articles {
-			data[i] = article.ToDict()
-		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"success": true,
-			"data":    data,
-			"pagination": gin.H{
-				"page":     1,
-				"per_page": len(articles),
-				"total":    total,
-				"pages":    1,
-			},
-		})
-		return
-	}
-
 	offset := (page - 1) * perPage
 	if err := query.Offset(offset).Limit(perPage).Find(&articles).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{

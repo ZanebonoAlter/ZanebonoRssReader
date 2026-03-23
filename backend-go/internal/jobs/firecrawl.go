@@ -10,6 +10,7 @@ import (
 
 	"my-robot-backend/internal/domain/contentprocessing"
 	"my-robot-backend/internal/domain/models"
+	"my-robot-backend/internal/domain/topicextraction"
 	"my-robot-backend/internal/platform/database"
 	"my-robot-backend/internal/platform/ws"
 )
@@ -144,6 +145,7 @@ func (s *FirecrawlScheduler) runCrawlCycle() {
 
 	var articles []models.Article
 	database.DB.
+		Omit("tag_count").
 		Joins("JOIN feeds ON feeds.id = articles.feed_id").
 		Where("feeds.firecrawl_enabled = ? AND articles.firecrawl_status = ?", true, "pending").
 		Limit(50).
@@ -218,6 +220,13 @@ func (s *FirecrawlScheduler) runCrawlCycle() {
 			updates["summary_status"] = "incomplete"
 		}
 		database.DB.Model(&art).Updates(updates)
+
+		var updatedArt models.Article
+		if err := database.DB.First(&updatedArt, art.ID).Error; err == nil {
+			if err := topicextraction.RetagArticle(&updatedArt, feed.Title, ""); err != nil {
+				log.Printf("[Firecrawl] Failed to retag article %d after crawl: %v", art.ID, err)
+			}
+		}
 
 		completed++
 		s.broadcastProgress(batchID, "processing", len(articles), completed, failed, &ws.FirecrawlArticleProgress{

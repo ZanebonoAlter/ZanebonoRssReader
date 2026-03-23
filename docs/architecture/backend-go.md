@@ -323,10 +323,12 @@ topictypes
 
 ### Article 打标签时机
 
-文章标签现在按以下中文规则运行：
+文章标签现在按以下规则运行：
 
-1. 普通 refresh 新文章：入库后立即打标签
-2. 若 feed 同时开启 `Firecrawl + 自动补全`：refresh 阶段先不打，等补全成功后重打标签
+1. 普通 refresh 新文章：入库后立即打标签（feed 未开启 Firecrawl 时）
+2. 若 feed 开启了 `Firecrawl`：refresh 阶段先不打标签
+   - Firecrawl 抓取完成后，由 Firecrawl scheduler 调用 `RetagArticle` 重新打标签
+   - 若 feed 同时开启了 `自动补全`（`article_summary_enabled`），则由 ContentCompletion scheduler 在生成 `AIContentSummary` 后调用 `RetagArticle`
 3. `auto_summary` / `summary_queue` 阶段：只做兜底补齐，只处理当前没有 article tags 的文章
 4. 前端文章详情支持手动打标签 / 重新打标签，接口为 `POST /api/articles/:article_id/tags`
 
