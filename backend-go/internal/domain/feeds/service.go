@@ -88,9 +88,8 @@ func (s *FeedService) RefreshFeed(feedID uint) error {
 		}
 
 		if !shouldDelayArticleTagging(feed) {
-			if err := topicextraction.TagArticle(&article, feed.Title, ""); err != nil {
-				fmt.Printf("[WARN] Failed to tag article %d during refresh: %v\n", article.ID, err)
-			}
+			// Async tag: enqueue to tag queue instead of blocking refresh
+			topicextraction.GetTagQueue().EnqueueAsync(article.ID, feed.Title, "")
 		}
 
 		articlesAdded++

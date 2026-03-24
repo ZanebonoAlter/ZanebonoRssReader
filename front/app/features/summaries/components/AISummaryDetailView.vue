@@ -105,6 +105,7 @@ function expandArticle(article: Article) {
   viewMode.value = 'preview'
   iframeLoading.value = true
   if (!article.read) {
+    updateArticleLocal(article.id, { read: true })
     apiStore.markAsRead(article.id)
   }
 }
@@ -113,13 +114,22 @@ function closeExpandedArticle() {
   expandedArticle.value = null
 }
 
+function updateArticleLocal(articleId: string, updates: Partial<Article>) {
+  const index = summaryArticles.value.findIndex(a => a.id === articleId)
+  if (index !== -1 && summaryArticles.value[index]) {
+    Object.assign(summaryArticles.value[index], updates)
+  }
+}
+
 async function toggleFavorite() {
   if (expandedArticle.value) {
-    await apiStore.toggleFavorite(expandedArticle.value.id)
+    const newFavorite = !expandedArticle.value.favorite
+    updateArticleLocal(expandedArticle.value.id, { favorite: newFavorite })
     expandedArticle.value = {
       ...expandedArticle.value,
-      favorite: !expandedArticle.value.favorite
+      favorite: newFavorite
     }
+    await apiStore.toggleFavorite(expandedArticle.value.id)
   }
 }
 

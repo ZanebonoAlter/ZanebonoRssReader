@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Icon } from '@iconify/vue'
-import { UseVirtualList } from '@vueuse/components'
+import { useVirtualList } from '@vueuse/core'
 import ArticleCard from '~/features/articles/components/ArticleCardView.vue'
 import type { Article } from '~/types'
 
@@ -44,6 +44,33 @@ const localEndDate = ref(props.endDate)
 const selectedQuickDate = ref<number | null>(null)
 const feedStatusExpanded = ref(true)
 const listContainerRef = ref<HTMLElement | null>(null)
+
+const { list, containerProps, wrapperProps } = useVirtualList(
+  toRef(() => props.articles),
+  { itemHeight: 120, overscan: 5 }
+)
+
+function onContainerScroll(event: Event) {
+  const target = event.target as HTMLElement
+  if (!target) return
+
+  const scrollBottom = target.scrollHeight - target.scrollTop - target.clientHeight
+  if (scrollBottom < 100 && props.hasMore && !props.loading) {
+    emit('loadMore')
+  }
+}
+
+watch(containerProps.ref, (el) => {
+  if (el) {
+    el.addEventListener('scroll', onContainerScroll)
+  }
+}, { immediate: true })
+
+onUnmounted(() => {
+  if (containerProps.ref.value) {
+    containerProps.ref.value.removeEventListener('scroll', onContainerScroll)
+  }
+})
 
 interface QuickDateOption {
   label: string
@@ -149,7 +176,7 @@ function handleArticleClick(article: Article) {
 }
 
 function handleFavorite(id: string) {
-  apiStore.toggleFavorite(id)
+  emit('articleFavorite', id)
 }
 
 function statusToneClasses(tone: string) {
@@ -157,16 +184,6 @@ function statusToneClasses(tone: string) {
   if (tone === 'emerald') return 'border-emerald-200 bg-emerald-50 text-emerald-700'
   if (tone === 'sky') return 'border-sky-200 bg-sky-50 text-sky-700'
   return 'border-stone-200 bg-stone-100 text-stone-700'
-}
-
-function handleScroll(event: Event) {
-  const target = event.target as HTMLElement
-  if (!target) return
-
-  const scrollBottom = target.scrollHeight - target.scrollTop - target.clientHeight
-  if (scrollBottom < 100 && props.hasMore && !props.loading) {
-    emit('loadMore')
-  }
 }
 
 import '~/components/layout/ArticleListPanel.css'
@@ -241,7 +258,7 @@ import '~/components/layout/ArticleListPanel.css'
       </div>
     </div>
 
-    <div ref="listContainerRef" class="panel-content" @scroll="handleScroll">
+    <div ref="listContainerRef" class="panel-content">
       <div v-if="props.loading && props.articles.length === 0" class="loading-state">
         <div class="text-center">
           <Icon icon="mdi:loading" width="32" height="32" class="animate-spin text-blue-600 mx-auto mb-2" />
@@ -250,22 +267,19 @@ import '~/components/layout/ArticleListPanel.css'
       </div>
 
       <div v-else-if="props.articles.length > 0" class="articles-list">
-        <UseVirtualList
-          :list="props.articles"
-          :options="{ itemHeight: 120, overscan: 5 }"
-          height="100%"
-          class="virtual-list"
-        >
-          <template #default="{ data: article }">
-            <ArticleCard
-              :article="article"
-              :selected="props.selectedArticle?.id === article.id"
-              compact
-              @click="handleArticleClick"
-              @favorite="handleFavorite"
-            />
-          </template>
-        </UseVirtualList>
+        <div v-bind="containerProps" class="virtual-list">
+          <div v-bind="wrapperProps">
+            <div v-for="{ data: article, index } in list" :key="article.id" class="virtual-item">
+              <ArticleCard
+                :article="article"
+                :selected="props.selectedArticle?.id === article.id"
+                compact
+                @click="handleArticleClick"
+                @favorite="handleFavorite"
+              />
+            </div>
+          </div>
+        </div>
 
         <div v-if="props.loading" class="loading-more">
           <Icon icon="mdi:loading" width="20" height="20" class="animate-spin text-blue-600" />
@@ -292,7 +306,7 @@ import '~/components/layout/ArticleListPanel.css'
 
 <style scoped>
 .virtual-list {
-  height: 100%;
+  flex: 1;
   overflow-y: auto;
 }
 
@@ -314,12 +328,17 @@ import '~/components/layout/ArticleListPanel.css'
   background: rgba(26, 26, 26, 0.18);
 }
 
+.virtual-item {
+  padding: 0 0.5rem;
+}
+
 .loading-more {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
   padding: 1rem;
+  flex-shrink: 0;
 }
 
 .no-more {
@@ -327,5 +346,6 @@ import '~/components/layout/ArticleListPanel.css'
   align-items: center;
   justify-content: center;
   padding: 1rem;
+  flex-shrink: 0;
 }
 </style>

@@ -20,6 +20,7 @@ const {
   state: paginationState,
   fetchFirstPage,
   loadMore,
+  updateArticle,
 } = useArticlePagination({ pageSize: 20 })
 
 const startDate = ref<string>('')
@@ -103,6 +104,8 @@ async function loadArticles() {
 }
 
 onMounted(async () => {
+  await fetchFeeds()
+  await loadArticles()
   await fetchGlobalUnreadCount()
 })
 
@@ -126,11 +129,19 @@ async function hydrateSelectedArticle(article: any) {
 function handleArticleClick(article: any) {
   void hydrateSelectedArticle(article)
   if (!article.read) {
+    updateArticle(article.id, { read: true })
+    if (selectedArticle.value) {
+      selectedArticle.value = { ...selectedArticle.value, read: true }
+    }
     apiStore.markAsRead(article.id)
   }
 }
 
 function handleArticleFavorite(articleId: string) {
+  const article = articles.value.find(a => a.id === articleId)
+  if (article) {
+    updateArticle(articleId, { favorite: !article.favorite })
+  }
   apiStore.toggleFavorite(articleId)
 }
 
@@ -253,7 +264,34 @@ async function pollRefreshStatus() {
       return
     }
 
-    await fetchFeeds()
+    const response = await apiStore.fetchFeeds({ per_page: 10000 })
+
+    if (response.success && response.data) {
+      const data = response.data as any
+      const items = data.items || data
+      apiStore.allFeeds = items.map((feed: any) => ({
+        id: String(feed.id),
+        title: feed.title,
+        description: feed.description || '',
+        url: feed.url,
+        category: feed.category_id ? String(feed.category_id) : '',
+        icon: feed.icon || undefined,
+        color: feed.color || '#6b7280',
+        lastUpdated: feed.last_updated || new Date().toISOString(),
+        articleCount: feed.article_count || 0,
+        unreadCount: feed.unread_count || 0,
+        maxArticles: feed.max_articles || 100,
+        refreshInterval: feed.refresh_interval || 60,
+        refreshStatus: feed.refresh_status || 'idle',
+        refreshError: feed.refresh_error,
+        lastRefreshAt: feed.last_refresh_at,
+        aiSummaryEnabled: feed.ai_summary_enabled !== undefined ? feed.ai_summary_enabled : true,
+        articleSummaryEnabled: feed.article_summary_enabled,
+        completionOnRefresh: feed.completion_on_refresh,
+        maxCompletionRetries: feed.max_completion_retries,
+        firecrawlEnabled: feed.firecrawl_enabled,
+      }))
+    }
 
     const monitoredFeeds = selectedFeed.value
       ? feedsStore.feeds.filter(f => f.id === selectedFeed.value)

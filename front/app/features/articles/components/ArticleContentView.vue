@@ -261,10 +261,6 @@ async function handleManualTagging() {
 }
 
 watch(() => props.article, (newArticle) => {
-  if (newArticle && !newArticle.read) {
-    apiStore.markAsRead(newArticle.id)
-  }
-
   iframeLoading.value = true
   viewMode.value = 'preview'
   showAISummary.value = false
@@ -517,7 +513,7 @@ import '~/components/article/ArticleContent.css'
               :disabled="actionBusy"
               @click="handleManualTagging"
             >
-              <Icon icon="mdi:tag-sync-outline" width="14" height="14" :class="{ 'animate-spin': manualTaggingLoading }" />
+              <Icon icon="mdi:tag-plus-outline" width="14" height="14" :class="{ 'animate-spin': manualTaggingLoading }" />
               {{ manualTaggingLabel }}
             </button>
           </div>
@@ -733,7 +729,7 @@ import '~/components/article/ArticleContent.css'
                 :disabled="actionBusy"
                 @click="handleManualTagging"
               >
-                <Icon icon="mdi:tag-sync-outline" width="14" height="14" :class="{ 'animate-spin': manualTaggingLoading }" />
+                <Icon icon="mdi:tag-plus-outline" width="14" height="14" :class="{ 'animate-spin': manualTaggingLoading }" />
                 {{ manualTaggingLabel }}
               </button>
             </div>

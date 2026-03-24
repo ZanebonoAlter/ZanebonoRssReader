@@ -324,8 +324,8 @@ func (q *SummaryQueue) generateSummaryForFeed(feedID *uint, categoryID *uint, fe
 
 	var articles []models.Article
 	if feedID != nil {
-		database.DB.Where("feed_id = ? AND pub_date >= ?", *feedID, timeThreshold).
-			Order("pub_date DESC").
+		database.DB.Where("feed_id = ? AND created_at >= ?", *feedID, timeThreshold).
+			Order("created_at DESC").
 			Find(&articles)
 	} else {
 		return nil, &SummaryError{Code: "NO_FEED", Message: "未指定订阅源"}
