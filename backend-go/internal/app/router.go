@@ -156,6 +156,7 @@ func SetupRoutes(r *gin.Engine) {
 			topicGraph.GET("/topic/:slug", topicgraphdomain.GetTopicDetail)
 			topicGraph.GET("/by-category", topicgraphdomain.GetTopicsByCategory)
 			topicGraph.GET("/tag/:slug/digests", topicgraphdomain.GetDigestsByArticleTagHandler)
+			topicGraph.GET("/tag/:slug/pending-articles", topicgraphdomain.GetPendingArticlesByTagHandler)
 			topicGraph.GET("/topic/:slug/articles", topicgraphdomain.GetTopicArticles)
 		}
 		topicanalysisdomain.RegisterAnalysisRoutes(topicGraph, topicanalysisdomain.GetAnalysisService(database.DB))
