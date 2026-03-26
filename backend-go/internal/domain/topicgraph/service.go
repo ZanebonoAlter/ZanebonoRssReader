@@ -844,6 +844,7 @@ func GetPendingArticlesByTag(tagSlug string, kind string, anchor time.Time) (*to
 		Where("article_topic_tags.topic_tag_id = ?", topicTag.ID).
 		Where("articles.created_at >= ? AND articles.created_at < ?", windowStart, windowEnd).
 		Preload("Feed").
+		Omit("tag_count").
 		Find(&taggedArticles).Error
 	if err != nil {
 		return nil, fmt.Errorf("failed to get tagged articles: %w", err)
@@ -854,11 +855,6 @@ func GetPendingArticlesByTag(tagSlug string, kind string, anchor time.Time) (*to
 	}
 
 	// Step 3: Get all article IDs that are already in digests
-	taggedArticleIDs := make([]uint, len(taggedArticles))
-	for i, a := range taggedArticles {
-		taggedArticleIDs[i] = a.ID
-	}
-
 	var summaries []models.AISummary
 	err = database.DB.
 		Where("created_at >= ? AND created_at < ?", windowStart, windowEnd).
