@@ -174,3 +174,20 @@ type TopicsByCategoryResult struct {
 	People   []TopicTag `json:"people"`
 	Keywords []TopicTag `json:"keywords"`
 }
+
+// PendingArticle represents an article that has a tag but is not yet in any digest
+type PendingArticle struct {
+	ID        uint   `json:"id"`
+	Title     string `json:"title"`
+	Link      string `json:"link"`
+	PubDate   string `json:"pub_date,omitempty"`
+	FeedName  string `json:"feed_name"`
+	FeedIcon  string `json:"feed_icon,omitempty"`
+	FeedColor string `json:"feed_color,omitempty"`
+}
+
+// PendingArticlesResponse is the response for pending articles API
+type PendingArticlesResponse struct {
+	Articles []PendingArticle `json:"articles"`
+	Total    int              `json:"total"`
+}

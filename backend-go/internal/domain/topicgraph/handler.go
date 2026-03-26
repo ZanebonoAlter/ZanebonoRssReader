@@ -160,3 +160,30 @@ func parseIntParam(value string, min, max int) (int, error) {
 	}
 	return result, nil
 }
+
+// GetPendingArticlesByTagHandler returns articles with the given tag that are not in any digest
+func GetPendingArticlesByTagHandler(c *gin.Context) {
+	tagSlug := c.Param("slug")
+	if tagSlug == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "tag slug is required"})
+		return
+	}
+
+	kind := c.DefaultQuery("type", "daily")
+	anchor, err := topictypes.ParseAnchorDate(c.Query("date"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	result, err := GetPendingArticlesByTag(tagSlug, kind, anchor)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    result,
+	})
+}

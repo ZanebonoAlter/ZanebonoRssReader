@@ -822,3 +822,91 @@ func buildGraphPayloadFromArticles(data []ArticleTagData) ([]topictypes.GraphNod
 
 	return nodes, edges, topTopics, len(articleSet)
 }
+
+// GetPendingArticlesByTag retrieves articles that have the given tag but are not in any digest
+func GetPendingArticlesByTag(tagSlug string, kind string, anchor time.Time) (*topictypes.PendingArticlesResponse, error) {
+	windowStart, windowEnd, _, err := topictypes.ResolveWindow(kind, anchor)
+	if err != nil {
+		return nil, err
+	}
+
+	// Step 1: Get the topic tag
+	var topicTag models.TopicTag
+	err = database.DB.Where("slug = ?", tagSlug).First(&topicTag).Error
+	if err != nil {
+		return nil, fmt.Errorf("topic tag not found: %w", err)
+	}
+
+	// Step 2: Get articles with this tag in the time window
+	var taggedArticles []models.Article
+	err = database.DB.
+		Joins("JOIN article_topic_tags ON articles.id = article_topic_tags.article_id").
+		Where("article_topic_tags.topic_tag_id = ?", topicTag.ID).
+		Where("articles.created_at >= ? AND articles.created_at < ?", windowStart, windowEnd).
+		Preload("Feed").
+		Find(&taggedArticles).Error
+	if err != nil {
+		return nil, fmt.Errorf("failed to get tagged articles: %w", err)
+	}
+
+	if len(taggedArticles) == 0 {
+		return &topictypes.PendingArticlesResponse{Articles: []topictypes.PendingArticle{}, Total: 0}, nil
+	}
+
+	// Step 3: Get all article IDs that are already in digests
+	taggedArticleIDs := make([]uint, len(taggedArticles))
+	for i, a := range taggedArticles {
+		taggedArticleIDs[i] = a.ID
+	}
+
+	var summaries []models.AISummary
+	err = database.DB.
+		Where("created_at >= ? AND created_at < ?", windowStart, windowEnd).
+		Where("articles IS NOT NULL AND articles != ''").
+		Find(&summaries).Error
+	if err != nil {
+		return nil, fmt.Errorf("failed to get summaries: %w", err)
+	}
+
+	// Build set of article IDs that are in any digest
+	digestArticleIDs := make(map[uint]bool)
+	for _, summary := range summaries {
+		ids := parseTopicSummaryArticleIDs(summary.Articles)
+		for _, id := range ids {
+			digestArticleIDs[id] = true
+		}
+	}
+
+	// Step 4: Filter articles that are not in any digest
+	var pendingArticles []topictypes.PendingArticle
+	for _, article := range taggedArticles {
+		if digestArticleIDs[article.ID] {
+			continue
+		}
+
+		pa := topictypes.PendingArticle{
+			ID:    article.ID,
+			Title: article.Title,
+			Link:  article.Link,
+		}
+
+		if article.PubDate != nil {
+			pa.PubDate = article.PubDate.In(topictypes.TopicGraphCST).Format(time.RFC3339)
+		}
+
+		if article.Feed.ID != 0 {
+			pa.FeedName = article.Feed.Title
+			pa.FeedIcon = article.Feed.Icon
+			pa.FeedColor = article.Feed.Color
+		} else {
+			pa.FeedName = "未知订阅源"
+		}
+
+		pendingArticles = append(pendingArticles, pa)
+	}
+
+	return &topictypes.PendingArticlesResponse{
+		Articles: pendingArticles,
+		Total:    len(pendingArticles),
+	}, nil
+}
