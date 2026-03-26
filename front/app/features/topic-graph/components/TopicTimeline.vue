@@ -5,6 +5,7 @@ import type { TimelineDigest, TimelineFilters } from '~/types/timeline'
 import AIAnalysisPanel from './AIAnalysisPanel.vue'
 import TimelineHeader from './TimelineHeader.vue'
 import TimelineItem from './TimelineItem.vue'
+import TimelinePendingItem from './TimelinePendingItem.vue'
 
 interface TopicInfo {
   slug: string
@@ -48,6 +49,8 @@ interface Props {
   aiAnalysisProgress?: number
   aiAnalysisResult?: AnalysisResult | null
   aiAnalysisError?: string | null
+  pendingArticleCount?: number
+  selectedPendingNode?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -56,6 +59,8 @@ const props = withDefaults(defineProps<Props>(), {
   aiAnalysisProgress: 0,
   aiAnalysisResult: null,
   aiAnalysisError: null,
+  pendingArticleCount: 0,
+  selectedPendingNode: false,
 })
 
 const emit = defineEmits<{
@@ -66,6 +71,7 @@ const emit = defineEmits<{
   'open-article': [articleId: number]
   'select-digest': [digestId: string]
   'preview-digest': [digestId: string]
+  'select-pending': []
 }>()
 
 function handleFilterChange(filters: TimelineFilters) {
@@ -94,6 +100,10 @@ function handleSelectDigest(digestId: string) {
 
 function handlePreviewDigest(digestId: string) {
   emit('preview-digest', digestId)
+}
+
+function handleSelectPending() {
+  emit('select-pending')
 }
 </script>
 
@@ -132,6 +142,12 @@ function handlePreviewDigest(digestId: string) {
       </div>
 
       <div v-else class="timeline-list">
+        <TimelinePendingItem
+          v-if="selectedTopic && props.pendingArticleCount > 0"
+          :count="props.pendingArticleCount"
+          :is-active="props.selectedPendingNode"
+          @select="handleSelectPending"
+        />
         <TimelineItem
           v-for="(item, index) in items"
           :key="item.id"
