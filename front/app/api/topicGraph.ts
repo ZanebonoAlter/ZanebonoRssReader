@@ -1,5 +1,6 @@
 import { apiClient } from './client'
 import type { TimelineFilters } from '~/types/timeline'
+import type { PendingArticlesResponse } from '~/types/timeline'
 
 export type TopicGraphType = 'daily' | 'weekly'
 export type TopicCategory = 'event' | 'person' | 'keyword'
@@ -96,7 +97,11 @@ export interface HotspotDigestCard {
   matched_articles?: Array<{
     id: number
     title: string
+    feed_name?: string
+    feed_icon?: string
+    feed_color?: string
   }>
+  matched_articles_tags?: AggregatedTopicTag[]
 }
 
 export interface HotspotDigestsResponse {
@@ -310,6 +315,13 @@ export function useTopicGraphApi() {
       return apiClient.get<TopicArticlesResponse>(
         withQuery(`/topic-graph/topic/${params.slug}/articles`, queryParams)
       )
+    },
+
+    async getPendingArticlesByTag(slug: string, type: TopicGraphType, date?: string) {
+      return apiClient.get<PendingArticlesResponse>(withQuery(`/topic-graph/tag/${slug}/pending-articles`, {
+        type,
+        date,
+      }))
     },
   }
 }
