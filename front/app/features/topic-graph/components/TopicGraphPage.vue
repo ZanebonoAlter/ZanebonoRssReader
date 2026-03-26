@@ -11,7 +11,7 @@ import {
   type TopicGraphType,
 } from '~/api/topicGraph'
 import type { Article } from '~/types'
-import type { TimelineDigest, TimelineDigestSelection, TimelineFilters } from '~/types/timeline'
+import type { TimelineDigest, TimelineDigestSelection, TimelineFilters, PendingArticle } from '~/types/timeline'
 import ArticleTagList from '../../articles/components/ArticleTagList.vue'
 import ArticleContentView from '~/features/articles/components/ArticleContentView.vue'
 import DigestDetail from '../../digest/components/DigestDetail.vue'
@@ -77,6 +77,11 @@ const aiAnalysisProgress = ref(0)
 const aiAnalysisResult = ref<any>(null)
 const aiAnalysisError = ref<string | null>(null)
 let aiAnalysisPollTimer: ReturnType<typeof setTimeout> | null = null
+
+// Pending articles state
+const pendingArticles = ref<PendingArticle[]>([])
+const selectedPendingNode = ref(false)
+const loadingPendingArticles = ref(false)
 
 const viewModel = computed(() => graphPayload.value
   ? buildTopicGraphViewModel(graphPayload.value)
@@ -360,6 +365,9 @@ const hotspotTimelineItems = computed((): TimelineDigest[] => {
         id: article.id,
         title: article.title,
         link: '',
+        feedName: article.feed_name,
+        feedIcon: article.feed_icon,
+        feedColor: article.feed_color,
       })) || [],
     }))
 })
@@ -386,6 +394,11 @@ const selectedDigest = computed<TimelineDigestSelection | null>(() => {
       return {
         ...digest,
         matchedArticleIds: hotspotDigest.matched_articles?.map(a => a.id) || [],
+        matchedArticlesTags: hotspotDigest.matched_articles_tags?.map(tag => ({
+          slug: tag.slug,
+          label: tag.label,
+          category: normalizeTopicCategory(tag.category, tag.kind),
+        })),
       }
     }
   }
@@ -582,8 +595,14 @@ async function handleTagSelect(slug: string, category: TopicCategory) {
   // Update selected hotspot tag
   selectedHotspotTag.value = { slug, label: tagLabel, category }
 
+  // Reset pending node selection when selecting a new tag
+  selectedPendingNode.value = false
+
   // Load digests for this tag (reverse trace: tag -> articles -> digests)
   await loadHotspotDigests(slug)
+
+  // Load pending articles for this tag
+  void loadPendingArticles(slug)
 
   // Also load topic detail for the sidebar
   void loadTopicDetail(slug)
@@ -612,6 +631,33 @@ async function loadHotspotDigests(tagSlug: string) {
   }
 }
 
+async function loadPendingArticles(tagSlug: string) {
+  loadingPendingArticles.value = true
+  try {
+    const response = await topicGraphApi.getPendingArticlesByTag(
+      tagSlug,
+      selectedType.value,
+      selectedDate.value
+    )
+    if (response.success && response.data) {
+      pendingArticles.value = response.data.articles || []
+    } else {
+      pendingArticles.value = []
+    }
+  } catch (error) {
+    console.error('Failed to load pending articles:', error)
+    pendingArticles.value = []
+  } finally {
+    loadingPendingArticles.value = false
+  }
+}
+
+function handleSelectPending() {
+  selectedPendingNode.value = true
+  selectedDigestId.value = null
+  previewDigestId.value = null
+}
+
 function handleNodeClick(node: { slug?: string; kind: string; category?: TopicCategory; label?: string }) {
   if (node.kind !== 'topic' || !node.slug) return
 
@@ -630,8 +676,14 @@ function handleNodeClick(node: { slug?: string; kind: string; category?: TopicCa
     category: node.category || 'keyword',
   }
 
+  // Reset pending node selection when clicking a node
+  selectedPendingNode.value = false
+
   // Load digests for this node (similar to handleTagSelect)
   void loadHotspotDigests(node.slug)
+
+  // Load pending articles for this node
+  void loadPendingArticles(node.slug)
 
   void loadTopicDetail(node.slug)
 }
@@ -943,12 +995,14 @@ watch(effectiveTimelineItems, (items) => {
   if (!items.length) {
     selectedDigestId.value = null
     previewDigestId.value = null
+    selectedPendingNode.value = false
     return
   }
 
   const currentExists = selectedDigestId.value && items.some(item => item.id === selectedDigestId.value)
   if (!currentExists) {
     selectedDigestId.value = items[0]?.id || null
+    selectedPendingNode.value = false
   }
 }, { immediate: true })
 
@@ -1186,6 +1240,8 @@ await loadGraph()
                 :ai-analysis-progress="aiAnalysisProgress"
                 :ai-analysis-result="aiAnalysisResult"
                 :ai-analysis-error="aiAnalysisError"
+                :pending-article-count="pendingArticles.length"
+                :selected-pending-node="selectedPendingNode"
                 @filter-change="handleTimelineFilterChange"
                 @select-digest="handleDigestSelect"
                 @preview-digest="handlePreviewDigest"
@@ -1193,6 +1249,7 @@ await loadGraph()
                 @ai-analysis-start="handleAIAnalysisStart"
                 @ai-analysis-retry="handleAIAnalysisRetry"
                 @open-article="openArticlePreview"
+                @select-pending="handleSelectPending"
             />
           </article>
         </div>
@@ -1206,6 +1263,8 @@ await loadGraph()
             :data-state="detail ? 'detail' : (loadingDetail ? 'loading' : 'empty')"
             :selected-keyword="selectedKeywordSlug"
             :selected-tag-slug="selectedHotspotTag?.slug"
+            :pending-articles="selectedPendingNode ? pendingArticles : []"
+            :selected-pending-node="selectedPendingNode"
             @open-article="openArticlePreview"
             @highlight-keyword="handleKeywordHighlight"
           />
@@ -1289,6 +1348,8 @@ await loadGraph()
 }
 
 .topic-canvas-shell {
+  position: relative;
+  z-index: 2;
   border: 1px solid rgba(255, 255, 255, 0.06);
   background: rgba(11, 18, 24, 0.4);
   box-shadow: 0 40px 120px rgba(0, 0, 0, 0.4);
@@ -1528,6 +1589,7 @@ await loadGraph()
 
 .topic-category-column {
   position: relative;
+  z-index: 5;
   overflow: visible;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: linear-gradient(180deg, rgba(20, 29, 40, 0.74), rgba(10, 15, 23, 0.92));
