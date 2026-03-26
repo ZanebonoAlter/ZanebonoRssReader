@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Icon } from '@iconify/vue'
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useArticlesApi } from '~/api/articles'
 import {
   useTopicGraphApi,
@@ -11,8 +11,7 @@ import {
   type TopicGraphType,
 } from '~/api/topicGraph'
 import type { Article } from '~/types'
-import type { TimelineDigest, TimelineDigestSelection, TimelineFilters, PendingArticle } from '~/types/timeline'
-import ArticleTagList from '../../articles/components/ArticleTagList.vue'
+import type { TimelineDigest, TimelineDigestSelection, PendingArticle } from '~/types/timeline'
 import ArticleContentView from '~/features/articles/components/ArticleContentView.vue'
 import DigestDetail from '../../digest/components/DigestDetail.vue'
 import { normalizeArticle } from '../../articles/utils/normalizeArticle'
@@ -64,19 +63,6 @@ const expandedTopicSlugs = ref<string[]>([])
 const hotspotDigests = ref<HotspotDigestCard[]>([])
 const loadingHotspotDigests = ref(false)
 const selectedHotspotTag = ref<{ slug: string; label: string; category: TopicCategory } | null>(null)
-
-// Timeline state
-const timelineFilters = ref<TimelineFilters>({
-  dateRange: null,
-  sources: [],
-})
-
-// AI Analysis state
-const aiAnalysisStatus = ref<'idle' | 'loading' | 'completed' | 'error'>('idle')
-const aiAnalysisProgress = ref(0)
-const aiAnalysisResult = ref<any>(null)
-const aiAnalysisError = ref<string | null>(null)
-let aiAnalysisPollTimer: ReturnType<typeof setTimeout> | null = null
 
 // Pending articles state
 const pendingArticles = ref<PendingArticle[]>([])
@@ -317,37 +303,33 @@ const displayedGraph = computed(() => buildDisplayedTopicGraph({
 const timelineItems = computed((): TimelineDigest[] => {
   const summaries = detail.value?.summaries || []
 
-  return summaries
-    .filter((summary) => matchesTimelineFilters(summary.created_at, timelineFilters.value))
-    .map(summary => ({
-      id: String(summary.id),
-      title: summary.title,
-      summary: summary.summary,
-      createdAt: summary.created_at,
-      feedName: summary.feed_name,
-      feedIcon: summary.feed_icon,
-      categoryName: summary.category_name,
-      articleCount: summary.article_count,
-      tags: summary.aggregated_tags.map(topic => ({
-        slug: topic.slug,
-        label: topic.label,
-        category: normalizeTopicCategory(topic.category, topic.kind),
-      })),
-      articles: summary.articles.map(article => ({
-        id: article.id,
-        title: article.title,
-        link: article.link,
-      })),
-    }))
+  return summaries.map(summary => ({
+    id: String(summary.id),
+    title: summary.title,
+    summary: summary.summary,
+    createdAt: summary.created_at,
+    feedName: summary.feed_name,
+    feedIcon: summary.feed_icon,
+    categoryName: summary.category_name,
+    articleCount: summary.article_count,
+    tags: summary.aggregated_tags.map(topic => ({
+      slug: topic.slug,
+      label: topic.label,
+      category: normalizeTopicCategory(topic.category, topic.kind),
+    })),
+    articles: summary.articles.map(article => ({
+      id: article.id,
+      title: article.title,
+      link: article.link,
+    })),
+  }))
 })
 
 // Hotspot digests converted to TimelineDigest format for display
 const hotspotTimelineItems = computed((): TimelineDigest[] => {
   if (!hotspotDigests.value.length) return []
 
-  return hotspotDigests.value
-    .filter((digest) => matchesTimelineFilters(digest.created_at, timelineFilters.value))
-    .map(digest => ({
+  return hotspotDigests.value.map(digest => ({
       id: String(digest.id),
       title: digest.title,
       summary: digest.summary,
@@ -640,7 +622,15 @@ async function loadPendingArticles(tagSlug: string) {
       selectedDate.value
     )
     if (response.success && response.data) {
-      pendingArticles.value = response.data.articles || []
+      pendingArticles.value = (response.data.articles || []).map(article => ({
+        id: article.id,
+        title: article.title,
+        link: article.link,
+        pubDate: (article as any).pub_date || article.pubDate,
+        feedName: (article as any).feed_name || article.feedName,
+        feedIcon: (article as any).feed_icon || article.feedIcon,
+        feedColor: (article as any).feed_color || article.feedColor,
+      }))
     } else {
       pendingArticles.value = []
     }
@@ -743,252 +733,12 @@ function closeArticlePreview() {
   selectedPreviewArticle.value = null
 }
 
-function handleTimelineFilterChange(filters: TimelineFilters) {
-  timelineFilters.value = filters
-}
-
-function handleTimelineAIAnalysis() {
-  // Trigger AI analysis start
-  handleAIAnalysisStart()
-}
-
-function clearAIAnalysisPolling() {
-  if (aiAnalysisPollTimer) {
-    clearTimeout(aiAnalysisPollTimer)
-    aiAnalysisPollTimer = null
-  }
-}
-
-function normalizeTimelineAnalysisPayload(payload: Record<string, any>) {
-  return {
-    summary: payload.summary,
-    timeline: Array.isArray(payload.timeline)
-      ? payload.timeline.map((item: any) => ({
-          date: item.date,
-          title: item.title,
-          summary: item.summary,
-          sources: Array.isArray(item.sources)
-            ? item.sources.map((source: any) => ({ articleId: source.articleId, title: source.title }))
-            : Array.isArray(item.source_articles)
-              ? item.source_articles.map((source: any) => ({
-                  articleId: source.articleId ?? source.article_id,
-                  title: source.title,
-                }))
-              : [],
-        }))
-      : undefined,
-    keyMoments: payload.keyMoments ?? payload.key_moments,
-    relatedEntities: payload.relatedEntities ?? payload.related_entities,
-    profile: payload.profile,
-    appearances: Array.isArray(payload.appearances)
-      ? payload.appearances.map((item: any) => ({
-          date: item.date,
-          context: item.context ?? item.scene,
-          quote: item.quote,
-          articleId: item.articleId ?? item.article_id,
-          articleTitle: item.articleTitle ?? item.article_title,
-          articleLink: item.articleLink ?? item.article_link,
-        }))
-      : undefined,
-    trend: payload.trend ?? payload.trend_data,
-    relatedTopics: Array.isArray(payload.relatedTopics ?? payload.related_topics)
-      ? (payload.relatedTopics ?? payload.related_topics).map((item: any) => typeof item === 'string' ? item : (item.topic ?? item.label ?? ''))
-          .filter(Boolean)
-      : undefined,
-    coOccurrence: Array.isArray(payload.coOccurrence ?? payload.co_occurrence)
-      ? (payload.coOccurrence ?? payload.co_occurrence).map((item: any) => ({
-          term: item.term ?? item.keyword,
-          count: item.count ?? item.score ?? 0,
-        }))
-      : undefined,
-    contextExamples: Array.isArray(payload.contextExamples ?? payload.context_examples)
-      ? (payload.contextExamples ?? payload.context_examples).map((item: any) => typeof item === 'string' ? item : item.text)
-      : undefined,
-  }
-}
-
-async function applyAIAnalysisResult() {
-  if (!detail.value?.topic.id || !selectedCategory.value) return false
-
-  const response = await topicGraphApi.getTopicAnalysis({
-    tagID: detail.value.topic.id,
-    analysisType: selectedCategory.value,
-    windowType: selectedType.value,
-    anchorDate: selectedDate.value,
-  })
-
-  if (!response.success || !response.data) {
-    return false
-  }
-
-  // 支持后端PascalCase和snake_case两种格式
-  const data = response.data
-  const payloadJson = data.payload_json || data.PayloadJSON
-  const payload = typeof payloadJson === 'string'
-    ? JSON.parse(payloadJson)
-    : payloadJson
-
-  aiAnalysisResult.value = normalizeTimelineAnalysisPayload(payload || {})
-  aiAnalysisProgress.value = 100
-  aiAnalysisStatus.value = 'completed'
-  aiAnalysisError.value = null
-  clearAIAnalysisPolling()
-  return true
-}
-
-async function pollAIAnalysisStatus() {
-  if (!detail.value?.topic.id || !selectedCategory.value) return
-
-  const params = {
-    tagID: detail.value.topic.id,
-    analysisType: selectedCategory.value,
-    windowType: selectedType.value,
-    anchorDate: selectedDate.value,
-  }
-
-  try {
-    const response = await topicGraphApi.getAnalysisStatus(params)
-    const status = response.data?.status
-    const progress = response.data?.progress ?? 0
-
-    if (!response.success || !status) {
-      aiAnalysisStatus.value = 'error'
-      aiAnalysisError.value = response.error || '分析状态获取失败'
-      clearAIAnalysisPolling()
-      return
-    }
-
-    if (status === 'ready' || status === 'completed') {
-      const loaded = await applyAIAnalysisResult()
-      if (!loaded) {
-        aiAnalysisStatus.value = 'error'
-        aiAnalysisError.value = '分析结果读取失败'
-      }
-      return
-    }
-
-    if (status === 'pending' || status === 'processing') {
-      aiAnalysisStatus.value = 'loading'
-      aiAnalysisProgress.value = Math.min(Math.max(Math.round(progress * 100), 1), 99)
-      clearAIAnalysisPolling()
-      aiAnalysisPollTimer = setTimeout(() => {
-        void pollAIAnalysisStatus()
-      }, 1800)
-      return
-    }
-
-    aiAnalysisStatus.value = 'error'
-    aiAnalysisError.value = status === 'failed' ? '分析任务失败' : '暂无分析结果'
-    clearAIAnalysisPolling()
-  } catch (error) {
-    aiAnalysisStatus.value = 'error'
-    aiAnalysisError.value = error instanceof Error ? error.message : '分析状态获取失败'
-    clearAIAnalysisPolling()
-  }
-}
-
-async function handleAIAnalysisStart() {
-  if (!selectedTopicSlug.value || !selectedCategory.value) return
-
-  aiAnalysisStatus.value = 'loading'
-  aiAnalysisProgress.value = 0
-  aiAnalysisError.value = null
-  clearAIAnalysisPolling()
-
-  try {
-    const topicID = detail.value?.topic.id
-    if (!topicID) {
-      throw new Error('Topic not found')
-    }
-
-    const loaded = await applyAIAnalysisResult()
-    if (loaded) {
-      return
-    }
-
-    await topicGraphApi.rebuildTopicAnalysis({
-      tagID: topicID,
-      analysisType: selectedCategory.value,
-      windowType: selectedType.value,
-      anchorDate: selectedDate.value,
-    })
-
-    aiAnalysisProgress.value = 1
-    await pollAIAnalysisStatus()
-  } catch (error) {
-    console.error('AI analysis error:', error)
-    aiAnalysisError.value = error instanceof Error ? error.message : 'AI分析失败'
-    aiAnalysisStatus.value = 'error'
-    clearAIAnalysisPolling()
-  }
-}
-
-async function handleAIAnalysisRetry() {
-  await handleAIAnalysisStart()
-}
-
-function matchesTimelineFilters(createdAt: string, filters: TimelineFilters) {
-  const parsed = createdAt ? new Date(createdAt) : null
-  if (!parsed || Number.isNaN(parsed.getTime())) {
-    return filters.dateRange === null
-  }
-
-  const current = new Date(parsed)
-  current.setHours(0, 0, 0, 0)
-
-  if (filters.dateRange === 'custom') {
-    if (filters.startDate) {
-      const start = new Date(filters.startDate)
-      start.setHours(0, 0, 0, 0)
-      if (current < start) return false
-    }
-
-    if (filters.endDate) {
-      const end = new Date(filters.endDate)
-      end.setHours(23, 59, 59, 999)
-      if (parsed > end) return false
-    }
-
-    return true
-  }
-
-  if (filters.dateRange === 'today') {
-    const today = new Date()
-    today.setHours(0, 0, 0, 0)
-    return current.getTime() === today.getTime()
-  }
-
-  if (filters.dateRange === 'week') {
-    const weekStart = new Date()
-    weekStart.setHours(0, 0, 0, 0)
-    weekStart.setDate(weekStart.getDate() - 6)
-    return current >= weekStart
-  }
-
-  if (filters.dateRange === 'month') {
-    const monthStart = new Date()
-    monthStart.setHours(0, 0, 0, 0)
-    monthStart.setDate(monthStart.getDate() - 29)
-    return current >= monthStart
-  }
-
-  return true
-}
-
 watch(selectedType, () => {
   void loadGraph()
 })
 
 watch(selectedDate, () => {
   void loadGraph()
-})
-
-watch(selectedTopicSlug, () => {
-  aiAnalysisStatus.value = 'idle'
-  aiAnalysisProgress.value = 0
-  aiAnalysisError.value = null
-  aiAnalysisResult.value = null
-  clearAIAnalysisPolling()
 })
 
 watch(effectiveTimelineItems, (items) => {
@@ -1005,10 +755,6 @@ watch(effectiveTimelineItems, (items) => {
     selectedPendingNode.value = false
   }
 }, { immediate: true })
-
-onBeforeUnmount(() => {
-  clearAIAnalysisPolling()
-})
 
 await loadGraph()
 </script>
@@ -1231,25 +977,16 @@ await loadGraph()
 
           <!-- Timeline Section -->
           <article class="topic-timeline-shell rounded-[34px] p-4 md:p-5">
-<TopicTimeline
-                :selected-topic="selectedTopicInfo"
-                :items="effectiveTimelineItems"
-                :filters="timelineFilters"
-                :active-digest-id="selectedDigestId"
-                :ai-analysis-status="aiAnalysisStatus"
-                :ai-analysis-progress="aiAnalysisProgress"
-                :ai-analysis-result="aiAnalysisResult"
-                :ai-analysis-error="aiAnalysisError"
-                :pending-article-count="pendingArticles.length"
-                :selected-pending-node="selectedPendingNode"
-                @filter-change="handleTimelineFilterChange"
-                @select-digest="handleDigestSelect"
-                @preview-digest="handlePreviewDigest"
-                @ai-analysis="handleTimelineAIAnalysis"
-                @ai-analysis-start="handleAIAnalysisStart"
-                @ai-analysis-retry="handleAIAnalysisRetry"
-                @open-article="openArticlePreview"
-                @select-pending="handleSelectPending"
+            <TopicTimeline
+              :selected-topic="selectedTopicInfo"
+              :items="effectiveTimelineItems"
+              :active-digest-id="selectedDigestId"
+              :pending-article-count="pendingArticles.length"
+              :selected-pending-node="selectedPendingNode"
+              @select-digest="handleDigestSelect"
+              @preview-digest="handlePreviewDigest"
+              @open-article="openArticlePreview"
+              @select-pending="handleSelectPending"
             />
           </article>
         </div>

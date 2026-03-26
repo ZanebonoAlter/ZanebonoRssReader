@@ -14,23 +14,27 @@ import (
 // HotspotDigestCard represents a digest summary for hotspot display
 // Returned when tracing from article tag back to containing digests
 type HotspotDigestCard struct {
-	ID              uint                            `json:"id"`
-	Title           string                          `json:"title"`
-	Summary         string                          `json:"summary"`
-	FeedName        string                          `json:"feed_name"`
-	FeedIcon        string                          `json:"feed_icon"`
-	FeedColor       string                          `json:"feed_color"`
-	CategoryName    string                          `json:"category_name"`
-	ArticleCount    int                             `json:"article_count"`
-	CreatedAt       time.Time                       `json:"created_at"`
-	AggregatedTags  []topictypes.AggregatedTopicTag `json:"aggregated_tags"`
-	MatchedArticles []HotspotArticleRef             `json:"matched_articles,omitempty"`
+	ID                  uint                            `json:"id"`
+	Title               string                          `json:"title"`
+	Summary             string                          `json:"summary"`
+	FeedName            string                          `json:"feed_name"`
+	FeedIcon            string                          `json:"feed_icon"`
+	FeedColor           string                          `json:"feed_color"`
+	CategoryName        string                          `json:"category_name"`
+	ArticleCount        int                             `json:"article_count"`
+	CreatedAt           time.Time                       `json:"created_at"`
+	AggregatedTags      []topictypes.AggregatedTopicTag `json:"aggregated_tags"`
+	MatchedArticles     []HotspotArticleRef             `json:"matched_articles,omitempty"`
+	MatchedArticlesTags []topictypes.AggregatedTopicTag `json:"matched_articles_tags,omitempty"`
 }
 
 // HotspotArticleRef represents a matched article reference
 type HotspotArticleRef struct {
-	ID    uint   `json:"id"`
-	Title string `json:"title"`
+	ID        uint   `json:"id"`
+	Title     string `json:"title"`
+	FeedName  string `json:"feed_name,omitempty"`
+	FeedIcon  string `json:"feed_icon,omitempty"`
+	FeedColor string `json:"feed_color,omitempty"`
 }
 
 // GetDigestsByArticleTag retrieves digests that contain articles with the given tag
@@ -63,6 +67,17 @@ func GetDigestsByArticleTag(tagSlug string, kind string, anchor time.Time, limit
 		return []HotspotDigestCard{}, nil
 	}
 
+	// Step 2.5: Fetch article details with feed info
+	var articles []models.Article
+	err = database.DB.Preload("Feed").Where("id IN ?", articleIDs).Find(&articles).Error
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch article details: %w", err)
+	}
+	articleDetails := make(map[uint]models.Article)
+	for _, a := range articles {
+		articleDetails[a.ID] = a
+	}
+
 	// Step 3: Get summaries that contain any of these articles
 	// The articles field in ai_summaries is a JSON array of article IDs
 	var summaries []models.AISummary
@@ -79,7 +94,7 @@ func GetDigestsByArticleTag(tagSlug string, kind string, anchor time.Time, limit
 	// Step 4: Filter summaries that contain our articles and build result
 	var result []HotspotDigestCard
 	for _, summary := range summaries {
-		matchedArticles := getMatchedArticlesFromSummary(summary, articleIDs)
+		matchedArticles := getMatchedArticlesFromSummary(summary, articleIDs, articleDetails)
 		if len(matchedArticles) == 0 {
 			continue
 		}
@@ -96,6 +111,16 @@ func GetDigestsByArticleTag(tagSlug string, kind string, anchor time.Time, limit
 		aggregatedTags, err := topicextraction.AggregateArticleTags(parseSummaryArticleIDs(summary.Articles))
 		if err == nil {
 			card.AggregatedTags = aggregatedTags
+		}
+
+		// Aggregate tags only for matched articles
+		matchedArticleIDs := make([]uint, 0, len(matchedArticles))
+		for _, ma := range matchedArticles {
+			matchedArticleIDs = append(matchedArticleIDs, ma.ID)
+		}
+		matchedArticlesTags, err := topicextraction.AggregateArticleTags(matchedArticleIDs)
+		if err == nil {
+			card.MatchedArticlesTags = matchedArticlesTags
 		}
 
 		if summary.Feed != nil {
@@ -131,7 +156,7 @@ func parseSummaryArticleIDs(raw string) []uint {
 }
 
 // getMatchedArticlesFromSummary extracts matched articles from a summary's articles JSON field
-func getMatchedArticlesFromSummary(summary models.AISummary, targetArticleIDs []uint) []HotspotArticleRef {
+func getMatchedArticlesFromSummary(summary models.AISummary, targetArticleIDs []uint, articleDetails map[uint]models.Article) []HotspotArticleRef {
 	if summary.Articles == "" {
 		return nil
 	}
@@ -151,7 +176,16 @@ func getMatchedArticlesFromSummary(summary models.AISummary, targetArticleIDs []
 	var matched []HotspotArticleRef
 	for _, id := range articleIDs {
 		if targetSet[id] {
-			matched = append(matched, HotspotArticleRef{ID: id})
+			ref := HotspotArticleRef{ID: id}
+			if article, ok := articleDetails[id]; ok {
+				ref.Title = article.Title
+				if article.Feed.ID != 0 {
+					ref.FeedName = article.Feed.Title
+					ref.FeedIcon = article.Feed.Icon
+					ref.FeedColor = article.Feed.Color
+				}
+			}
+			matched = append(matched, ref)
 		}
 	}
 

@@ -139,10 +139,18 @@ function handleArticleClick(article: any) {
 
 function handleArticleFavorite(articleId: string) {
   const article = articles.value.find(a => a.id === articleId)
+  const newFavorite = !article?.favorite
   if (article) {
-    updateArticle(articleId, { favorite: !article.favorite })
+    updateArticle(articleId, { favorite: newFavorite })
+  }
+  if (selectedArticle.value?.id === articleId) {
+    selectedArticle.value = { ...selectedArticle.value, favorite: newFavorite }
   }
   apiStore.toggleFavorite(articleId)
+}
+
+function handleArticleUpdate(articleId: string, updates: Partial<any>) {
+  updateArticle(articleId, updates)
 }
 
 function handleLoadMore() {
@@ -482,6 +490,7 @@ import '~/components/FeedLayout.css'
           :articles="articles"
           @favorite="handleArticleFavorite"
           @navigate="handleArticleClick"
+          @article-update="handleArticleUpdate"
         />
       </div>
 

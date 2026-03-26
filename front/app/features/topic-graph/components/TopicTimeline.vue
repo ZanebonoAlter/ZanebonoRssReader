@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { Icon } from '@iconify/vue'
 import type { TopicCategory } from '~/api/topicGraph'
-import type { TimelineDigest, TimelineFilters } from '~/types/timeline'
-import AIAnalysisPanel from './AIAnalysisPanel.vue'
+import type { TimelineDigest } from '~/types/timeline'
 import TimelineHeader from './TimelineHeader.vue'
 import TimelineItem from './TimelineItem.vue'
 import TimelinePendingItem from './TimelinePendingItem.vue'
@@ -13,82 +12,26 @@ interface TopicInfo {
   category: TopicCategory
 }
 
-interface AnalysisResult {
-  timeline?: Array<{
-    date: string
-    title: string
-    summary: string
-    sources: Array<{ articleId: number; title: string }>
-  }>
-  keyMoments?: string[]
-  relatedEntities?: Array<{ name: string; type: string }>
-  summary?: string
-  profile?: {
-    name: string
-    role: string
-    background: string
-  }
-  appearances?: Array<{
-    date: string
-    context: string
-    quote: string
-    articleId: number
-  }>
-  trend?: Array<{ date: string; value: number }>
-  relatedTopics?: string[]
-  coOccurrence?: Array<{ term: string; count: number }>
-  contextExamples?: string[]
-}
-
 interface Props {
   selectedTopic: TopicInfo | null
   items: TimelineDigest[]
-  filters: TimelineFilters
   activeDigestId?: string | null
-  aiAnalysisStatus?: 'idle' | 'loading' | 'completed' | 'error'
-  aiAnalysisProgress?: number
-  aiAnalysisResult?: AnalysisResult | null
-  aiAnalysisError?: string | null
   pendingArticleCount?: number
   selectedPendingNode?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
   activeDigestId: null,
-  aiAnalysisStatus: 'idle',
-  aiAnalysisProgress: 0,
-  aiAnalysisResult: null,
-  aiAnalysisError: null,
   pendingArticleCount: 0,
   selectedPendingNode: false,
 })
 
 const emit = defineEmits<{
-  'filter-change': [filters: TimelineFilters]
-  'ai-analysis': []
-  'ai-analysis-start': []
-  'ai-analysis-retry': []
   'open-article': [articleId: number]
   'select-digest': [digestId: string]
   'preview-digest': [digestId: string]
   'select-pending': []
 }>()
-
-function handleFilterChange(filters: TimelineFilters) {
-  emit('filter-change', filters)
-}
-
-function handleAIAnalysis() {
-  emit('ai-analysis')
-}
-
-function handleAIAnalysisStart() {
-  emit('ai-analysis-start')
-}
-
-function handleAIAnalysisRetry() {
-  emit('ai-analysis-retry')
-}
 
 function handleOpenArticle(articleId: number) {
   emit('open-article', articleId)
@@ -112,22 +55,6 @@ function handleSelectPending() {
     <TimelineHeader
       :topic="selectedTopic"
       :total-count="items.length"
-      :filters="filters"
-      @filter-change="handleFilterChange"
-      @ai-analysis="handleAIAnalysis"
-    />
-
-    <AIAnalysisPanel
-      v-if="selectedTopic"
-      :selected-topic="selectedTopic"
-      :analysis-type="selectedTopic.category"
-      :status="aiAnalysisStatus"
-      :progress="aiAnalysisProgress"
-      :result="aiAnalysisResult"
-      :error="aiAnalysisError"
-      @start-analysis="handleAIAnalysisStart"
-      @retry="handleAIAnalysisRetry"
-      @open-article="handleOpenArticle"
     />
 
     <div class="timeline-content">
@@ -136,31 +63,33 @@ function handleSelectPending() {
         <span>请先选择一个题材查看相关日报</span>
       </div>
 
-      <div v-else-if="items.length === 0" class="timeline-empty">
-        <Icon icon="mdi:file-search" width="32" />
-        <span>这个题材在当前窗口里还没有日报</span>
-      </div>
+      <template v-else>
+        <div v-if="items.length === 0 && props.pendingArticleCount === 0" class="timeline-empty">
+          <Icon icon="mdi:file-search" width="32" />
+          <span>这个题材在当前窗口里还没有日报</span>
+        </div>
 
-      <div v-else class="timeline-list">
-        <TimelinePendingItem
-          v-if="selectedTopic && props.pendingArticleCount > 0"
-          :count="props.pendingArticleCount"
-          :is-active="props.selectedPendingNode"
-          @select="handleSelectPending"
-        />
-        <TimelineItem
-          v-for="(item, index) in items"
-          :key="item.id"
-          :item="item"
-          :is-first="index === 0"
-          :is-last="index === items.length - 1"
-          :is-active="props.activeDigestId === item.id"
-          :highlighted-tag-slugs="selectedTopic ? [selectedTopic.slug] : []"
-          @open-article="handleOpenArticle"
-          @select="handleSelectDigest"
-          @preview-digest="handlePreviewDigest"
-        />
-      </div>
+        <div v-else class="timeline-list">
+          <TimelinePendingItem
+            v-if="props.pendingArticleCount > 0"
+            :count="props.pendingArticleCount"
+            :is-active="props.selectedPendingNode"
+            @select="handleSelectPending"
+          />
+          <TimelineItem
+            v-for="(item, index) in items"
+            :key="item.id"
+            :item="item"
+            :is-first="index === 0"
+            :is-last="index === items.length - 1"
+            :is-active="props.activeDigestId === item.id"
+            :highlighted-tag-slugs="selectedTopic ? [selectedTopic.slug] : []"
+            @open-article="handleOpenArticle"
+            @select="handleSelectDigest"
+            @preview-digest="handlePreviewDigest"
+          />
+        </div>
+      </template>
     </div>
   </div>
 </template>

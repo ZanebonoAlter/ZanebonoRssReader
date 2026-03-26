@@ -40,6 +40,7 @@ const props = withDefaults(defineProps<Props>(), {
 const emit = defineEmits<{
   favorite: [id: string]
   navigate: [article: Article]
+  articleUpdate: [id: string, updates: Partial<Article>]
 }>()
 
 const apiStore = useApiStore()
@@ -147,6 +148,8 @@ function syncCurrentArticle(updates: Partial<Article>) {
   if (storeArticle) {
     Object.assign(storeArticle, updates)
   }
+
+  emit('articleUpdate', props.article.id, updates)
 }
 
 function applyLiveStatusToArticle(status: ContentCompletionStatus | null) {
