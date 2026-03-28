@@ -84,7 +84,7 @@ func CompleteArticleContent(c *gin.Context) {
 	}
 	_ = c.ShouldBindJSON(&req)
 
-	if err := completionService.CompleteArticleWithForce(articleID, req.Force); err != nil {
+	if err := completionService.CompleteArticleWithForce(c.Request.Context(), articleID, req.Force); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 		return
 	}
@@ -120,7 +120,7 @@ func CompleteFeedArticles(c *gin.Context) {
 	failed := 0
 
 	for _, article := range articles {
-		if err := completionService.CompleteArticleWithForce(article.ID, true); err != nil {
+		if err := completionService.CompleteArticleWithForce(c.Request.Context(), article.ID, true); err != nil {
 			failed++
 		} else {
 			completed++

@@ -1,6 +1,7 @@
 package feeds
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -147,7 +148,7 @@ func TestRefreshFeedTagsArticlesImmediatelyWhenCompletionDisabled(t *testing.T) 
 	}
 
 	service := NewFeedService()
-	if err := service.RefreshFeed(feed.ID); err != nil {
+	if err := service.RefreshFeed(context.Background(), feed.ID); err != nil {
 		t.Fatalf("refresh feed: %v", err)
 	}
 

@@ -1,6 +1,30 @@
 import { API_BASE_URL } from '~/utils/constants'
 import type { ApiResponse } from '~/types'
 
+let currentTraceId: string | null = null
+
+function generateSpanId(): string {
+  const bytes = new Uint8Array(8)
+  crypto.getRandomValues(bytes)
+  return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('')
+}
+
+function traceHeaders(): Record<string, string> {
+  if (!currentTraceId) return {}
+  return { traceparent: `00-${currentTraceId}-${generateSpanId()}-01` }
+}
+
+function captureTraceId(response: Response) {
+  const tp = response.headers.get('traceparent')
+  if (tp) {
+    const parts = tp.split('-')
+    if (parts.length >= 2) {
+      currentTraceId = parts[1] ?? null
+      console.debug('[trace]', currentTraceId)
+    }
+  }
+}
+
 class ApiClient {
   private baseURL: string
 
@@ -15,10 +39,12 @@ class ApiClient {
         ...options,
         headers: {
           'Content-Type': 'application/json',
+          ...traceHeaders(),
           ...options.headers,
         },
       })
 
+      captureTraceId(response)
       const data = await response.json()
 
       if (!response.ok) {
@@ -73,8 +99,12 @@ class ApiClient {
       const response = await fetch(url, {
         method: 'POST',
         body: formData,
+        headers: {
+          ...traceHeaders(),
+        },
       })
 
+      captureTraceId(response)
       const data = await response.json()
 
       if (!response.ok) {
@@ -99,7 +129,12 @@ class ApiClient {
 
   async download(endpoint: string): Promise<Blob> {
     const url = `${this.baseURL}${endpoint}`
-    const response = await fetch(url)
+    const response = await fetch(url, {
+      headers: {
+        ...traceHeaders(),
+      },
+    })
+    captureTraceId(response)
     if (!response.ok) {
       throw new Error('下载失败')
     }

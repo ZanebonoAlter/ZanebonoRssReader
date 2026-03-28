@@ -70,7 +70,7 @@ func CrawlArticle(c *gin.Context) {
 	article.FirecrawlStatus = "processing"
 	database.DB.Save(&article)
 
-	result, err := firecrawlService.ScrapePage(article.Link)
+	result, err := firecrawlService.ScrapePage(c.Request.Context(), article.Link)
 	if err != nil {
 		article.FirecrawlStatus = "failed"
 		article.FirecrawlError = err.Error()

@@ -14,6 +14,7 @@ import (
 	topicgraphdomain "my-robot-backend/internal/domain/topicgraph"
 	"my-robot-backend/internal/jobs"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/tracing"
 	"my-robot-backend/internal/platform/ws"
 )
 
@@ -173,6 +174,17 @@ func SetupRoutes(r *gin.Engine) {
 			digestGroup.POST("/run/:type", digestdomain.RunDigestNow)
 			digestGroup.POST("/test-feishu", digestdomain.TestFeishuPush)
 			digestGroup.POST("/test-obsidian", digestdomain.TestObsidianWrite)
+		}
+
+		traceHandler := tracing.NewTraceHandler(database.DB)
+		traces := api.Group("/traces")
+		{
+			traces.GET("", traceHandler.GetTraceByTraceID)
+			traces.GET("/recent", traceHandler.GetRecentTraces)
+			traces.GET("/search", traceHandler.SearchTraces)
+			traces.GET("/stats", traceHandler.GetTraceStats)
+			traces.GET("/:trace_id/timeline", traceHandler.GetTraceTimeline)
+			traces.GET("/:trace_id/otlp", traceHandler.ExportTraceOTLP)
 		}
 	}
 }

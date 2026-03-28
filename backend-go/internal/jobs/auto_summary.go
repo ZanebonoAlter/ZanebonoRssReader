@@ -23,6 +23,7 @@ import (
 	"my-robot-backend/internal/platform/airouter"
 	"my-robot-backend/internal/platform/aisettings"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/tracing"
 )
 
 type AutoSummaryScheduler struct {
@@ -246,27 +247,29 @@ func (s *AutoSummaryScheduler) loadAIConfig() error {
 }
 
 func (s *AutoSummaryScheduler) checkAndGenerateSummaries() {
-	if !s.executionMutex.TryLock() {
-		log.Println("Summary generation already in progress, skipping this cycle")
-		return
-	}
-	s.isExecuting = true
-	defer func() {
-		s.executionMutex.Unlock()
-		s.isExecuting = false
-		if r := recover(); r != nil {
-			log.Printf("[ERROR] PANIC in checkAndGenerateSummaries: %v", r)
-			s.updateSchedulerStatus("idle", fmt.Sprintf("Panic: %v", r), nil, nil)
+	tracing.TraceSchedulerTick("auto_summary", "cron", func(ctx context.Context) {
+		if !s.executionMutex.TryLock() {
+			log.Println("Summary generation already in progress, skipping this cycle")
+			return
 		}
-	}()
+		s.isExecuting = true
+		defer func() {
+			s.executionMutex.Unlock()
+			s.isExecuting = false
+			if r := recover(); r != nil {
+				log.Printf("[ERROR] PANIC in checkAndGenerateSummaries: %v", r)
+				s.updateSchedulerStatus("idle", fmt.Sprintf("Panic: %v", r), nil, nil)
+			}
+		}()
 
-	if err := s.loadAIConfig(); err != nil {
-		log.Printf("AI config not available, skipping summary generation: %v", err)
-		s.updateSchedulerStatus("idle", "AI config not set", nil, nil)
-		return
-	}
+		if err := s.loadAIConfig(); err != nil {
+			log.Printf("AI config not available, skipping summary generation: %v", err)
+			s.updateSchedulerStatus("idle", "AI config not set", nil, nil)
+			return
+		}
 
-	s.runSummaryCycle("scheduled")
+		s.runSummaryCycle("scheduled")
+	})
 }
 
 func (s *AutoSummaryScheduler) runSummaryCycle(triggerSource string) {

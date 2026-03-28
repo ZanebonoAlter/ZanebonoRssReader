@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"my-robot-backend/internal/domain/contentprocessing"
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/tracing"
 )
 
 type ContentCompletionScheduler struct {
@@ -179,12 +181,14 @@ func (s *ContentCompletionScheduler) ResetStats() error {
 }
 
 func (s *ContentCompletionScheduler) checkAndCompleteArticles() {
-	if !s.executionMutex.TryLock() {
-		log.Println("Content completion scheduler already running, skipping this cycle")
-		return
-	}
+	tracing.TraceSchedulerTick("content_completion", "cron", func(ctx context.Context) {
+		if !s.executionMutex.TryLock() {
+			log.Println("Content completion scheduler already running, skipping this cycle")
+			return
+		}
 
-	s.runCompletionCycle("scheduled", nextContentCompletionRunID("scheduled"))
+		s.runCompletionCycle("scheduled", nextContentCompletionRunID("scheduled"))
+	})
 }
 
 func (s *ContentCompletionScheduler) runCompletionCycle(triggerSource, runID string) {
@@ -249,7 +253,7 @@ func (s *ContentCompletionScheduler) runCompletionCycle(triggerSource, runID str
 			continue
 		}
 
-		if err := s.completionService.CompleteArticleWithMetadata(article.ID, false, map[string]any{
+		if err := s.completionService.CompleteArticleWithMetadata(context.Background(), article.ID, false, map[string]any{
 			"scheduler_run_id": runID,
 			"trigger_source":   triggerSource,
 		}); err != nil {

@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -23,7 +24,7 @@ func TestAutoRefreshTriggerNowUpdatesSchedulerTaskAndFeedState(t *testing.T) {
 
 	scheduler := &AutoRefreshScheduler{
 		checkInterval: time.Minute,
-		refreshFeed: func(feedID uint) error {
+		refreshFeed: func(ctx context.Context, feedID uint) error {
 			return nil
 		},
 	}

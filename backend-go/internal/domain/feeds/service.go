@@ -1,9 +1,12 @@
 package feeds
 
 import (
+	"context"
 	"fmt"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	otelCodes "go.opentelemetry.io/otel/codes"
 	"gorm.io/gorm"
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/domain/topicextraction"
@@ -20,8 +23,16 @@ func NewFeedService() *FeedService {
 	}
 }
 
-func (s *FeedService) RefreshFeed(feedID uint) error {
-	var feed models.Feed
+func (s *FeedService) RefreshFeed(ctx context.Context, feedID uint) (err error) {
+	ctx, span := otel.Tracer("rss-reader-backend").Start(ctx, "FeedService.RefreshFeed")
+	defer span.End()
+	defer func() {
+		if err != nil {
+			span.SetStatus(otelCodes.Error, "error")
+			span.RecordError(err)
+		}
+	}()
+	/*line backend-go/internal/domain/feeds/service.go:26:2*/ var feed models.Feed
 	if err := database.DB.First(&feed, feedID).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return fmt.Errorf("feed not found")
@@ -88,7 +99,6 @@ func (s *FeedService) RefreshFeed(feedID uint) error {
 		}
 
 		if !shouldDelayArticleTagging(feed) {
-			// Async tag: enqueue to tag queue instead of blocking refresh
 			topicextraction.GetTagQueue().EnqueueAsync(article.ID, feed.Title, "")
 		}
 

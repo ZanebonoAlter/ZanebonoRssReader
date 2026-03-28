@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -12,13 +13,14 @@ import (
 	"my-robot-backend/internal/domain/feeds"
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/tracing"
 )
 
 type AutoRefreshScheduler struct {
 	cron           *cron.Cron
 	checkInterval  time.Duration
 	feedService    *feeds.FeedService
-	refreshFeed    func(uint) error
+	refreshFeed    func(ctx context.Context, feedID uint) error
 	isRunning      bool
 	isExecuting    bool
 	executionMutex sync.Mutex
@@ -130,17 +132,19 @@ func (s *AutoRefreshScheduler) ResetStats() error {
 }
 
 func (s *AutoRefreshScheduler) checkAndRefreshFeeds() {
-	if !s.executionMutex.TryLock() {
-		log.Println("Auto-refresh scheduler already running, skipping this cycle")
-		return
-	}
-	s.isExecuting = true
-	defer func() {
-		s.isExecuting = false
-		s.executionMutex.Unlock()
-	}()
+	tracing.TraceSchedulerTick("auto_refresh", "cron", func(ctx context.Context) {
+		if !s.executionMutex.TryLock() {
+			log.Println("Auto-refresh scheduler already running, skipping this cycle")
+			return
+		}
+		s.isExecuting = true
+		defer func() {
+			s.isExecuting = false
+			s.executionMutex.Unlock()
+		}()
 
-	_, _ = s.runRefreshCycle("scheduled")
+		_, _ = s.runRefreshCycle("scheduled")
+	})
 }
 
 func (s *AutoRefreshScheduler) runRefreshCycle(triggerSource string) (*AutoRefreshRunSummary, error) {
@@ -175,7 +179,7 @@ func (s *AutoRefreshScheduler) runRefreshCycle(triggerSource string) (*AutoRefre
 		}
 
 		s.markFeedRefreshing(feed.ID, now)
-		go s.refreshFeedAsync(feed.ID)
+		go s.refreshFeedAsync(context.Background(), feed.ID)
 		summary.TriggeredFeeds++
 	}
 
@@ -200,8 +204,8 @@ func (s *AutoRefreshScheduler) needsRefresh(feed *models.Feed, now time.Time) bo
 	return timeSinceRefresh >= interval
 }
 
-func (s *AutoRefreshScheduler) refreshFeedAsync(feedID uint) {
-	if err := s.refreshFeed(feedID); err != nil {
+func (s *AutoRefreshScheduler) refreshFeedAsync(ctx context.Context, feedID uint) {
+	if err := s.refreshFeed(ctx, feedID); err != nil {
 		log.Printf("Error refreshing feed %d: %v", feedID, err)
 	}
 }

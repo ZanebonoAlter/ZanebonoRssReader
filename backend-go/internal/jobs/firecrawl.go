@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -12,6 +13,7 @@ import (
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/domain/topicextraction"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/tracing"
 	"my-robot-backend/internal/platform/ws"
 )
 
@@ -108,12 +110,14 @@ func (s *FirecrawlScheduler) run() {
 }
 
 func (s *FirecrawlScheduler) checkAndCrawl() {
-	if !s.executionMutex.TryLock() {
-		log.Println("[Firecrawl] Scheduler already running, skipping this cycle")
-		return
-	}
+	tracing.TraceSchedulerTick("firecrawl", "cron", func(ctx context.Context) {
+		if !s.executionMutex.TryLock() {
+			log.Println("[Firecrawl] Scheduler already running, skipping this cycle")
+			return
+		}
 
-	s.runCrawlCycle()
+		s.runCrawlCycle()
+	})
 }
 
 func (s *FirecrawlScheduler) runCrawlCycle() {
@@ -193,7 +197,7 @@ func (s *FirecrawlScheduler) runCrawlCycle() {
 			Status: "processing",
 		})
 
-		result, crawlErr := firecrawlService.ScrapePage(art.Link)
+		result, crawlErr := firecrawlService.ScrapePage(context.Background(), art.Link)
 		if crawlErr != nil {
 			failed++
 			database.DB.Model(&art).Updates(map[string]interface{}{

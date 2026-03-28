@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	otelCodes "go.opentelemetry.io/otel/codes"
 	"gorm.io/gorm"
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/domain/topicextraction"
@@ -85,16 +87,28 @@ func (s *ContentCompletionService) IsContentIncomplete(article *models.Article) 
 	return false
 }
 
-func (s *ContentCompletionService) CompleteArticle(articleID uint) error {
-	return s.CompleteArticleWithMetadata(articleID, false, nil)
+func (s *ContentCompletionService) CompleteArticle(ctx context.Context, articleID uint) error {
+	ctx, span := otel.Tracer("rss-reader-backend").Start(ctx, "ContentCompletionService.CompleteArticle")
+	defer span.End()
+	/*line backend-go/internal/domain/contentprocessing/content_completion_service.go:89:2*/ return s.CompleteArticleWithMetadata(ctx, articleID, false, nil)
 }
 
-func (s *ContentCompletionService) CompleteArticleWithForce(articleID uint, force bool) error {
-	return s.CompleteArticleWithMetadata(articleID, force, nil)
+func (s *ContentCompletionService) CompleteArticleWithForce(ctx context.Context, articleID uint, force bool) error {
+	ctx, span := otel.Tracer("rss-reader-backend").Start(ctx, "ContentCompletionService.CompleteArticleWithForce")
+	defer span.End()
+	/*line backend-go/internal/domain/contentprocessing/content_completion_service.go:93:2*/ return s.CompleteArticleWithMetadata(ctx, articleID, force, nil)
 }
 
-func (s *ContentCompletionService) CompleteArticleWithMetadata(articleID uint, force bool, metadata map[string]any) error {
-	var article models.Article
+func (s *ContentCompletionService) CompleteArticleWithMetadata(ctx context.Context, articleID uint, force bool, metadata map[string]any) (err error) {
+	ctx, span := otel.Tracer("rss-reader-backend").Start(ctx, "ContentCompletionService.CompleteArticleWithMetadata")
+	defer span.End()
+	defer func() {
+		if err != nil {
+			span.SetStatus(otelCodes.Error, "error")
+			span.RecordError(err)
+		}
+	}()
+	/*line backend-go/internal/domain/contentprocessing/content_completion_service.go:97:2*/ var article models.Article
 	if err := database.DB.First(&article, articleID).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return fmt.Errorf("article not found")
@@ -203,7 +217,7 @@ func (s *ContentCompletionService) AutoCompletePendingArticles(limit int) ([]uin
 			continue
 		}
 
-		if err := s.CompleteArticle(article.ID); err != nil {
+		if err := s.CompleteArticle(context.Background(), article.ID); err != nil {
 			errors = append(errors, fmt.Errorf("article %d: %w", article.ID, err))
 		} else {
 			completedIDs = append(completedIDs, article.ID)

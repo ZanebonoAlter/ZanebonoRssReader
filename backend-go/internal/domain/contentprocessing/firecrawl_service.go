@@ -2,8 +2,11 @@ package contentprocessing
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"go.opentelemetry.io/otel"
+	otelCodes "go.opentelemetry.io/otel/codes"
 	"io"
 	"net/http"
 	"strings"
@@ -55,8 +58,16 @@ func NewFirecrawlService(config *FirecrawlConfig) *FirecrawlService {
 	}
 }
 
-func (s *FirecrawlService) ScrapePage(url string) (*ScrapeResponse, error) {
-	requestBody := map[string]interface{}{
+func (s *FirecrawlService) ScrapePage(ctx context.Context, url string) (result *ScrapeResponse, err error) {
+	ctx, span := otel.Tracer("rss-reader-backend").Start(ctx, "FirecrawlService.ScrapePage")
+	defer span.End()
+	defer func() {
+		if err != nil {
+			span.SetStatus(otelCodes.Error, "error")
+			span.RecordError(err)
+		}
+	}()
+	/*line backend-go/internal/domain/contentprocessing/firecrawl_service.go:60:2*/ requestBody := map[string]interface{}{
 		"url": url,
 	}
 
@@ -82,28 +93,30 @@ func (s *FirecrawlService) ScrapePage(url string) (*ScrapeResponse, error) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+s.config.APIKey)
 
-	resp, err := s.client.Do(req)
+	httpResp, err := s.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer httpResp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(httpResp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Firecrawl API error: %s", string(respBody))
+	if httpResp.StatusCode != http.StatusOK {
+		err := fmt.Errorf("Firecrawl API error: %s", string(respBody))
+		return nil, err
 	}
 
-	var result ScrapeResponse
-	if err := json.Unmarshal(respBody, &result); err != nil {
+	var scrapeResp ScrapeResponse
+	if err := json.Unmarshal(respBody, &scrapeResp); err != nil {
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 
-	if !result.Success {
-		return nil, fmt.Errorf("Firecrawl scrape failed: %s", result.Error)
+	if !scrapeResp.Success {
+		err := fmt.Errorf("Firecrawl scrape failed: %s", scrapeResp.Error)
+		return nil, err
 	}
 
 	maxLength := s.config.MaxContentLength
@@ -111,11 +124,11 @@ func (s *FirecrawlService) ScrapePage(url string) (*ScrapeResponse, error) {
 		maxLength = 50000
 	}
 
-	if len(result.Data.Markdown) > maxLength {
-		result.Data.Markdown = result.Data.Markdown[:maxLength]
+	if len(scrapeResp.Data.Markdown) > maxLength {
+		scrapeResp.Data.Markdown = scrapeResp.Data.Markdown[:maxLength]
 	}
 
-	return &result, nil
+	return &scrapeResp, nil
 }
 
 func buildFirecrawlEndpoint(baseURL, path string) string {

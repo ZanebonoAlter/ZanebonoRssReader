@@ -67,6 +67,7 @@ func TestCompleteFeedArticlesRetriesFailedArticlesWhenTriggeredManually(t *testi
 
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/feeds/1/complete", nil)
 	ctx.Params = gin.Params{{Key: "feed_id", Value: "1"}}
 
 	CompleteFeedArticles(ctx)

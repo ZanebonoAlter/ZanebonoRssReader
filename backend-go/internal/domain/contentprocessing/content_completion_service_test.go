@@ -1,6 +1,7 @@
 package contentprocessing
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -65,7 +66,7 @@ func TestCompleteArticleWithForceUsesAIRouterRoute(t *testing.T) {
 	}
 
 	service := NewContentCompletionService("http://localhost:11235")
-	if err := service.CompleteArticleWithForce(article.ID, false); err != nil {
+	if err := service.CompleteArticleWithForce(context.Background(), article.ID, false); err != nil {
 		t.Fatalf("complete article: %v", err)
 	}
 
@@ -204,7 +205,7 @@ func TestCompleteArticleWithForceRetriesUntilMaxAndLogsMetadata(t *testing.T) {
 	}
 
 	service := NewContentCompletionService("http://localhost:11235")
-	if err := service.CompleteArticleWithForce(article.ID, false); err == nil {
+	if err := service.CompleteArticleWithForce(context.Background(), article.ID, false); err == nil {
 		t.Fatal("expected first attempt to fail")
 	}
 
@@ -233,7 +234,7 @@ func TestCompleteArticleWithForceRetriesUntilMaxAndLogsMetadata(t *testing.T) {
 		t.Fatalf("request_meta missing feed_id: %s", callLogs[0].RequestMeta)
 	}
 
-	if err := service.CompleteArticleWithForce(article.ID, false); err == nil {
+	if err := service.CompleteArticleWithForce(context.Background(), article.ID, false); err == nil {
 		t.Fatal("expected second attempt to fail")
 	}
 	if err := database.DB.First(&refreshed, article.ID).Error; err != nil {
@@ -287,10 +288,10 @@ func TestCompleteArticleWithForceSkipsFreshPendingAndReclaimsStalePending(t *tes
 	}
 
 	service := NewContentCompletionService("http://localhost:11235")
-	if err := service.CompleteArticleWithForce(fresh.ID, false); err != nil {
+	if err := service.CompleteArticleWithForce(context.Background(), fresh.ID, false); err != nil {
 		t.Fatalf("fresh pending should be skipped without error: %v", err)
 	}
-	if err := service.CompleteArticleWithForce(stale.ID, false); err != nil {
+	if err := service.CompleteArticleWithForce(context.Background(), stale.ID, false); err != nil {
 		t.Fatalf("stale pending should be reclaimed: %v", err)
 	}
 
@@ -360,7 +361,7 @@ func TestCompleteArticleWithMetadataAddsSchedulerRunIDToCallLogs(t *testing.T) {
 	}
 
 	service := NewContentCompletionService("http://localhost:11235")
-	if err := service.CompleteArticleWithMetadata(article.ID, false, map[string]any{
+	if err := service.CompleteArticleWithMetadata(context.Background(), article.ID, false, map[string]any{
 		"scheduler_run_id": "run-123",
 		"trigger_source":   "scheduler",
 	}); err != nil {
@@ -416,7 +417,7 @@ func TestCompleteArticleTagsArticleAfterSuccessfulCompletion(t *testing.T) {
 	}
 
 	service := NewContentCompletionService("http://localhost:11235")
-	if err := service.CompleteArticle(article.ID); err != nil {
+	if err := service.CompleteArticle(context.Background(), article.ID); err != nil {
 		t.Fatalf("complete article: %v", err)
 	}
 

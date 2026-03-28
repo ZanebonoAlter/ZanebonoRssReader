@@ -1,6 +1,7 @@
 package contentprocessing
 
 import (
+	"context"
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/platform/database"
 )
@@ -24,7 +25,7 @@ func (s *ContentCompletionService) AutoCompleteCompletePendingArticles(limit int
 	var errors []error
 
 	for _, article := range articles {
-		if err := s.CompleteArticle(article.ID); err != nil {
+		if err := s.CompleteArticle(context.Background(), article.ID); err != nil {
 			errors = append(errors, err)
 		} else {
 			completedIDs = append(completedIDs, article.ID)
