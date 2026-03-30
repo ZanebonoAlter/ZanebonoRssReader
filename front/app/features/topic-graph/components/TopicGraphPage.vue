@@ -5,10 +5,11 @@ import { useArticlesApi } from '~/api/articles'
 import {
   useTopicGraphApi,
   type HotspotDigestCard,
-  type TopicsByCategoryPayload,
   type TopicCategory,
   type TopicGraphDetailPayload,
+  type TopicGraphFilters,
   type TopicGraphType,
+  type TopicsByCategoryPayload,
 } from '~/api/topicGraph'
 import type { Article } from '~/types'
 import type { TimelineDigest, TimelineDigestSelection, PendingArticle } from '~/types/timeline'
@@ -16,6 +17,7 @@ import ArticleContentView from '~/features/articles/components/ArticleContentVie
 import DigestDetail from '../../digest/components/DigestDetail.vue'
 import { normalizeArticle } from '../../articles/utils/normalizeArticle'
 import type { DigestPreviewSummary } from '~/api/digest'
+import FeedCategoryFilter from '~/features/topic-graph/components/FeedCategoryFilter.vue'
 import TopicGraphCanvas from '~/features/topic-graph/components/TopicGraphCanvas.client.vue'
 import TopicGraphFooterPanels from '~/features/topic-graph/components/TopicGraphFooterPanels.vue'
 import TopicGraphHeader from '~/features/topic-graph/components/TopicGraphHeader.vue'
@@ -38,6 +40,8 @@ function formatDateInput(date = new Date()) {
 
 const selectedType = ref<TopicGraphType>('daily')
 const selectedDate = ref(formatDateInput())
+const selectedFilterCategoryId = ref<string | null>(null)
+const selectedFilterFeedId = ref<string | null>(null)
 const graphPayload = ref<Awaited<ReturnType<typeof topicGraphApi.getGraph>>['data'] | null>(null)
 const selectedTopicSlug = ref<string | null>(null)
 const selectedCategory = ref<TopicCategory | null>(null)
@@ -429,11 +433,13 @@ const previewDigestSummary = computed<DigestPreviewSummary | null>(() => {
     created_at: previewDigest.value.createdAt,
   }
 })
-const statCards = computed(() => ([
-  { label: '主题数', value: viewModel.value.stats.topicCount },
-  { label: '文章数', value: viewModel.value.stats.articleCount },
-  { label: 'Feed 数', value: viewModel.value.stats.feedCount },
-]))
+function buildCurrentFilters(): TopicGraphFilters | undefined {
+  if (selectedFilterFeedId.value) return { feedId: selectedFilterFeedId.value }
+  if (selectedFilterCategoryId.value && selectedFilterCategoryId.value !== '__uncategorized__') {
+    return { categoryId: selectedFilterCategoryId.value }
+  }
+  return undefined
+}
 
 const pageState = computed(() => {
   if (loadingGraph.value) return 'loading'
@@ -469,7 +475,7 @@ const selectedTopicInfo = computed(() => {
 async function loadHotspots() {
   loadingHotspots.value = true
   try {
-    const response = await topicGraphApi.getTopicsByCategory(selectedType.value, selectedDate.value)
+    const response = await topicGraphApi.getTopicsByCategory(selectedType.value, selectedDate.value, buildCurrentFilters())
     if (response.success && response.data) {
       hotspotData.value = response.data
     } else {
@@ -489,7 +495,7 @@ async function loadGraph() {
   notice.value = null
 
   try {
-    const response = await topicGraphApi.getGraph(selectedType.value, selectedDate.value)
+    const response = await topicGraphApi.getGraph(selectedType.value, selectedDate.value, buildCurrentFilters())
     if (!response.success || !response.data) {
       notice.value = response.error || '主题图谱没拉下来'
       graphPayload.value = null
@@ -535,7 +541,7 @@ async function loadTopicDetail(slug: string) {
   loadingDetail.value = true
 
   try {
-    const response = await topicGraphApi.getTopicDetail(slug, selectedType.value, selectedDate.value)
+    const response = await topicGraphApi.getTopicDetail(slug, selectedType.value, selectedDate.value, buildCurrentFilters())
     if (response.success && response.data) {
       detail.value = response.data
       selectedCategory.value = normalizeTopicCategory(response.data.topic.category, response.data.topic.kind)
@@ -741,6 +747,14 @@ watch(selectedDate, () => {
   void loadGraph()
 })
 
+watch([selectedFilterCategoryId, selectedFilterFeedId], () => {
+  void loadGraph()
+})
+
+watch([selectedFilterCategoryId, selectedFilterFeedId], () => {
+  void loadGraph()
+ })
+
 watch(effectiveTimelineItems, (items) => {
   if (!items.length) {
     selectedDigestId.value = null
@@ -790,12 +804,12 @@ await loadGraph()
                   </p>
                 </div>
 
-                <div class="mt-6 grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
-                  <article v-for="card in statCards" :key="card.label" class="topic-stat-card rounded-[24px] px-4 py-3">
-                    <p class="topic-stat-card__label">{{ card.label }}</p>
-                    <p class="topic-stat-card__value">{{ card.value }}</p>
-                  </article>
-                </div>
+                <FeedCategoryFilter
+                  :selected-category-id="selectedFilterCategoryId"
+                  :selected-feed-id="selectedFilterFeedId"
+                  @update:selected-category-id="selectedFilterCategoryId = $event"
+                  @update:selected-feed-id="selectedFilterFeedId = $event"
+                />
 
               </aside>
 

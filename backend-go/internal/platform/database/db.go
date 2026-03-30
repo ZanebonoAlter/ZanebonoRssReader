@@ -72,6 +72,8 @@ func Migrate() error {
 		&models.AICallLog{},
 		&models.ReadingBehavior{},
 		&models.UserPreference{},
+		&models.FirecrawlJob{},
+		&models.TagJob{},
 	)
 }
 
@@ -368,6 +370,43 @@ func EnsureTables() error {
 				FOREIGN KEY(topic_tag_id) REFERENCES topic_tags(id) ON DELETE CASCADE,
 				UNIQUE(article_id, topic_tag_id)
 			)`,
+		"firecrawl_jobs": `
+			CREATE TABLE IF NOT EXISTS firecrawl_jobs (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				article_id INTEGER NOT NULL,
+				status VARCHAR(20) NOT NULL DEFAULT 'pending',
+				priority INTEGER DEFAULT 0,
+				attempt_count INTEGER DEFAULT 0,
+				max_attempts INTEGER DEFAULT 5,
+				available_at DATETIME NOT NULL,
+				leased_at DATETIME,
+				lease_expires_at DATETIME,
+				last_error TEXT,
+				url_snapshot VARCHAR(1000),
+				created_at DATETIME,
+				updated_at DATETIME,
+				FOREIGN KEY(article_id) REFERENCES articles(id) ON DELETE CASCADE
+			)`,
+		"tag_jobs": `
+			CREATE TABLE IF NOT EXISTS tag_jobs (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				article_id INTEGER NOT NULL,
+				status VARCHAR(20) NOT NULL DEFAULT 'pending',
+				priority INTEGER DEFAULT 0,
+				attempt_count INTEGER DEFAULT 0,
+				max_attempts INTEGER DEFAULT 5,
+				available_at DATETIME NOT NULL,
+				leased_at DATETIME,
+				lease_expires_at DATETIME,
+				last_error TEXT,
+				feed_name_snapshot VARCHAR(200),
+				category_name_snapshot VARCHAR(100),
+				force_retag BOOLEAN DEFAULT 0,
+				reason VARCHAR(50),
+				created_at DATETIME,
+				updated_at DATETIME,
+				FOREIGN KEY(article_id) REFERENCES articles(id) ON DELETE CASCADE
+			)`,
 	}
 
 	indexes := map[string][]string{
@@ -440,6 +479,16 @@ func EnsureTables() error {
 		"article_topic_tags": {
 			"CREATE INDEX IF NOT EXISTS idx_article_topic_tags_article_id ON article_topic_tags(article_id)",
 			"CREATE INDEX IF NOT EXISTS idx_article_topic_tags_topic_tag_id ON article_topic_tags(topic_tag_id)",
+		},
+		"firecrawl_jobs": {
+			"CREATE INDEX IF NOT EXISTS idx_firecrawl_jobs_status_available_at ON firecrawl_jobs(status, available_at)",
+			"CREATE INDEX IF NOT EXISTS idx_firecrawl_jobs_lease_expires_at ON firecrawl_jobs(lease_expires_at)",
+			"CREATE INDEX IF NOT EXISTS idx_firecrawl_jobs_article_id ON firecrawl_jobs(article_id)",
+		},
+		"tag_jobs": {
+			"CREATE INDEX IF NOT EXISTS idx_tag_jobs_status_available_at ON tag_jobs(status, available_at)",
+			"CREATE INDEX IF NOT EXISTS idx_tag_jobs_lease_expires_at ON tag_jobs(lease_expires_at)",
+			"CREATE INDEX IF NOT EXISTS idx_tag_jobs_article_id ON tag_jobs(article_id)",
 		},
 	}
 

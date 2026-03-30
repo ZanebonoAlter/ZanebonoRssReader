@@ -1,7 +1,7 @@
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **ZanebonoRssReader** (3261 symbols, 8548 relationships, 268 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **my-robot** (4257 symbols, 10280 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
@@ -17,7 +17,7 @@ This project is indexed by GitNexus as **ZanebonoRssReader** (3261 symbols, 8548
 
 1. `gitnexus_query({query: "<error or symptom>"})` — find execution flows related to the issue
 2. `gitnexus_context({name: "<suspect function>"})` — see all callers, callees, and process participation
-3. `READ gitnexus://repo/ZanebonoRssReader/process/{processName}` — trace the full execution flow step by step
+3. `READ gitnexus://repo/my-robot/process/{processName}` — trace the full execution flow step by step
 4. For regressions: `gitnexus_detect_changes({scope: "compare", base_ref: "main"})` — see what your branch changed
 
 ## When Refactoring
@@ -56,10 +56,10 @@ This project is indexed by GitNexus as **ZanebonoRssReader** (3261 symbols, 8548
 
 | Resource | Use for |
 |----------|---------|
-| `gitnexus://repo/ZanebonoRssReader/context` | Codebase overview, check index freshness |
-| `gitnexus://repo/ZanebonoRssReader/clusters` | All functional areas |
-| `gitnexus://repo/ZanebonoRssReader/processes` | All execution flows |
-| `gitnexus://repo/ZanebonoRssReader/process/{name}` | Step-by-step execution trace |
+| `gitnexus://repo/my-robot/context` | Codebase overview, check index freshness |
+| `gitnexus://repo/my-robot/clusters` | All functional areas |
+| `gitnexus://repo/my-robot/processes` | All execution flows |
+| `gitnexus://repo/my-robot/process/{name}` | Step-by-step execution trace |
 
 ## Self-Check Before Finishing
 

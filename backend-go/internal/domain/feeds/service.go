@@ -8,6 +8,7 @@ import (
 	"go.opentelemetry.io/otel"
 	otelCodes "go.opentelemetry.io/otel/codes"
 	"gorm.io/gorm"
+	"my-robot-backend/internal/domain/contentprocessing"
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/domain/topicextraction"
 	"my-robot-backend/internal/platform/database"
@@ -98,8 +99,8 @@ func (s *FeedService) RefreshFeed(ctx context.Context, feedID uint) (err error) 
 			continue
 		}
 
-		if !shouldDelayArticleTagging(feed) {
-			topicextraction.GetTagQueue().EnqueueAsync(article.ID, feed.Title, "")
+		if err := s.enqueueArticleProcessing(feed, article); err != nil {
+			return err
 		}
 
 		articlesAdded++
@@ -115,6 +116,18 @@ func (s *FeedService) RefreshFeed(ctx context.Context, feedID uint) (err error) 
 	}
 
 	return nil
+}
+
+func (s *FeedService) enqueueArticleProcessing(feed models.Feed, article models.Article) error {
+	if shouldDelayArticleTagging(feed) {
+		return contentprocessing.NewFirecrawlJobQueue(database.DB).Enqueue(article)
+	}
+
+	return topicextraction.NewTagJobQueue(database.DB).Enqueue(topicextraction.TagJobRequest{
+		ArticleID: article.ID,
+		FeedName:  feed.Title,
+		Reason:    "article_created",
+	})
 }
 
 func (s *FeedService) updateFeedError(feed *models.Feed, err error) {

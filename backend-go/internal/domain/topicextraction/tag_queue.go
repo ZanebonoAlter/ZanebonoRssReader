@@ -10,21 +10,15 @@ import (
 	"my-robot-backend/internal/platform/database"
 )
 
-// TagTask represents a tag extraction task
-type TagTask struct {
-	ArticleID    uint
-	FeedName     string
-	CategoryName string
-	CreatedAt    time.Time
-}
-
-// TagQueue manages asynchronous tag extraction tasks
 type TagQueue struct {
-	tasks    chan TagTask
-	stopChan chan struct{}
-	wg       sync.WaitGroup
-	started  bool
-	mu       sync.Mutex
+	stopChan     chan struct{}
+	wg           sync.WaitGroup
+	started      bool
+	mu           sync.Mutex
+	queue        *TagJobQueue
+	pollInterval time.Duration
+	lease        time.Duration
+	batchSize    int
 }
 
 var (
@@ -32,19 +26,22 @@ var (
 	once     sync.Once
 )
 
-// GetTagQueue returns the singleton instance of TagQueue
 func GetTagQueue() *TagQueue {
 	once.Do(func() {
 		instance = &TagQueue{
-			tasks:    make(chan TagTask, 1000), // Buffer up to 1000 tasks
-			stopChan: make(chan struct{}),
+			stopChan:     make(chan struct{}),
+			queue:        NewTagJobQueue(database.DB),
+			pollInterval: time.Second,
+			lease:        10 * time.Minute,
+			batchSize:    20,
 		}
 	})
+	if instance.queue == nil {
+		instance.queue = NewTagJobQueue(database.DB)
+	}
 	return instance
 }
 
-// Enqueue adds a tag task to the queue
-// This is non-blocking and returns immediately
 func (q *TagQueue) Enqueue(articleID uint, feedName, categoryName string) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -53,31 +50,20 @@ func (q *TagQueue) Enqueue(articleID uint, feedName, categoryName string) error 
 		return fmt.Errorf("tag queue is not started")
 	}
 
-	task := TagTask{
+	return q.queue.Enqueue(TagJobRequest{
 		ArticleID:    articleID,
 		FeedName:     feedName,
 		CategoryName: categoryName,
-		CreatedAt:    time.Now(),
-	}
-
-	// Non-blocking send with select
-	select {
-	case q.tasks <- task:
-		return nil
-	default:
-		// Queue is full, log a warning and return
-		log.Printf("[WARN] Tag queue is full, dropping task for article %d", articleID)
-		return fmt.Errorf("tag queue is full")
-	}
+		Reason:       "article_created",
+	})
 }
 
-// EnqueueAsync adds a tag task to the queue asynchronously (fire-and-forget)
-// Use this when you don't need to know if the task was successfully queued
 func (q *TagQueue) EnqueueAsync(articleID uint, feedName, categoryName string) {
-	_ = q.Enqueue(articleID, feedName, categoryName)
+	if err := q.Enqueue(articleID, feedName, categoryName); err != nil {
+		log.Printf("[WARN] Failed to enqueue tag job for article %d: %v", articleID, err)
+	}
 }
 
-// Start begins the tag worker
 func (q *TagQueue) Start() error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -86,6 +72,8 @@ func (q *TagQueue) Start() error {
 		return fmt.Errorf("tag queue already started")
 	}
 
+	q.stopChan = make(chan struct{})
+	q.queue = NewTagJobQueue(database.DB)
 	q.started = true
 	q.wg.Add(1)
 	go q.worker()
@@ -94,7 +82,6 @@ func (q *TagQueue) Start() error {
 	return nil
 }
 
-// Stop gracefully shuts down the tag worker
 func (q *TagQueue) Stop() {
 	q.mu.Lock()
 	if !q.started {
@@ -102,57 +89,108 @@ func (q *TagQueue) Stop() {
 		return
 	}
 	q.started = false
+	close(q.stopChan)
 	q.mu.Unlock()
 
-	close(q.stopChan)
 	q.wg.Wait()
-
 	log.Println("Tag queue stopped")
 }
 
-// worker is the main loop that processes tag tasks
 func (q *TagQueue) worker() {
 	defer q.wg.Done()
+
+	ticker := time.NewTicker(q.pollInterval)
+	defer ticker.Stop()
 
 	for {
 		select {
 		case <-q.stopChan:
-			// Drain remaining tasks before stopping
-			for {
-				select {
-				case task := <-q.tasks:
-					q.processTask(task)
-				default:
-					return
-				}
-			}
-
-		case task := <-q.tasks:
-			q.processTask(task)
+			q.drainRemaining()
+			return
+		case <-ticker.C:
+			q.processAvailableJobs()
 		}
 	}
 }
 
-// processTask handles a single tag task
-func (q *TagQueue) processTask(task TagTask) {
+func (q *TagQueue) drainRemaining() {
+	for {
+		jobs, err := q.queue.Claim(q.batchSize, q.lease)
+		if err != nil {
+			log.Printf("[WARN] Failed to claim tag jobs during drain: %v", err)
+			return
+		}
+		if len(jobs) == 0 {
+			return
+		}
+		for _, job := range jobs {
+			q.processJob(job)
+		}
+	}
+}
+
+func (q *TagQueue) processAvailableJobs() {
+	jobs, err := q.queue.Claim(q.batchSize, q.lease)
+	if err != nil {
+		log.Printf("[WARN] Failed to claim tag jobs: %v", err)
+		return
+	}
+
+	for _, job := range jobs {
+		q.processJob(job)
+	}
+}
+
+func (q *TagQueue) processJob(job models.TagJob) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[ERROR] Panic in tag task for article %d: %v", task.ArticleID, r)
+			msg := fmt.Sprintf("panic: %v", r)
+			log.Printf("[ERROR] Panic in tag job for article %d: %v", job.ArticleID, r)
+			_ = q.queue.MarkFailed(job, msg, q.failureBackoff(job.AttemptCount))
 		}
 	}()
 
-	// Fetch the article from database
 	var article models.Article
-	if err := database.DB.First(&article, task.ArticleID).Error; err != nil {
-		log.Printf("[WARN] Failed to fetch article %d for tagging: %v", task.ArticleID, err)
+	if err := database.DB.First(&article, job.ArticleID).Error; err != nil {
+		log.Printf("[WARN] Failed to fetch article %d for tagging: %v", job.ArticleID, err)
+		_ = q.queue.MarkFailed(job, err.Error(), q.failureBackoff(job.AttemptCount))
 		return
 	}
 
-	// Perform the actual tagging
-	if err := TagArticle(&article, task.FeedName, task.CategoryName); err != nil {
-		log.Printf("[WARN] Failed to tag article %d: %v", task.ArticleID, err)
+	var err error
+	if job.ForceRetag {
+		err = RetagArticle(&article, job.FeedNameSnapshot, job.CategoryNameSnapshot)
+	} else {
+		err = TagArticle(&article, job.FeedNameSnapshot, job.CategoryNameSnapshot)
+	}
+	if err != nil {
+		log.Printf("[WARN] Failed to tag article %d: %v", job.ArticleID, err)
+		_ = q.queue.MarkFailed(job, err.Error(), q.failureBackoff(job.AttemptCount))
 		return
 	}
 
-	log.Printf("[DEBUG] Successfully tagged article %d", task.ArticleID)
+	if err := q.queue.MarkCompleted(job.ID); err != nil {
+		log.Printf("[WARN] Failed to mark tag job %d completed: %v", job.ID, err)
+		return
+	}
+
+	log.Printf("[DEBUG] Successfully tagged article %d", job.ArticleID)
+}
+
+func (q *TagQueue) failureBackoff(attempt int) time.Duration {
+	if attempt <= 1 {
+		return time.Minute
+	}
+	backoff := time.Duration(1<<min(attempt-1, 4)) * time.Minute
+	if backoff > 30*time.Minute {
+		return 30 * time.Minute
+	}
+	return backoff
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

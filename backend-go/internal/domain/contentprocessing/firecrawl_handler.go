@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"my-robot-backend/internal/domain/models"
+	"my-robot-backend/internal/domain/topicextraction"
 	"my-robot-backend/internal/platform/aisettings"
 	"my-robot-backend/internal/platform/database"
 )
@@ -90,6 +91,12 @@ func CrawlArticle(c *gin.Context) {
 	now := time.Now()
 	article.FirecrawlCrawledAt = &now
 	database.DB.Save(&article)
+	_ = topicextraction.NewTagJobQueue(database.DB).Enqueue(topicextraction.TagJobRequest{
+		ArticleID:  article.ID,
+		FeedName:   feed.Title,
+		ForceRetag: true,
+		Reason:     "manual_firecrawl_completed",
+	})
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,

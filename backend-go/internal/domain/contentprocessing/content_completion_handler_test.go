@@ -22,7 +22,7 @@ func setupHandlersTestDB(t *testing.T) {
 	}
 
 	database.DB = db
-	if err := database.DB.AutoMigrate(&models.Feed{}, &models.Article{}, &models.SchedulerTask{}, &models.TopicTag{}, &models.ArticleTopicTag{}); err != nil {
+	if err := database.DB.AutoMigrate(&models.Feed{}, &models.Article{}, &models.SchedulerTask{}, &models.TopicTag{}, &models.ArticleTopicTag{}, &models.TagJob{}, &models.FirecrawlJob{}, &models.AIProvider{}, &models.AIRoute{}, &models.AIRouteProvider{}, &models.AICallLog{}); err != nil {
 		t.Fatalf("migrate test db: %v", err)
 	}
 }

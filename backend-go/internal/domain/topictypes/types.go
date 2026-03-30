@@ -22,6 +22,7 @@ type TopicTag struct {
 	IsNew     bool     `json:"is_new,omitempty"`     // True if newly created
 	MatchedTo uint     `json:"matched_to,omitempty"` // ID of existing tag if matched
 	Kind      string   `json:"kind,omitempty"`       // Legacy: maps to Category for backward compat
+	FeedCount int      `json:"feed_count,omitempty"` // Distinct feed count referencing this tag
 }
 
 type AggregatedTopicTag struct {
@@ -33,6 +34,7 @@ type AggregatedTopicTag struct {
 	Aliases      []string `json:"aliases,omitempty"`
 	Score        float64  `json:"score"`
 	ArticleCount int      `json:"article_count"`
+	FeedCount    int      `json:"feed_count,omitempty"`
 }
 
 // ExtractedTag is the raw output from AI extraction
@@ -59,6 +61,7 @@ type SimilarTagInfo struct {
 	Aliases    []string `json:"aliases"`
 	Similarity float64  `json:"similarity"`
 	UsageCount int      `json:"usage_count,omitempty"`
+	FeedCount  int      `json:"feed_count,omitempty"`
 }
 
 // TagResolutionResponse is AI's decision on tag matching

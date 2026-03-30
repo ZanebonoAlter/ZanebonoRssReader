@@ -26,7 +26,7 @@ func setupServicesTestDB(t *testing.T) {
 	}
 
 	database.DB = db
-	if err := database.DB.AutoMigrate(&models.TopicTag{}, &models.ArticleTopicTag{}); err != nil {
+	if err := database.DB.AutoMigrate(&models.TopicTag{}, &models.ArticleTopicTag{}, &models.TagJob{}, &models.FirecrawlJob{}); err != nil {
 		t.Fatalf("migrate topic tag tables: %v", err)
 	}
 	if err := database.DB.AutoMigrate(&models.Feed{}, &models.Article{}, &models.SchedulerTask{}, &models.AIProvider{}, &models.AIRoute{}, &models.AIRouteProvider{}, &models.AICallLog{}); err != nil {
@@ -82,6 +82,14 @@ func TestCompleteArticleWithForceUsesAIRouterRoute(t *testing.T) {
 	}
 	if refreshed.AIContentSummary == "" {
 		t.Fatal("expected AI content summary to be populated from router")
+	}
+
+	var jobCount int64
+	if err := database.DB.Model(&models.TagJob{}).Where("article_id = ?", article.ID).Count(&jobCount).Error; err != nil {
+		t.Fatalf("count tag jobs: %v", err)
+	}
+	if jobCount != 1 {
+		t.Fatalf("tag job count = %d, want 1", jobCount)
 	}
 }
 
@@ -385,7 +393,7 @@ func TestCompleteArticleWithMetadataAddsSchedulerRunIDToCallLogs(t *testing.T) {
 	}
 }
 
-func TestCompleteArticleTagsArticleAfterSuccessfulCompletion(t *testing.T) {
+func TestCompleteArticleEnqueuesRetagJobAfterSuccessfulCompletion(t *testing.T) {
 	setupServicesTestDB(t)
 
 	aiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -421,11 +429,11 @@ func TestCompleteArticleTagsArticleAfterSuccessfulCompletion(t *testing.T) {
 		t.Fatalf("complete article: %v", err)
 	}
 
-	var tagCount int64
-	if err := database.DB.Model(&models.ArticleTopicTag{}).Where("article_id = ?", article.ID).Count(&tagCount).Error; err != nil {
-		t.Fatalf("count article tags: %v", err)
+	var jobCount int64
+	if err := database.DB.Model(&models.TagJob{}).Where("article_id = ?", article.ID).Count(&jobCount).Error; err != nil {
+		t.Fatalf("count tag jobs: %v", err)
 	}
-	if tagCount == 0 {
-		t.Fatal("expected article tags to be created after successful completion")
+	if jobCount != 1 {
+		t.Fatalf("tag job count = %d, want 1", jobCount)
 	}
 }

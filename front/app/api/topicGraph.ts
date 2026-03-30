@@ -241,14 +241,28 @@ function withQuery(endpoint: string, params: Record<string, string | undefined>)
   return query ? `${endpoint}?${query}` : endpoint
 }
 
+export interface TopicGraphFilters {
+  categoryId?: string
+  feedId?: string
+}
+
 export function useTopicGraphApi() {
   return {
-    async getGraph(type: TopicGraphType, date?: string) {
-      return apiClient.get<TopicGraphPayload>(withQuery(`/topic-graph/${type}`, { date }))
+    async getGraph(type: TopicGraphType, date?: string, filters?: TopicGraphFilters) {
+      return apiClient.get<TopicGraphPayload>(withQuery(`/topic-graph/${type}`, {
+        date,
+        category_id: filters?.categoryId,
+        feed_id: filters?.feedId,
+      }))
     },
 
-    async getTopicDetail(slug: string, type: TopicGraphType, date?: string) {
-      return apiClient.get<TopicGraphDetailPayload>(withQuery(`/topic-graph/topic/${slug}`, { type, date }))
+    async getTopicDetail(slug: string, type: TopicGraphType, date?: string, filters?: TopicGraphFilters) {
+      return apiClient.get<TopicGraphDetailPayload>(withQuery(`/topic-graph/topic/${slug}`, {
+        type,
+        date,
+        category_id: filters?.categoryId,
+        feed_id: filters?.feedId,
+      }))
     },
 
     async getTopicAnalysis(params: GetTopicAnalysisParams) {
@@ -287,8 +301,13 @@ export function useTopicGraphApi() {
       }), {})
     },
 
-    async getTopicsByCategory(type: TopicGraphType, date?: string) {
-      return apiClient.get<TopicsByCategoryPayload>(withQuery('/topic-graph/by-category', { type, date }))
+    async getTopicsByCategory(type: TopicGraphType, date?: string, filters?: TopicGraphFilters) {
+      return apiClient.get<TopicsByCategoryPayload>(withQuery('/topic-graph/by-category', {
+        type,
+        date,
+        category_id: filters?.categoryId,
+        feed_id: filters?.feedId,
+      }))
     },
 
     async getDigestsByArticleTag(slug: string, type: TopicGraphType, date?: string, limit?: number) {

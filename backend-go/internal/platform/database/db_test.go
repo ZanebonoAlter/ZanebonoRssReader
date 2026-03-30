@@ -1,14 +1,16 @@
 package database
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
+	"my-robot-backend/internal/domain/models"
 )
 
 func TestRunMigrationsBackfillsRenamedSummaryColumns(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
@@ -100,5 +102,24 @@ func TestRunMigrationsBackfillsRenamedSummaryColumns(t *testing.T) {
 	}
 	if summaryGeneratedAt == "" {
 		t.Fatal("expected summary_generated_at to be backfilled")
+	}
+}
+
+func TestMigrateCreatesJobQueueTables(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+
+	DB = db
+	if err := Migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	if !DB.Migrator().HasTable(&models.FirecrawlJob{}) {
+		t.Fatal("expected firecrawl_jobs table to exist")
+	}
+	if !DB.Migrator().HasTable(&models.TagJob{}) {
+		t.Fatal("expected tag_jobs table to exist")
 	}
 }

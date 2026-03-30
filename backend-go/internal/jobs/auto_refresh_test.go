@@ -6,9 +6,22 @@ import (
 	"testing"
 	"time"
 
+	"my-robot-backend/internal/app/runtimeinfo"
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/platform/database"
 )
+
+type stubAutoSummaryTrigger struct {
+	triggered chan struct{}
+}
+
+func (s stubAutoSummaryTrigger) TriggerNow() map[string]interface{} {
+	select {
+	case s.triggered <- struct{}{}:
+	default:
+	}
+	return map[string]interface{}{"accepted": true, "started": true}
+}
 
 func TestAutoRefreshTriggerNowUpdatesSchedulerTaskAndFeedState(t *testing.T) {
 	setupSchedulersTestDB(t)
@@ -71,5 +84,50 @@ func TestAutoRefreshTriggerNowUpdatesSchedulerTaskAndFeedState(t *testing.T) {
 	}
 	if refreshedFeed.LastRefreshAt == nil {
 		t.Fatal("expected last refresh timestamp to be set")
+	}
+}
+
+func TestAutoRefreshTriggerNowRunsAutoSummaryAfterTriggeredRefreshesFinish(t *testing.T) {
+	setupSchedulersTestDB(t)
+
+	triggered := make(chan struct{}, 1)
+	runtimeinfo.AutoSummarySchedulerInterface = stubAutoSummaryTrigger{triggered: triggered}
+	defer func() {
+		runtimeinfo.AutoSummarySchedulerInterface = nil
+	}()
+
+	feed := models.Feed{
+		Title:           "Due feed",
+		URL:             "https://example.com/rss",
+		RefreshInterval: 15,
+	}
+	if err := database.DB.Create(&feed).Error; err != nil {
+		t.Fatalf("create feed: %v", err)
+	}
+
+	refreshDone := make(chan struct{})
+	scheduler := &AutoRefreshScheduler{
+		checkInterval: time.Minute,
+		refreshFeed: func(ctx context.Context, feedID uint) error {
+			defer close(refreshDone)
+			return nil
+		},
+	}
+
+	result := scheduler.TriggerNow()
+	if result["accepted"] != true {
+		t.Fatalf("accepted = %v, want true", result["accepted"])
+	}
+
+	select {
+	case <-refreshDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for refresh to finish")
+	}
+
+	select {
+	case <-triggered:
+	case <-time.After(time.Second):
+		t.Fatal("expected auto summary trigger after refresh completion")
 	}
 }
