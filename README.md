@@ -16,6 +16,8 @@
 后续补充跨多时间段分析、单事件演变、事件聚合
 rss的垃圾信息处理也在开发路上了
 ![主题图谱](img/image-topic.png)
+![主题图谱](img/image-topic-timeline.png)
+![主题图谱](img/image-topic-article.png)
 
 ### 📰 订阅管理
 

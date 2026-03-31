@@ -146,7 +146,7 @@ function handleArticleFavorite(articleId: string) {
   if (selectedArticle.value?.id === articleId) {
     selectedArticle.value = { ...selectedArticle.value, favorite: newFavorite }
   }
-  apiStore.toggleFavorite(articleId)
+  void articlesApi.updateArticle(Number(articleId), { favorite: newFavorite })
 }
 
 function handleArticleUpdate(articleId: string, updates: Partial<any>) {

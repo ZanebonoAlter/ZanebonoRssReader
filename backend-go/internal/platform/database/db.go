@@ -39,8 +39,11 @@ func InitDB(cfg *config.Config) error {
 		return fmt.Errorf("failed to get database instance: %w", err)
 	}
 
-	sqlDB.SetMaxIdleConns(10)
-	sqlDB.SetMaxOpenConns(100)
+	DB.Exec("PRAGMA journal_mode=WAL")
+	DB.Exec("PRAGMA busy_timeout=5000")
+
+	sqlDB.SetMaxIdleConns(2)
+	sqlDB.SetMaxOpenConns(1)
 
 	log.Println("Database initialized successfully")
 

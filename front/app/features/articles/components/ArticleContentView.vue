@@ -263,7 +263,8 @@ async function handleManualTagging() {
   }
 }
 
-watch(() => props.article, (newArticle) => {
+watch(() => props.article?.id, (newId, oldId) => {
+  if (newId === oldId) return
   iframeLoading.value = true
   viewMode.value = 'preview'
   showAISummary.value = false
@@ -273,12 +274,12 @@ watch(() => props.article, (newArticle) => {
   manualSummaryLoading.value = false
   manualTaggingLoading.value = false
   selectedContentSource.value = getArticleContentSources({
-    firecrawlContent: newArticle?.firecrawlContent,
-    content: newArticle?.content,
+    firecrawlContent: props.article?.firecrawlContent,
+    content: props.article?.content,
   }).defaultSource ?? 'firecrawl'
 
-  if (newArticle) {
-    void loadCompletionStatus(newArticle.id)
+  if (newId) {
+    void loadCompletionStatus(newId)
   }
 }, { immediate: true })
 
@@ -642,7 +643,7 @@ import '~/components/article/ArticleContent.css'
   </div>
 
   <Teleport v-else to="body">
-    <div class="fullscreen-article fixed inset-0 z-50 bg-white flex flex-col">
+    <div class="fullscreen-article fixed inset-0 z-[100] bg-white flex flex-col">
       <header class="article-header">
         <div class="header-left">
           <button class="flex items-center gap-1 rounded-lg p-2 text-ink-medium transition-all duration-200 hover:bg-ink-50 hover:text-ink-dark" @click="toggleFullscreen">

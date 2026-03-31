@@ -14,6 +14,7 @@ import {
 import type { Article } from '~/types'
 import type { TimelineDigest, TimelineDigestSelection, PendingArticle } from '~/types/timeline'
 import ArticleContentView from '~/features/articles/components/ArticleContentView.vue'
+import { useApiStore } from '~/stores/api'
 import DigestDetail from '../../digest/components/DigestDetail.vue'
 import { normalizeArticle } from '../../articles/utils/normalizeArticle'
 import type { DigestPreviewSummary } from '~/api/digest'
@@ -29,6 +30,7 @@ import { normalizeTopicCategory } from '~/features/topic-graph/utils/normalizeTo
 
 const topicGraphApi = useTopicGraphApi()
 const articlesApi = useArticlesApi()
+const apiStore = useApiStore()
 
 
 function formatDateInput(date = new Date()) {
@@ -715,6 +717,7 @@ function closeDigestPreview() {
 }
 
 async function openArticlePreview(articleId: number) {
+  previewDigestId.value = null
   loadingPreviewArticle.value = true
 
   try {
@@ -744,6 +747,34 @@ async function openArticlePreview(articleId: number) {
 
 function closeArticlePreview() {
   selectedPreviewArticle.value = null
+}
+
+async function handleArticleFavorite(articleId: string) {
+  const response = await apiStore.toggleFavorite(articleId)
+  if (!response.success) return
+
+  const target = previewArticles.value.find(article => article.id === articleId)
+  if (target) {
+    target.favorite = !target.favorite
+  }
+
+  if (selectedPreviewArticle.value?.id === articleId) {
+    selectedPreviewArticle.value = {
+      ...selectedPreviewArticle.value,
+      favorite: !selectedPreviewArticle.value.favorite,
+    }
+  }
+}
+
+function handleArticleUpdate(articleId: string, updates: Partial<Article>) {
+  const target = previewArticles.value.find(article => article.id === articleId)
+  if (target) {
+    Object.assign(target, updates)
+  }
+
+  if (selectedPreviewArticle.value?.id === articleId) {
+    Object.assign(selectedPreviewArticle.value, updates)
+  }
 }
 
 watch(selectedType, () => {
@@ -1085,6 +1116,8 @@ await loadGraph()
               :articles="previewArticles"
               :highlighted-tag-slugs="selectedTopicSlug ? [selectedTopicSlug] : []"
               @navigate="selectedPreviewArticle = $event"
+              @favorite="handleArticleFavorite"
+              @article-update="handleArticleUpdate"
             />
           </div>
         </div>
@@ -1197,7 +1230,7 @@ await loadGraph()
 }
 
 .topic-digest-modal__panel {
-  width: min(760px, 100%);
+  width: min(1100px, 100%);
   max-height: calc(100vh - 2rem);
   overflow: auto;
   border-radius: 1.75rem;
