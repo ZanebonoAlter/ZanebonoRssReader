@@ -49,6 +49,23 @@ describe('buildDisplayedTopicGraph', () => {
     expect(displayedGraph.nodes.map(node => node.id)).toEqual(['topic-a', 'topic-b', 'topic-c'])
     expect(displayedGraph.edges.map(edge => edge.id)).toEqual(['ab', 'ac'])
   })
+
+  it('keeps topic-topic edges when graph library mutates link endpoints into node objects', () => {
+    const graph = createGraph()
+
+    graph.edges = graph.edges.map(edge => ({
+      ...edge,
+      source: graph.nodes.find(node => node.id === edge.source)!,
+      target: graph.nodes.find(node => node.id === edge.target)!,
+    })) as unknown as typeof graph.edges
+
+    const displayedGraph = buildDisplayedTopicGraph({
+      graph,
+      visibleTopicSlugs: new Set(['topic-a', 'topic-b', 'topic-c']),
+    })
+
+    expect(displayedGraph.edges.map(edge => edge.id)).toEqual(['ab', 'ac'])
+  })
 })
 
 describe('collectRelatedTopicSlugs', () => {
@@ -63,5 +80,17 @@ describe('collectRelatedTopicSlugs', () => {
 
     expect(collectRelatedTopicSlugs(graph, 'topic-b')).toEqual(['topic-a'])
     expect(collectRelatedTopicSlugs(graph, 'missing')).toEqual([])
+  })
+
+  it('finds related topics when link endpoints are node objects', () => {
+    const graph = createGraph()
+
+    graph.edges = graph.edges.map(edge => ({
+      ...edge,
+      source: graph.nodes.find(node => node.id === edge.source)!,
+      target: graph.nodes.find(node => node.id === edge.target)!,
+    })) as unknown as typeof graph.edges
+
+    expect(collectRelatedTopicSlugs(graph, 'topic-a')).toEqual(['topic-b', 'topic-c'])
   })
 })

@@ -21,16 +21,7 @@ export const useApiStore = defineStore('api', () => {
     const response = await categoriesApi.getCategories()
 
     if (response.success && response.data) {
-      // Transform backend data to frontend format
-      categories.value = (response.data as any[]).map((cat: any) => ({
-        id: String(cat.id),
-        name: cat.name,
-        slug: cat.slug || cat.name.toLowerCase().replace(/\s+/g, '-'),
-        icon: cat.icon || 'mdi:folder',
-        color: cat.color || '#6b7280',
-        description: cat.description || '',
-        feedCount: cat.feed_count || 0,
-      }))
+      categories.value = response.data
     } else {
       error.value = response.error || 'Failed to fetch categories'
     }

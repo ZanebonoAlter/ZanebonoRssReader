@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { Icon } from '@iconify/vue'
-import { useCategoriesApi } from '~/api/categories'
 import { useFeedsStore } from '~/stores/feeds'
 import type { RssFeed } from '~/types/feed'
 import type { Category } from '~/types/category'
@@ -18,21 +17,11 @@ const emit = defineEmits<{
   'update:selectedFeedId': [value: string | null]
 }>()
 
-const { getCategories } = useCategoriesApi()
 const feedsStore = useFeedsStore()
-const categories = ref<Category[]>([])
 const expandedCategoryId = ref<string | null>(null)
 
+const categories = computed<Category[]>(() => feedsStore.categories)
 const feeds = computed<RssFeed[]>(() => feedsStore.feeds)
-
-async function loadCategories() {
-  const result = await getCategories()
-  if (result.success && result.data) {
-    categories.value = result.data
-  }
-}
-
-loadCategories()
 
 const feedsByCategory = computed(() => {
   const grouped = new Map<string, RssFeed[]>()

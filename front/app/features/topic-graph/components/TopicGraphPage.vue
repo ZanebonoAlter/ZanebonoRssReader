@@ -29,7 +29,7 @@ import { normalizeTopicCategory } from '~/features/topic-graph/utils/normalizeTo
 
 const topicGraphApi = useTopicGraphApi()
 const articlesApi = useArticlesApi()
-const MAX_GRAPH_TOPICS_PER_CATEGORY = 10
+
 
 function formatDateInput(date = new Date()) {
   const year = date.getFullYear()
@@ -102,11 +102,14 @@ const highlightedNodeIds = computed(() => {
   highlighted.add(focusNode.id)
 
   for (const edge of displayedGraph.value.edges) {
-    if (edge.source === focusNode.id) {
-      highlighted.add(edge.target)
+    const sourceId = resolveGraphLinkNodeId(edge.source)
+    const targetId = resolveGraphLinkNodeId(edge.target)
+
+    if (sourceId === focusNode.id) {
+      highlighted.add(targetId)
     }
-    if (edge.target === focusNode.id) {
-      highlighted.add(edge.source)
+    if (targetId === focusNode.id) {
+      highlighted.add(sourceId)
     }
   }
 
@@ -118,10 +121,14 @@ const relatedEdgeIds = computed(() => {
 
   return displayedGraph.value.edges
     .filter(edge => {
-      return highlightedSet.has(edge.source) && highlightedSet.has(edge.target)
+      return highlightedSet.has(resolveGraphLinkNodeId(edge.source)) && highlightedSet.has(resolveGraphLinkNodeId(edge.target))
     })
     .map(edge => edge.id)
 })
+
+function resolveGraphLinkNodeId(node: string | { id: string }) {
+  return typeof node === 'string' ? node : node.id
+}
 
 function isTopicShownInGraph(slug: string) {
   return graphVisibleTopicSlugs.value.has(slug)
@@ -276,10 +283,10 @@ const hotspotCategories = computed(() => ([
 const defaultGraphTopicSlugs = computed(() => {
   const slugs = new Set<string>()
 
-  hotspotCategories.value.forEach((category) => {
-    category.topics
-      .slice(0, MAX_GRAPH_TOPICS_PER_CATEGORY)
-      .forEach(topic => slugs.add(topic.slug))
+  viewModel.value.graph.nodes.forEach((node) => {
+    if (node.kind === 'topic' && node.slug) {
+      slugs.add(node.slug)
+    }
   })
 
   return slugs
@@ -800,7 +807,7 @@ await loadGraph()
                   <p class="text-xs uppercase tracking-[0.3em] text-white/42">Graph Field</p>
                   <h2 class="mt-2 font-serif text-2xl text-white md:text-[2.25rem]">{{ graphPayload?.period_label || '话题网络' }}</h2>
                   <p class="mt-3 text-sm leading-6 text-[rgba(255,255,255,0.68)]">
-                     默认只展示事件、人物、关键词各自出现频率最高的前 10 个节点；底部热点题材可单独控制是否进入拓扑图。
+                     事件、人物、关键词的热点题材默认全部进入拓扑图；底部可单独控制各节点的显示与隐藏。
                   </p>
                 </div>
 

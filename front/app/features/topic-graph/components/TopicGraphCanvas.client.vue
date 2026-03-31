@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { shallowRef, onMounted, onBeforeUnmount, ref, watch, computed, nextTick } from 'vue'
 import type { TopicGraphSceneEdge, TopicGraphSceneNode } from '~/features/topic-graph/utils/buildTopicGraphViewModel'
+import { isHighlightedTopicGraphEdge, resolveTopicGraphLinkOpacity } from '~/features/topic-graph/utils/topicGraphCanvasLinks'
 
 interface Props {
   nodes: TopicGraphSceneNode[]
@@ -154,26 +155,12 @@ function applyHighlightStyles() {
       return 0.16
     })
     .linkOpacity((link: TopicGraphSceneEdge) => {
-      // 默认隐藏所有连线
-      if (linkDisplayMode.value === 'hidden') {
-        return 0
-      }
-
-      // 显示所有连线
-      if (linkDisplayMode.value === 'all') {
-        return 0.08
-      }
-
-      // 只显示高亮的连线
-      if (linkDisplayMode.value === 'selected') {
-        const linkId = link.id
-        if (highlightedLinkIds.value.has(linkId)) {
-          return 0.85
-        }
-        return 0
-      }
-
-return 0
+      return resolveTopicGraphLinkOpacity(link, {
+        linkDisplayMode: linkDisplayMode.value,
+        highlightedLinkIds: highlightedLinkIds.value,
+        highlightedNodeIds: highlightedNodeSet.value,
+        relatedEdgeIds: highlightedEdgeSet.value,
+      })
     })
 }
 
@@ -203,25 +190,19 @@ function blendColors(color1: string, color2: string): string {
  * 动态绘制连线（带动画效果）
  */
 async function drawLinksAnimated(links: TopicGraphSceneEdge[]) {
-  if (!graphInstance.value || isAnimatingLinks.value) return
+  if (!graphInstance.value) return
 
   isAnimatingLinks.value = true
 
-  // 先将所有连线设为不可见
   const newHighlightedIds = new Set<string>()
 
-  // 逐个显示连线，产生生长效果
   for (let i = 0; i < links.length; i++) {
     const link = links[i]!
     newHighlightedIds.add(link.id)
 
-    // 更新高亮连线集合
     highlightedLinkIds.value = new Set(newHighlightedIds)
-
-    // 触发重绘
     applyHighlightStyles()
 
-    // 等待一小段时间再显示下一条
     await new Promise(resolve => setTimeout(resolve, 80))
   }
 
@@ -240,7 +221,7 @@ function hideAllLinks() {
 /**
  * 显示选中题材的相关连线
  */
-async function showLinksForTopic(topicId: string) {
+function showLinksForTopic(topicId: string) {
   const relatedLinks = calculateRelatedLinks(topicId, props.edges)
 
   if (relatedLinks.length === 0) {
@@ -249,7 +230,8 @@ async function showLinksForTopic(topicId: string) {
   }
 
   linkDisplayMode.value = 'selected'
-  await drawLinksAnimated(relatedLinks)
+  highlightedLinkIds.value = new Set(relatedLinks.map(link => link.id))
+  applyHighlightStyles()
 }
 
 function buildNodeObject(node: TopicGraphSceneNode) {
@@ -425,11 +407,7 @@ function isHighlightedEdge(
   highlightedNodes: Set<string>,
   highlightedEdges: Set<string>,
 ) {
-  if (highlightedEdges.has(link.id)) return true
-
-  const sourceId = resolveLinkNodeId(link.source)
-  const targetId = resolveLinkNodeId(link.target)
-  return highlightedNodes.has(sourceId) && highlightedNodes.has(targetId)
+  return isHighlightedTopicGraphEdge(link, highlightedNodes, highlightedEdges)
 }
 
 function resolveLinkNodeId(node: string | TopicGraphSceneNode) {
@@ -574,17 +552,12 @@ async function focusActiveNode() {
 }
 
 watch(() => [props.nodes, props.edges, props.featuredNodeIds, props.highlightedNodeIds, props.relatedEdgeIds, props.selectedCategory], applyGraphData)
-watch(() => [props.activeNodeId, props.focusRequestKey] as const, async ([newId], [oldId]) => {
-  // 处理连线动画
-  if (oldId && oldId !== newId) {
-    // 先隐藏旧连线
-    hideAllLinks()
-  }
-
+watch(() => [props.activeNodeId, props.focusRequestKey] as const, async ([newId]) => {
   if (newId) {
     await focusActiveNode()
-    // 显示新选中题材的相关连线
     await showLinksForTopic(newId)
+  } else {
+    hideAllLinks()
   }
 })
 

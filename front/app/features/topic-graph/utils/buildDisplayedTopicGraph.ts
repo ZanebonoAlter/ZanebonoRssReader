@@ -21,7 +21,7 @@ export function buildDisplayedTopicGraph({ graph, visibleTopicSlugs }: BuildDisp
   const nodes = graph.nodes.filter(node => node.kind === 'topic' && visibleTopicNodeIds.has(node.id))
   const edges = graph.edges.filter(edge => {
     if (edge.kind !== 'topic_topic') return false
-    return visibleTopicNodeIds.has(edge.source) && visibleTopicNodeIds.has(edge.target)
+    return visibleTopicNodeIds.has(resolveLinkNodeId(edge.source)) && visibleTopicNodeIds.has(resolveLinkNodeId(edge.target))
   })
 
   return {
@@ -45,16 +45,23 @@ export function collectRelatedTopicSlugs(graph: TopicGraphViewModel['graph'], se
   graph.edges.forEach((edge) => {
     if (edge.kind !== 'topic_topic') return
 
-    if (edge.source === selectedNode.id) {
-      const targetNode = topicById.get(edge.target)
+    const sourceId = resolveLinkNodeId(edge.source)
+    const targetId = resolveLinkNodeId(edge.target)
+
+    if (sourceId === selectedNode.id) {
+      const targetNode = topicById.get(targetId)
       if (targetNode?.slug) relatedSlugs.add(targetNode.slug)
     }
 
-    if (edge.target === selectedNode.id) {
-      const sourceNode = topicById.get(edge.source)
+    if (targetId === selectedNode.id) {
+      const sourceNode = topicById.get(sourceId)
       if (sourceNode?.slug) relatedSlugs.add(sourceNode.slug)
     }
   })
 
   return Array.from(relatedSlugs)
+}
+
+function resolveLinkNodeId(node: string | TopicGraphSceneNode) {
+  return typeof node === 'string' ? node : node.id
 }
