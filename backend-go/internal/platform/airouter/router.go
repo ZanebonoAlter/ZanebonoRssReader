@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	otelCodes "go.opentelemetry.io/otel/codes"
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/platform/database"
 )
@@ -43,7 +45,24 @@ func (r *Router) RegisterClient(providerType string, client ProviderClient) {
 	r.clients[providerType] = client
 }
 
-func (r *Router) Chat(ctx context.Context, req ChatRequest) (*ChatResult, error) {
+func (r *Router) Chat(ctx context.Context, req ChatRequest) (result *ChatResult, err error) {
+	ctx, span := otel.Tracer("rss-reader-backend").Start(ctx, "Router.Chat")
+	defer span.End()
+	defer func() {
+		if err != nil {
+			span.SetStatus(otelCodes.Error, "error")
+			span.RecordError(err)
+		}
+	}()
+	/*line backend-go/internal/platform/airouter/router.go:47:2*/ var promptParts []string
+	for _, m := range req.Messages {
+		promptParts = append(promptParts, m.Content)
+	}
+	prompt := concatPrompt(promptParts)
+	if len(prompt) > 2000 {
+		prompt = prompt[:2000]
+	}
+
 	route, providers, err := r.store.LoadRouteWithProviders(req.Capability)
 	if err != nil {
 		return nil, err
@@ -70,6 +89,7 @@ func (r *Router) Chat(ctx context.Context, req ChatRequest) (*ChatResult, error)
 				LatencyMs:    latencyMs,
 				RequestMeta:  encodeMeta(req.Metadata),
 			})
+
 			return &ChatResult{Content: content, ProviderID: provider.ID, ProviderName: provider.Name, RouteName: route.Name, UsedFallback: idx > 0, AttemptCount: idx + 1}, nil
 		}
 
@@ -94,9 +114,22 @@ func (r *Router) Chat(ctx context.Context, req ChatRequest) (*ChatResult, error)
 		attemptErrors = append(attemptErrors, fmt.Errorf("%s: %w", provider.Name, callErr))
 	}
 
-	return nil, errors.Join(attemptErrors...)
+	finalErr := errors.Join(attemptErrors...)
+
+	return nil, finalErr
 }
 
 func (r *Router) ResolvePrimaryProvider(capability Capability) (*models.AIProvider, *models.AIRoute, error) {
 	return r.store.ResolvePrimaryProvider(capability)
+}
+
+func concatPrompt(parts []string) string {
+	var result string
+	for i, p := range parts {
+		if i > 0 {
+			result += "\n"
+		}
+		result += p
+	}
+	return result
 }

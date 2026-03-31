@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import type { SchedulerTask } from '~/types/scheduler'
 
 import {
   getCurrentContentCompletionArticle,
@@ -49,7 +50,7 @@ describe('schedulerMeta', () => {
       is_executing: false,
       database_state: {
         status: 'running',
-      },
+      } as SchedulerTask,
     })).toBe('idle')
   })
 

@@ -23,6 +23,7 @@ import (
 	"my-robot-backend/internal/platform/airouter"
 	"my-robot-backend/internal/platform/aisettings"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/tracing"
 )
 
 type AutoSummaryScheduler struct {
@@ -246,27 +247,29 @@ func (s *AutoSummaryScheduler) loadAIConfig() error {
 }
 
 func (s *AutoSummaryScheduler) checkAndGenerateSummaries() {
-	if !s.executionMutex.TryLock() {
-		log.Println("Summary generation already in progress, skipping this cycle")
-		return
-	}
-	s.isExecuting = true
-	defer func() {
-		s.executionMutex.Unlock()
-		s.isExecuting = false
-		if r := recover(); r != nil {
-			log.Printf("[ERROR] PANIC in checkAndGenerateSummaries: %v", r)
-			s.updateSchedulerStatus("idle", fmt.Sprintf("Panic: %v", r), nil, nil)
+	tracing.TraceSchedulerTick("auto_summary", "cron", func(ctx context.Context) {
+		if !s.executionMutex.TryLock() {
+			log.Println("Summary generation already in progress, skipping this cycle")
+			return
 		}
-	}()
+		s.isExecuting = true
+		defer func() {
+			s.executionMutex.Unlock()
+			s.isExecuting = false
+			if r := recover(); r != nil {
+				log.Printf("[ERROR] PANIC in checkAndGenerateSummaries: %v", r)
+				s.updateSchedulerStatus("idle", fmt.Sprintf("Panic: %v", r), nil, nil)
+			}
+		}()
 
-	if err := s.loadAIConfig(); err != nil {
-		log.Printf("AI config not available, skipping summary generation: %v", err)
-		s.updateSchedulerStatus("idle", "AI config not set", nil, nil)
-		return
-	}
+		if err := s.loadAIConfig(); err != nil {
+			log.Printf("AI config not available, skipping summary generation: %v", err)
+			s.updateSchedulerStatus("idle", "AI config not set", nil, nil)
+			return
+		}
 
-	s.runSummaryCycle("scheduled")
+		s.runSummaryCycle("scheduled")
+	})
 }
 
 func (s *AutoSummaryScheduler) runSummaryCycle(triggerSource string) {
@@ -367,8 +370,8 @@ func (s *AutoSummaryScheduler) generateSummaryForFeed(feed *models.Feed) (bool, 
 	log.Printf("Using time range: %d minutes (threshold: %s)", timeRange, timeThreshold.Format("2006-01-02 15:04:05"))
 
 	var articles []models.Article
-	if err := database.DB.Where("feed_id = ? AND pub_date >= ?", feed.ID, timeThreshold).
-		Order("pub_date DESC").
+	if err := database.DB.Omit("tag_count").Where("feed_id = ? AND created_at >= ?", feed.ID, timeThreshold).
+		Order("created_at DESC").
 		Find(&articles).Error; err != nil {
 		return false, fmt.Errorf("failed to fetch articles: %w", err)
 	}
@@ -418,8 +421,8 @@ func (s *AutoSummaryScheduler) generateSummaryForFeed(feed *models.Feed) (bool, 
 			if err := topicextraction.TagSummary(existingSummary); err != nil {
 				log.Printf("[WARN] Failed to backfill tags for existing auto summary %d: %v", existingSummary.ID, err)
 			}
-			if err := topicextraction.TagArticles(batch, feedName, categoryName); err != nil {
-				log.Printf("[WARN] Failed to tag articles for existing summary feed %d batch %d: %v", feed.ID, batchNum, err)
+			if err := topicextraction.BackfillArticleTags(batch, feedName, categoryName); err != nil {
+				log.Printf("[WARN] Failed to backfill article tags for existing summary feed %d batch %d: %v", feed.ID, batchNum, err)
 			}
 			continue
 		}
@@ -477,8 +480,8 @@ func (s *AutoSummaryScheduler) generateSummaryForFeed(feed *models.Feed) (bool, 
 			log.Printf("[WARN] Failed to tag auto summary %d: %v", aiSummary.ID, err)
 		}
 
-		if err := topicextraction.TagArticles(batch, feedName, categoryName); err != nil {
-			log.Printf("[WARN] Failed to tag articles for feed %d batch %d: %v", feed.ID, batchNum, err)
+		if err := topicextraction.BackfillArticleTags(batch, feedName, categoryName); err != nil {
+			log.Printf("[WARN] Failed to backfill article tags for feed %d batch %d: %v", feed.ID, batchNum, err)
 		}
 
 		log.Printf("Successfully generated summary for feed %d batch %d/%d (ID: %d)", feed.ID, batchNum, totalBatches, aiSummary.ID)

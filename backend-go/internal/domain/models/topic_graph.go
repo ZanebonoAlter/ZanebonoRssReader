@@ -48,6 +48,7 @@ type TopicTag struct {
 	Aliases     string    `gorm:"type:text" json:"aliases"`                                                            // JSON array of alias strings
 	IsCanonical bool      `gorm:"default:false" json:"is_canonical"`                                                   // true if this is a canonical tag (not merged)
 	Source      string    `gorm:"size:20;default:llm" json:"source"`                                                   // llm, heuristic, manual
+	FeedCount   int       `gorm:"default:0" json:"feed_count"`                                                         // distinct feed count referencing this tag
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 

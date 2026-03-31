@@ -14,13 +14,13 @@ import (
 	"my-robot-backend/internal/platform/database"
 )
 
-func BuildTopicGraph(kind string, anchor time.Time) (*topictypes.TopicGraphResponse, error) {
+func BuildTopicGraph(kind string, anchor time.Time, categoryID, feedID *uint) (*topictypes.TopicGraphResponse, error) {
 	windowStart, windowEnd, periodLabel, err := topictypes.ResolveWindow(kind, anchor)
 	if err != nil {
 		return nil, err
 	}
 
-	articleTags, err := fetchArticleTagsData(windowStart, windowEnd)
+	articleTags, err := fetchArticleTagsData(windowStart, windowEnd, categoryID, feedID)
 	if err != nil {
 		return nil, err
 	}
@@ -46,7 +46,7 @@ func BuildTopicGraph(kind string, anchor time.Time) (*topictypes.TopicGraphRespo
 	}, nil
 }
 
-func BuildTopicDetail(kind string, slug string, anchor time.Time) (*topictypes.TopicDetail, error) {
+func BuildTopicDetail(kind string, slug string, anchor time.Time, categoryID, feedID *uint) (*topictypes.TopicDetail, error) {
 	windowStart, windowEnd, _, err := topictypes.ResolveWindow(kind, anchor)
 	if err != nil {
 		return nil, err
@@ -66,7 +66,7 @@ func BuildTopicDetail(kind string, slug string, anchor time.Time) (*topictypes.T
 	}
 
 	// 2. Get directly associated articles (new core logic)
-	articles, total, err := getTopicArticles(topic.ID, windowStart, windowEnd, 1, 15)
+	articles, total, err := getTopicArticles(topic.ID, windowStart, windowEnd, 1, 15, categoryID, feedID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get topic articles: %w", err)
 	}
@@ -79,7 +79,7 @@ func BuildTopicDetail(kind string, slug string, anchor time.Time) (*topictypes.T
 	}
 
 	// 4. Get AI summaries (optional, kept for backward compatibility)
-	summaries, err := fetchSummaries(windowStart, windowEnd)
+	summaries, err := fetchSummaries(windowStart, windowEnd, categoryID, feedID)
 	if err != nil {
 		fmt.Printf("Warning: failed to fetch summaries: %v\n", err)
 	}
@@ -117,7 +117,7 @@ func BuildTopicDetail(kind string, slug string, anchor time.Time) (*topictypes.T
 		matchingSummaries = append(matchingSummaries, mapSummaryCard(summary, summaryTopics(summary), articlesBySummary[summary.ID]))
 	}
 
-	history, err := buildTopicHistory(kind, slug, anchor)
+	history, err := buildTopicHistory(kind, slug, anchor, categoryID, feedID)
 	if err != nil {
 		return nil, err
 	}
@@ -160,23 +160,46 @@ func BuildTopicDetail(kind string, slug string, anchor time.Time) (*topictypes.T
 }
 
 // getTopicArticles retrieves articles directly associated with a topic tag
-func getTopicArticles(topicID uint, startDate, endDate time.Time, page, pageSize int) ([]topictypes.TopicArticleCard, int64, error) {
+func getTopicArticles(topicID uint, startDate, endDate time.Time, page, pageSize int, categoryID, feedID *uint) ([]topictypes.TopicArticleCard, int64, error) {
 	var articles []models.Article
 	var total int64
 
 	offset := (page - 1) * pageSize
 
-	// Count total
-	err := database.DB.Model(&models.Article{}).
+	countQuery := database.DB.Model(&models.Article{}).
 		Joins("JOIN article_topic_tags ON articles.id = article_topic_tags.article_id").
 		Where("article_topic_tags.topic_tag_id = ?", topicID).
-		Where("articles.created_at >= ? AND articles.created_at < ?", startDate, endDate).
-		Count(&total).Error
+		Where("articles.created_at >= ? AND articles.created_at < ?", startDate, endDate)
+
+	dataQuery := database.DB.Model(&models.Article{}).
+		Joins("JOIN article_topic_tags ON articles.id = article_topic_tags.article_id").
+		Where("article_topic_tags.topic_tag_id = ?", topicID).
+		Where("articles.created_at >= ? AND articles.created_at < ?", startDate, endDate)
+
+	if feedID != nil {
+		countQuery = countQuery.Where("articles.feed_id = ?", *feedID)
+		dataQuery = dataQuery.Where("articles.feed_id = ?", *feedID)
+	} else if categoryID != nil {
+		countQuery = countQuery.Joins("JOIN feeds ON feeds.id = articles.feed_id").Where("feeds.category_id = ?", *categoryID)
+		dataQuery = dataQuery.Joins("JOIN feeds ON feeds.id = articles.feed_id").Where("feeds.category_id = ?", *categoryID)
+	}
+
+	err := countQuery.Count(&total).Error
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to count articles: %w", err)
 	}
 
-	// Query articles
+	err = dataQuery.
+		Order("articles.created_at DESC").
+		Offset(offset).
+		Limit(pageSize).
+		Omit("tag_count").
+		Find(&articles).Error
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to query articles: %w", err)
+	}
+
+	// Query articles (tag_count is virtual, computed via subquery in other contexts)
 	err = database.DB.Model(&models.Article{}).
 		Joins("JOIN article_topic_tags ON articles.id = article_topic_tags.article_id").
 		Where("article_topic_tags.topic_tag_id = ?", topicID).
@@ -184,6 +207,7 @@ func getTopicArticles(topicID uint, startDate, endDate time.Time, page, pageSize
 		Order("articles.created_at DESC").
 		Offset(offset).
 		Limit(pageSize).
+		Omit("tag_count").
 		Find(&articles).Error
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to query articles: %w", err)
@@ -252,17 +276,25 @@ func FetchTopicArticles(slug string, kind string, anchor time.Time, page, pageSi
 		return nil, 0, fmt.Errorf("topic not found: %w", err)
 	}
 
-	return getTopicArticles(topic.ID, windowStart, windowEnd, page, pageSize)
+	return getTopicArticles(topic.ID, windowStart, windowEnd, page, pageSize, nil, nil)
 }
 
-func fetchSummaries(start time.Time, end time.Time) ([]models.AISummary, error) {
+func fetchSummaries(start time.Time, end time.Time, categoryID, feedID *uint) ([]models.AISummary, error) {
 	var summaries []models.AISummary
-	err := database.DB.Where("created_at >= ? AND created_at < ?", start, end).
+	query := database.DB.Where("created_at >= ? AND created_at < ?", start, end).
 		Preload("Feed").
 		Preload("Category").
 		Preload("SummaryTopics.TopicTag").
-		Order("created_at DESC").
-		Find(&summaries).Error
+		Order("created_at DESC")
+
+	if feedID != nil {
+		query = query.Where("ai_summaries.feed_id = ?", *feedID)
+	} else if categoryID != nil {
+		query = query.Joins("JOIN feeds ON feeds.id = ai_summaries.feed_id").
+			Where("feeds.category_id = ?", *categoryID)
+	}
+
+	err := query.Find(&summaries).Error
 	return summaries, err
 }
 
@@ -371,7 +403,7 @@ func buildGraphPayload(summaries []models.AISummary) ([]topictypes.GraphNode, []
 	return nodes, edges, topTopics
 }
 
-func buildTopicHistory(kind string, slug string, anchor time.Time) ([]topictypes.TopicHistoryPoint, error) {
+func buildTopicHistory(kind string, slug string, anchor time.Time, categoryID, feedID *uint) ([]topictypes.TopicHistoryPoint, error) {
 	history := make([]topictypes.TopicHistoryPoint, 0, 7)
 	for i := 6; i >= 0; i-- {
 		var pointAnchor time.Time
@@ -386,7 +418,7 @@ func buildTopicHistory(kind string, slug string, anchor time.Time) ([]topictypes
 			return nil, err
 		}
 
-		articleTags, err := fetchArticleTagsData(start, end)
+		articleTags, err := fetchArticleTagsData(start, end, categoryID, feedID)
 		if err != nil {
 			return nil, err
 		}
@@ -442,18 +474,38 @@ func summaryTopics(summary models.AISummary) []topictypes.TopicTag {
 }
 
 func mapSummaryCard(summary models.AISummary, topics []topictypes.TopicTag, articles []topictypes.TopicArticleCard) topictypes.TopicSummaryCard {
-	return topictypes.TopicSummaryCard{
-		ID:           summary.ID,
-		Title:        summary.Title,
-		Summary:      summary.Summary,
-		FeedName:     feedLabel(summary),
-		FeedColor:    feedColor(summary),
-		CategoryName: categoryLabel(summary),
-		ArticleCount: summary.ArticleCount,
-		CreatedAt:    summary.CreatedAt.In(topictypes.TopicGraphCST).Format(time.RFC3339),
-		Topics:       topics,
-		Articles:     articles,
+	aggregatedTags, err := topicextraction.AggregateArticleTags(parseTopicSummaryArticleIDs(summary.Articles))
+	if err != nil {
+		aggregatedTags = []topictypes.AggregatedTopicTag{}
 	}
+
+	return topictypes.TopicSummaryCard{
+		ID:             summary.ID,
+		Title:          summary.Title,
+		Summary:        summary.Summary,
+		FeedName:       feedLabel(summary),
+		FeedIcon:       feedIcon(summary),
+		FeedColor:      feedColor(summary),
+		CategoryName:   categoryLabel(summary),
+		ArticleCount:   summary.ArticleCount,
+		CreatedAt:      summary.CreatedAt.In(topictypes.TopicGraphCST).Format(time.RFC3339),
+		Topics:         topics,
+		AggregatedTags: aggregatedTags,
+		Articles:       articles,
+	}
+}
+
+func parseTopicSummaryArticleIDs(raw string) []uint {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+
+	var articleIDs []uint
+	if err := json.Unmarshal([]byte(raw), &articleIDs); err != nil {
+		return nil
+	}
+
+	return articleIDs
 }
 
 func containsTopic(items []topictypes.TopicTag, slug string) bool {
@@ -495,6 +547,13 @@ func feedColor(summary models.AISummary) string {
 	return "#3b6b87"
 }
 
+func feedIcon(summary models.AISummary) string {
+	if summary.Feed != nil && strings.TrimSpace(summary.Feed.Icon) != "" {
+		return summary.Feed.Icon
+	}
+	return "mdi:rss"
+}
+
 func categoryLabel(summary models.AISummary) string {
 	if summary.Category != nil && strings.TrimSpace(summary.Category.Name) != "" {
 		return summary.Category.Name
@@ -530,7 +589,7 @@ func parseAliasesFromJSON(aliases string) []string {
 
 // BuildTopicsByCategory builds topic lists grouped by category from article tags
 // Only includes tags extracted by LLM (not heuristic feed/category names)
-func BuildTopicsByCategory(kind string, anchor time.Time) (*topictypes.TopicsByCategoryResult, error) {
+func BuildTopicsByCategory(kind string, anchor time.Time, categoryID, feedID *uint) (*topictypes.TopicsByCategoryResult, error) {
 	windowStart, windowEnd, _, err := topictypes.ResolveWindow(kind, anchor)
 	if err != nil {
 		return nil, err
@@ -539,12 +598,20 @@ func BuildTopicsByCategory(kind string, anchor time.Time) (*topictypes.TopicsByC
 	// Get articles from the time window with their LLM-extracted tags
 	// Filter by source='llm' to exclude heuristic tags (feed names, category names)
 	var articleTags []models.ArticleTopicTag
-	err = database.DB.
+	query := database.DB.
 		Joins("JOIN articles ON articles.id = article_topic_tags.article_id").
 		Joins("JOIN topic_tags ON topic_tags.id = article_topic_tags.topic_tag_id").
 		Where("articles.created_at >= ? AND articles.created_at < ?", windowStart, windowEnd).
-		Where("article_topic_tags.source = ?", "llm").
-		Preload("TopicTag").
+		Where("article_topic_tags.source = ?", "llm")
+
+	if feedID != nil {
+		query = query.Where("articles.feed_id = ?", *feedID)
+	} else if categoryID != nil {
+		query = query.Joins("JOIN feeds ON feeds.id = articles.feed_id").
+			Where("feeds.category_id = ?", *categoryID)
+	}
+
+	err = query.Preload("TopicTag").
 		Find(&articleTags).Error
 	if err != nil {
 		return nil, err
@@ -630,13 +697,22 @@ type ArticleTagData struct {
 }
 
 // fetchArticleTagsData retrieves article-topic associations with feed info for graph building
-func fetchArticleTagsData(start, end time.Time) ([]ArticleTagData, error) {
+func fetchArticleTagsData(start, end time.Time, categoryID, feedID *uint) ([]ArticleTagData, error) {
 	var articleTags []models.ArticleTopicTag
-	err := database.DB.
+	query := database.DB.
 		Joins("JOIN articles ON articles.id = article_topic_tags.article_id").
 		Joins("JOIN topic_tags ON topic_tags.id = article_topic_tags.topic_tag_id").
 		Where("articles.created_at >= ? AND articles.created_at < ?", start, end).
-		Where("article_topic_tags.source = ?", "llm").
+		Where("article_topic_tags.source = ?", "llm")
+
+	if feedID != nil {
+		query = query.Where("articles.feed_id = ?", *feedID)
+	} else if categoryID != nil {
+		query = query.Joins("JOIN feeds ON feeds.id = articles.feed_id").
+			Where("feeds.category_id = ?", *categoryID)
+	}
+
+	err := query.
 		Preload("TopicTag").
 		Preload("Article.Feed").
 		Find(&articleTags).Error
@@ -793,4 +869,88 @@ func buildGraphPayloadFromArticles(data []ArticleTagData) ([]topictypes.GraphNod
 	})
 
 	return nodes, edges, topTopics, len(articleSet)
+}
+
+// GetPendingArticlesByTag retrieves articles that have the given tag but are not in any digest
+func GetPendingArticlesByTag(tagSlug string, kind string, anchor time.Time) (*topictypes.PendingArticlesResponse, error) {
+	windowStart, windowEnd, _, err := topictypes.ResolveWindow(kind, anchor)
+	if err != nil {
+		return nil, err
+	}
+
+	// Step 1: Get the topic tag
+	var topicTag models.TopicTag
+	err = database.DB.Where("slug = ?", tagSlug).First(&topicTag).Error
+	if err != nil {
+		return nil, fmt.Errorf("topic tag not found: %w", err)
+	}
+
+	// Step 2: Get articles with this tag in the time window
+	var taggedArticles []models.Article
+	err = database.DB.
+		Joins("JOIN article_topic_tags ON articles.id = article_topic_tags.article_id").
+		Where("article_topic_tags.topic_tag_id = ?", topicTag.ID).
+		Where("articles.created_at >= ? AND articles.created_at < ?", windowStart, windowEnd).
+		Preload("Feed").
+		Omit("tag_count").
+		Find(&taggedArticles).Error
+	if err != nil {
+		return nil, fmt.Errorf("failed to get tagged articles: %w", err)
+	}
+
+	if len(taggedArticles) == 0 {
+		return &topictypes.PendingArticlesResponse{Articles: []topictypes.PendingArticle{}, Total: 0}, nil
+	}
+
+	// Step 3: Get all article IDs that are already in digests
+	var summaries []models.AISummary
+	err = database.DB.
+		Where("created_at >= ? AND created_at < ?", windowStart, windowEnd).
+		Where("articles IS NOT NULL AND articles != ''").
+		Find(&summaries).Error
+	if err != nil {
+		return nil, fmt.Errorf("failed to get summaries: %w", err)
+	}
+
+	// Build set of article IDs that are in any digest
+	digestArticleIDs := make(map[uint]bool)
+	for _, summary := range summaries {
+		ids := parseTopicSummaryArticleIDs(summary.Articles)
+		for _, id := range ids {
+			digestArticleIDs[id] = true
+		}
+	}
+
+	// Step 4: Filter articles that are not in any digest
+	var pendingArticles []topictypes.PendingArticle
+	for _, article := range taggedArticles {
+		if digestArticleIDs[article.ID] {
+			continue
+		}
+
+		pa := topictypes.PendingArticle{
+			ID:    article.ID,
+			Title: article.Title,
+			Link:  article.Link,
+		}
+
+		if article.PubDate != nil {
+			pa.PubDate = article.PubDate.In(topictypes.TopicGraphCST).Format(time.RFC3339)
+		}
+
+		if article.Feed.ID != 0 {
+			pa.FeedName = article.Feed.Title
+			pa.FeedIcon = article.Feed.Icon
+			pa.FeedColor = article.Feed.Color
+		} else {
+			pa.FeedName = "未知订阅源"
+		}
+
+		pendingArticles = append(pendingArticles, pa)
+	}
+
+	return &topictypes.PendingArticlesResponse{
+		Articles: pendingArticles,
+		Total:    len(pendingArticles),
+	}, nil
 }

@@ -4,6 +4,7 @@ import { useFeedsApi } from '~/api/feeds'
 import { useArticlesApi } from '~/api/articles'
 import { useOpmlApi } from '~/api/opml'
 import { useSummariesApi } from '~/api/summaries'
+import { normalizeArticle } from '~/features/articles/utils/normalizeArticle'
 
 export const useApiStore = defineStore('api', () => {
   const loading = ref(false)
@@ -20,16 +21,7 @@ export const useApiStore = defineStore('api', () => {
     const response = await categoriesApi.getCategories()
 
     if (response.success && response.data) {
-      // Transform backend data to frontend format
-      categories.value = (response.data as any[]).map((cat: any) => ({
-        id: String(cat.id),
-        name: cat.name,
-        slug: cat.slug || cat.name.toLowerCase().replace(/\s+/g, '-'),
-        icon: cat.icon || 'mdi:folder',
-        color: cat.color || '#6b7280',
-        description: cat.description || '',
-        feedCount: cat.feed_count || 0,
-      }))
+      categories.value = response.data
     } else {
       error.value = response.error || 'Failed to fetch categories'
     }
@@ -254,29 +246,7 @@ export const useApiStore = defineStore('api', () => {
       const data = response.data as any
       const items = data.items || data
 
-      articles.value = items.map((article: any) => ({
-        id: String(article.id),
-        feedId: String(article.feed_id),
-        title: article.title,
-        description: article.description || '',
-        content: article.content || '',
-        link: article.link,
-        pubDate: article.pub_date || article.created_at,
-        author: article.author,
-        category: article.category_id ? String(article.category_id) : '',
-        read: article.read || false,
-        favorite: article.favorite || false,
-        summaryStatus: article.summary_status,
-        summaryGeneratedAt: article.summary_generated_at,
-        completionAttempts: article.completion_attempts,
-        completionError: article.completion_error,
-        aiContentSummary: article.ai_content_summary,
-        firecrawlStatus: article.firecrawl_status,
-        firecrawlError: article.firecrawl_error,
-        firecrawlContent: article.firecrawl_content,
-        firecrawlCrawledAt: article.firecrawl_crawled_at,
-        imageUrl: article.image_url,
-      }))
+      articles.value = items.map((article: any) => normalizeArticle(article))
 
       totalArticles.value = data.total || items.length
     } else {

@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { shallowRef, onMounted, onBeforeUnmount, ref, watch, computed } from 'vue'
+import { shallowRef, onMounted, onBeforeUnmount, ref, watch, computed, nextTick } from 'vue'
 import type { TopicGraphSceneEdge, TopicGraphSceneNode } from '~/features/topic-graph/utils/buildTopicGraphViewModel'
+import { isHighlightedTopicGraphEdge, resolveTopicGraphLinkOpacity } from '~/features/topic-graph/utils/topicGraphCanvasLinks'
 
 interface Props {
   nodes: TopicGraphSceneNode[]
   edges: TopicGraphSceneEdge[]
   activeNodeId?: string | null
+  focusRequestKey?: number
   featuredNodeIds?: string[]
   selectedCategory?: 'event' | 'person' | 'keyword' | null
   highlightedNodeIds?: string[]
@@ -14,6 +16,7 @@ interface Props {
 
 const props = withDefaults(defineProps<Props>(), {
   activeNodeId: null,
+  focusRequestKey: 0,
   featuredNodeIds: () => [],
   selectedCategory: null,
   highlightedNodeIds: () => [],
@@ -27,6 +30,7 @@ const emit = defineEmits<{
 const containerRef = ref<HTMLDivElement | null>(null)
 const graphInstance = shallowRef<any>(null)
 const resizeObserver = shallowRef<ResizeObserver | null>(null)
+const focusAnimationFrame = ref<number | null>(null)
 const spriteTextCtor = shallowRef<any>(null)
 const threeLib = shallowRef<any>(null)
 const graphReady = ref(false)
@@ -88,9 +92,10 @@ async function setupGraph() {
   spriteTextCtor.value = SpriteText
   threeLib.value = threeModule
 
-  const graph = (ForceGraph3D as any)()(containerRef.value)
+  const graph = new (ForceGraph3D as any)(containerRef.value, { controlType: 'orbit' })
     .backgroundColor('rgba(0,0,0,0)')
     .nodeRelSize(4)
+    .enableNodeDrag(false)
     .linkOpacity(0) // 默认隐藏所有连线
     .linkWidth((link: TopicGraphSceneEdge) => buildLinkWidth(link))
     .linkColor((link: TopicGraphSceneEdge) => buildLinkColor(link))
@@ -150,26 +155,12 @@ function applyHighlightStyles() {
       return 0.16
     })
     .linkOpacity((link: TopicGraphSceneEdge) => {
-      // 默认隐藏所有连线
-      if (linkDisplayMode.value === 'hidden') {
-        return 0
-      }
-
-      // 显示所有连线
-      if (linkDisplayMode.value === 'all') {
-        return 0.08
-      }
-
-      // 只显示高亮的连线
-      if (linkDisplayMode.value === 'selected') {
-        const linkId = link.id
-        if (highlightedLinkIds.value.has(linkId)) {
-          return 0.85
-        }
-        return 0
-      }
-
-return 0
+      return resolveTopicGraphLinkOpacity(link, {
+        linkDisplayMode: linkDisplayMode.value,
+        highlightedLinkIds: highlightedLinkIds.value,
+        highlightedNodeIds: highlightedNodeSet.value,
+        relatedEdgeIds: highlightedEdgeSet.value,
+      })
     })
 }
 
@@ -199,25 +190,19 @@ function blendColors(color1: string, color2: string): string {
  * 动态绘制连线（带动画效果）
  */
 async function drawLinksAnimated(links: TopicGraphSceneEdge[]) {
-  if (!graphInstance.value || isAnimatingLinks.value) return
+  if (!graphInstance.value) return
 
   isAnimatingLinks.value = true
 
-  // 先将所有连线设为不可见
   const newHighlightedIds = new Set<string>()
 
-  // 逐个显示连线，产生生长效果
   for (let i = 0; i < links.length; i++) {
     const link = links[i]!
     newHighlightedIds.add(link.id)
 
-    // 更新高亮连线集合
     highlightedLinkIds.value = new Set(newHighlightedIds)
-
-    // 触发重绘
     applyHighlightStyles()
 
-    // 等待一小段时间再显示下一条
     await new Promise(resolve => setTimeout(resolve, 80))
   }
 
@@ -236,7 +221,7 @@ function hideAllLinks() {
 /**
  * 显示选中题材的相关连线
  */
-async function showLinksForTopic(topicId: string) {
+function showLinksForTopic(topicId: string) {
   const relatedLinks = calculateRelatedLinks(topicId, props.edges)
 
   if (relatedLinks.length === 0) {
@@ -245,7 +230,8 @@ async function showLinksForTopic(topicId: string) {
   }
 
   linkDisplayMode.value = 'selected'
-  await drawLinksAnimated(relatedLinks)
+  highlightedLinkIds.value = new Set(relatedLinks.map(link => link.id))
+  applyHighlightStyles()
 }
 
 function buildNodeObject(node: TopicGraphSceneNode) {
@@ -421,11 +407,7 @@ function isHighlightedEdge(
   highlightedNodes: Set<string>,
   highlightedEdges: Set<string>,
 ) {
-  if (highlightedEdges.has(link.id)) return true
-
-  const sourceId = resolveLinkNodeId(link.source)
-  const targetId = resolveLinkNodeId(link.target)
-  return highlightedNodes.has(sourceId) && highlightedNodes.has(targetId)
+  return isHighlightedTopicGraphEdge(link, highlightedNodes, highlightedEdges)
 }
 
 function resolveLinkNodeId(node: string | TopicGraphSceneNode) {
@@ -436,42 +418,146 @@ function compactLabel(label: string, maxLength: number) {
   return label.length > maxLength ? `${label.slice(0, maxLength)}…` : label
 }
 
-function focusActiveNode() {
+function cancelFocusAnimation() {
+  if (focusAnimationFrame.value === null) return
+
+  cancelAnimationFrame(focusAnimationFrame.value)
+  focusAnimationFrame.value = null
+}
+
+function resolveGraphNode(nodeId: string) {
+  const graph = graphInstance.value
+  const liveGraphData = graph?.graphData?.()
+  const liveNode = Array.isArray(liveGraphData?.nodes)
+    ? liveGraphData.nodes.find((item: TopicGraphSceneNode) => item.id === nodeId)
+    : null
+
+  return liveNode || props.nodes.find(item => item.id === nodeId) || null
+}
+
+async function focusActiveNode() {
   if (!graphInstance.value || !props.activeNodeId) return
-  const node = props.nodes.find(item => item.id === props.activeNodeId)
+
+  await nextTick()
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+
+  const graph = graphInstance.value
+  const nodeId = props.activeNodeId
+  const node = resolveGraphNode(nodeId)
   if (!node) return
 
-  const distance = 92
-  const x = node.x || 0
-  const y = node.y || 0
-  const z = node.z || 1
-  const distRatio = 1 + distance / Math.hypot(x || 1, y || 1, z || 1)
+  const x = node.x ?? 0
+  const y = node.y ?? 0
+  const z = node.z ?? 0
+  const camera = graph.camera?.()
+  const controls = graph.controls?.()
+  const currentTarget = controls?.target
+    ? {
+        x: controls.target.x,
+        y: controls.target.y,
+        z: controls.target.z,
+      }
+    : { x: 0, y: 0, z: 0 }
 
-  graphInstance.value.cameraPosition(
-    {
-      x: x * distRatio,
-      y: y * distRatio,
-      z: z * distRatio,
-    },
-    node,
+  const focusDistance = node.kind === 'feed' ? 92 : 128
+
+  let direction = { x: 0, y: 0, z: 1 }
+  if (camera?.position) {
+    const rawOffset = {
+      x: camera.position.x - currentTarget.x,
+      y: camera.position.y - currentTarget.y,
+      z: camera.position.z - currentTarget.z,
+    }
+    const rawDistance = Math.hypot(rawOffset.x, rawOffset.y, rawOffset.z)
+
+    if (Number.isFinite(rawDistance) && rawDistance > 1) {
+      direction = {
+        x: rawOffset.x / rawDistance,
+        y: rawOffset.y / rawDistance,
+        z: rawOffset.z / rawDistance,
+      }
+    }
+  }
+
+  cancelFocusAnimation()
+
+  if (camera?.position && controls?.target?.set && typeof controls.update === 'function') {
+    const startCameraPosition = {
+      x: camera.position.x,
+      y: camera.position.y,
+      z: camera.position.z,
+    }
+    const startTarget = {
+      x: controls.target.x,
+      y: controls.target.y,
+      z: controls.target.z,
+    }
+    const duration = 900
+    const startedAt = performance.now()
+
+    const step = (now: number) => {
+      const currentNode = resolveGraphNode(nodeId) || node
+      const currentLookAt = {
+        x: currentNode.x ?? x,
+        y: currentNode.y ?? y,
+        z: currentNode.z ?? z,
+      }
+      const currentCameraPosition = {
+        x: currentLookAt.x + direction.x * focusDistance,
+        y: currentLookAt.y + direction.y * focusDistance,
+        z: currentLookAt.z + direction.z * focusDistance,
+      }
+      const progress = Math.min(1, (now - startedAt) / duration)
+      const eased = 1 - Math.pow(1 - progress, 3)
+
+      camera.position.set(
+        startCameraPosition.x + (currentCameraPosition.x - startCameraPosition.x) * eased,
+        startCameraPosition.y + (currentCameraPosition.y - startCameraPosition.y) * eased,
+        startCameraPosition.z + (currentCameraPosition.z - startCameraPosition.z) * eased,
+      )
+      controls.target.set(
+        startTarget.x + (currentLookAt.x - startTarget.x) * eased,
+        startTarget.y + (currentLookAt.y - startTarget.y) * eased,
+        startTarget.z + (currentLookAt.z - startTarget.z) * eased,
+      )
+      controls.update()
+
+      if (progress < 1) {
+        focusAnimationFrame.value = requestAnimationFrame(step)
+        return
+      }
+
+      const finalNode = resolveGraphNode(nodeId) || currentNode
+      controls.target.set(finalNode.x ?? currentLookAt.x, finalNode.y ?? currentLookAt.y, finalNode.z ?? currentLookAt.z)
+      controls.update()
+      focusAnimationFrame.value = null
+    }
+
+    focusAnimationFrame.value = requestAnimationFrame(step)
+    return
+  }
+
+  const lookAt = { x, y, z }
+  const targetCameraPosition = {
+    x: x + direction.x * focusDistance,
+    y: y + direction.y * focusDistance,
+    z: z + direction.z * focusDistance,
+  }
+
+  graph.cameraPosition(
+    targetCameraPosition,
+    lookAt,
     900,
   )
 }
 
-watch(() => [props.nodes, props.edges, props.featuredNodeIds, props.highlightedNodeIds, props.relatedEdgeIds, props.selectedCategory], applyGraphData, { deep: true })
-watch(() => props.activeNodeId, async (newId, oldId) => {
-  applyGraphData()
-  focusActiveNode()
-
-  // 处理连线动画
-  if (oldId) {
-    // 先隐藏旧连线
-    hideAllLinks()
-  }
-
+watch(() => [props.nodes, props.edges, props.featuredNodeIds, props.highlightedNodeIds, props.relatedEdgeIds, props.selectedCategory], applyGraphData)
+watch(() => [props.activeNodeId, props.focusRequestKey] as const, async ([newId]) => {
   if (newId) {
-    // 显示新选中题材的相关连线
+    await focusActiveNode()
     await showLinksForTopic(newId)
+  } else {
+    hideAllLinks()
   }
 })
 
@@ -480,6 +566,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  cancelFocusAnimation()
   resizeObserver.value?.disconnect()
 })
 </script>

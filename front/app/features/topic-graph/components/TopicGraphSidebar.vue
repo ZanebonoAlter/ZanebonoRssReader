@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { Icon } from '@iconify/vue'
 import type { TopicCategory, TopicGraphDetailPayload } from '~/api/topicGraph'
-import type { TimelineDigestSelection } from '~/types/timeline'
+import type { PendingArticle, TimelineDigestSelection } from '~/types/timeline'
 import { normalizeTopicCategory } from '~/features/topic-graph/utils/normalizeTopicCategory'
 import KeywordCloud, { type Keyword } from './KeywordCloud.vue'
 
@@ -13,6 +14,8 @@ interface Props {
   dataState?: string
   selectedKeyword?: string | null
   selectedTagSlug?: string | null
+  pendingArticles?: PendingArticle[]
+  selectedPendingNode?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -22,6 +25,8 @@ const props = withDefaults(defineProps<Props>(), {
   dataState: 'empty',
   selectedKeyword: null,
   selectedTagSlug: null,
+  pendingArticles: () => [],
+  selectedPendingNode: false,
 })
 
 const emit = defineEmits<{
@@ -55,9 +60,6 @@ const deduplicatedArticles = computed(() => {
     })
     .map(article => ({
       ...article,
-      feedName: props.selectedDigest?.feedName || props.detail?.topic.label || '来源文章',
-      categoryName: props.selectedDigest?.categoryName || '日报',
-      summaryTitle: props.selectedDigest?.title || props.detail?.topic.label || '当前日报',
       matchedTopic: matchedIds.has(article.id) || topicArticleIds.has(article.id),
       matchedBySummaryOnly: !topicArticleIds.has(article.id),
     }))
@@ -68,6 +70,20 @@ const deduplicatedArticles = computed(() => {
 })
 
 const keywords = computed((): Keyword[] => {
+  // Prefer matched articles tags from selected digest
+  if (props.selectedDigest?.matchedArticlesTags?.length) {
+    const tags = props.selectedDigest.matchedArticlesTags
+    const maxCount = Math.max(...tags.map(tag => 1), 1)
+
+    return tags.slice(0, 18).map(tag => ({
+      slug: tag.slug,
+      label: tag.label,
+      count: 1,
+      relevance: 0.5,
+    }))
+  }
+
+  // Fallback to related_tags from topic detail
   if (!props.detail?.related_tags?.length) return []
 
   const maxCooccurrence = Math.max(...props.detail.related_tags.map(tag => tag.cooccurrence), 1)
@@ -130,12 +146,45 @@ watch(() => props.selectedKeyword, (value) => {
           </span>
         </div>
         <p class="text-sm text-[var(--topic-ink-medium)]">
-          {{ props.selectedDigest ? '当前日报来源文章' : '先从下方选择一条日报' }}
+          {{ props.selectedPendingNode ? '待整理文章列表' : (props.selectedDigest ? '当前日报来源文章' : '先从下方选择一条日报') }}
         </p>
       </section>
 
+      <!-- Pending Articles Section -->
+      <section v-if="props.selectedPendingNode" class="topic-panel topic-panel--featured rounded-[28px] p-4 md:p-5">
+        <div class="flex items-center justify-between gap-3">
+          <div>
+            <p class="topic-sidebar__eyebrow">待整理文章</p>
+            <p class="topic-related-card__context mt-2">已打标签但尚未生成日报</p>
+          </div>
+          <span class="topic-summary__count">{{ props.pendingArticles.length }} 条</span>
+        </div>
+        <div
+          v-if="props.pendingArticles.length"
+          class="topic-sidebar__news-scroll mt-4"
+          data-testid="topic-graph-pending-articles"
+        >
+          <div class="grid gap-3">
+            <button
+              v-for="article in props.pendingArticles"
+              :key="article.id"
+              class="topic-related-card"
+              type="button"
+              data-testid="sidebar-pending-article"
+              :data-article-id="String(article.id)"
+              @click="emit('openArticle', article.id)"
+            >
+              <p class="topic-related-card__meta">{{ article.feedName || '来源文章' }}</p>
+              <h3 class="topic-related-card__title">{{ article.title }}</h3>
+              <p class="topic-related-card__context">待整理文章</p>
+            </button>
+          </div>
+        </div>
+        <div v-else class="topic-sidebar__empty topic-sidebar__empty--soft">当前没有待整理的文章。</div>
+      </section>
+
       <!-- Related Articles (deduplicated) -->
-      <section class="topic-panel topic-panel--featured rounded-[28px] p-4 md:p-5">
+      <section v-if="!props.selectedPendingNode" class="topic-panel topic-panel--featured rounded-[28px] p-4 md:p-5">
         <div class="flex items-center justify-between gap-3">
           <div>
             <p class="topic-sidebar__eyebrow">日报文章</p>
@@ -152,16 +201,16 @@ watch(() => props.selectedKeyword, (value) => {
           <div class="grid gap-3">
             <button
               v-for="article in deduplicatedArticles"
-              :key="article.link"
+              :key="article.id"
               class="topic-related-card"
               type="button"
               data-testid="sidebar-article"
               :data-article-id="String(article.id)"
               @click="emit('openArticle', article.id)"
             >
-              <p class="topic-related-card__meta">{{ article.feedName }} · {{ article.categoryName }}</p>
+              <p class="topic-related-card__meta">{{ article.feedName || props.selectedDigest?.feedName || '来源文章' }}</p>
               <h3 class="topic-related-card__title">{{ article.title }}</h3>
-              <p class="topic-related-card__context">来自：{{ article.summaryTitle }}</p>
+              <p class="topic-related-card__context">来自：{{ props.selectedDigest?.title || '当前日报' }}</p>
               <p class="topic-related-card__note" :class="{ 'topic-related-card__note--soft': article.matchedBySummaryOnly }">
                 {{ article.matchedBySummaryOnly ? '命中日报关键词，article 本身暂未打上当前 topic 标签' : '命中当前 topic/article 标签' }}
               </p>

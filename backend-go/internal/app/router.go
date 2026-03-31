@@ -14,6 +14,7 @@ import (
 	topicgraphdomain "my-robot-backend/internal/domain/topicgraph"
 	"my-robot-backend/internal/jobs"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/tracing"
 	"my-robot-backend/internal/platform/ws"
 )
 
@@ -74,6 +75,7 @@ func SetupRoutes(r *gin.Engine) {
 			articles.GET("/stats", articlesdomain.GetArticlesStats)
 			articles.GET("", articlesdomain.GetArticles)
 			articles.GET("/:article_id", articlesdomain.GetArticle)
+			articles.POST("/:article_id/tags", articlesdomain.RetagArticleHandler)
 			articles.PUT("/:article_id", articlesdomain.UpdateArticle)
 			articles.PUT("/bulk-update", articlesdomain.BulkUpdateArticles)
 		}
@@ -155,6 +157,7 @@ func SetupRoutes(r *gin.Engine) {
 			topicGraph.GET("/topic/:slug", topicgraphdomain.GetTopicDetail)
 			topicGraph.GET("/by-category", topicgraphdomain.GetTopicsByCategory)
 			topicGraph.GET("/tag/:slug/digests", topicgraphdomain.GetDigestsByArticleTagHandler)
+			topicGraph.GET("/tag/:slug/pending-articles", topicgraphdomain.GetPendingArticlesByTagHandler)
 			topicGraph.GET("/topic/:slug/articles", topicgraphdomain.GetTopicArticles)
 		}
 		topicanalysisdomain.RegisterAnalysisRoutes(topicGraph, topicanalysisdomain.GetAnalysisService(database.DB))
@@ -171,6 +174,17 @@ func SetupRoutes(r *gin.Engine) {
 			digestGroup.POST("/run/:type", digestdomain.RunDigestNow)
 			digestGroup.POST("/test-feishu", digestdomain.TestFeishuPush)
 			digestGroup.POST("/test-obsidian", digestdomain.TestObsidianWrite)
+		}
+
+		traceHandler := tracing.NewTraceHandler(database.DB)
+		traces := api.Group("/traces")
+		{
+			traces.GET("", traceHandler.GetTraceByTraceID)
+			traces.GET("/recent", traceHandler.GetRecentTraces)
+			traces.GET("/search", traceHandler.SearchTraces)
+			traces.GET("/stats", traceHandler.GetTraceStats)
+			traces.GET("/:trace_id/timeline", traceHandler.GetTraceTimeline)
+			traces.GET("/:trace_id/otlp", traceHandler.ExportTraceOTLP)
 		}
 	}
 }

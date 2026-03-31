@@ -1,11 +1,16 @@
 package feeds
 
 import (
+	"context"
 	"fmt"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	otelCodes "go.opentelemetry.io/otel/codes"
 	"gorm.io/gorm"
+	"my-robot-backend/internal/domain/contentprocessing"
 	"my-robot-backend/internal/domain/models"
+	"my-robot-backend/internal/domain/topicextraction"
 	"my-robot-backend/internal/platform/database"
 )
 
@@ -19,8 +24,16 @@ func NewFeedService() *FeedService {
 	}
 }
 
-func (s *FeedService) RefreshFeed(feedID uint) error {
-	var feed models.Feed
+func (s *FeedService) RefreshFeed(ctx context.Context, feedID uint) (err error) {
+	ctx, span := otel.Tracer("rss-reader-backend").Start(ctx, "FeedService.RefreshFeed")
+	defer span.End()
+	defer func() {
+		if err != nil {
+			span.SetStatus(otelCodes.Error, "error")
+			span.RecordError(err)
+		}
+	}()
+	/*line backend-go/internal/domain/feeds/service.go:26:2*/ var feed models.Feed
 	if err := database.DB.First(&feed, feedID).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return fmt.Errorf("feed not found")
@@ -49,7 +62,7 @@ func (s *FeedService) RefreshFeed(feedID uint) error {
 		}
 	}
 
-	if feed.Icon == "" || feed.Icon == "rss" {
+	if feed.Icon == "" || feed.Icon == "rss" || feed.Icon == "mdi:rss" {
 		if parsed.Image != "" {
 			feed.Icon = parsed.Image
 		} else if firstArticleImage != "" {
@@ -86,6 +99,10 @@ func (s *FeedService) RefreshFeed(feedID uint) error {
 			continue
 		}
 
+		if err := s.enqueueArticleProcessing(feed, article); err != nil {
+			return err
+		}
+
 		articlesAdded++
 		if articlesAdded >= feed.MaxArticles {
 			break
@@ -101,6 +118,18 @@ func (s *FeedService) RefreshFeed(feedID uint) error {
 	return nil
 }
 
+func (s *FeedService) enqueueArticleProcessing(feed models.Feed, article models.Article) error {
+	if shouldDelayArticleTagging(feed) {
+		return contentprocessing.NewFirecrawlJobQueue(database.DB).Enqueue(article)
+	}
+
+	return topicextraction.NewTagJobQueue(database.DB).Enqueue(topicextraction.TagJobRequest{
+		ArticleID: article.ID,
+		FeedName:  feed.Title,
+		Reason:    "article_created",
+	})
+}
+
 func (s *FeedService) updateFeedError(feed *models.Feed, err error) {
 	now := time.Now().In(time.FixedZone("CST", 8*3600))
 	feed.RefreshStatus = "error"
@@ -111,7 +140,7 @@ func (s *FeedService) updateFeedError(feed *models.Feed, err error) {
 
 func (s *FeedService) cleanupOldArticles(feed *models.Feed) {
 	var articles []models.Article
-	if err := database.DB.Where("feed_id = ?", feed.ID).Order("pub_date DESC").Find(&articles).Error; err != nil {
+	if err := database.DB.Omit("tag_count").Where("feed_id = ?", feed.ID).Order("pub_date DESC").Find(&articles).Error; err != nil {
 		return
 	}
 
@@ -160,4 +189,8 @@ func (s *FeedService) buildArticleFromEntry(feed models.Feed, entry ParsedEntry)
 	}
 
 	return article
+}
+
+func shouldDelayArticleTagging(feed models.Feed) bool {
+	return feed.FirecrawlEnabled
 }

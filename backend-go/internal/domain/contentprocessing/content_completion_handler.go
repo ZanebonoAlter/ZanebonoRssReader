@@ -84,7 +84,7 @@ func CompleteArticleContent(c *gin.Context) {
 	}
 	_ = c.ShouldBindJSON(&req)
 
-	if err := completionService.CompleteArticleWithForce(articleID, req.Force); err != nil {
+	if err := completionService.CompleteArticleWithForce(c.Request.Context(), articleID, req.Force); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 		return
 	}
@@ -111,7 +111,7 @@ func CompleteFeedArticles(c *gin.Context) {
 	}
 
 	var articles []models.Article
-	if err := database.DB.Where("feed_id = ? AND summary_status IN ?", feedID, []string{"incomplete", "failed"}).Find(&articles).Error; err != nil {
+	if err := database.DB.Omit("tag_count").Where("feed_id = ? AND summary_status IN ?", feedID, []string{"incomplete", "failed"}).Find(&articles).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 		return
 	}
@@ -120,7 +120,7 @@ func CompleteFeedArticles(c *gin.Context) {
 	failed := 0
 
 	for _, article := range articles {
-		if err := completionService.CompleteArticleWithForce(article.ID, true); err != nil {
+		if err := completionService.CompleteArticleWithForce(c.Request.Context(), article.ID, true); err != nil {
 			failed++
 		} else {
 			completed++

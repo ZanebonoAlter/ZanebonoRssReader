@@ -1,6 +1,7 @@
 package feeds
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -199,7 +200,7 @@ func CreateFeed(c *gin.Context) {
 		feed.Title = "Untitled Feed"
 	}
 	if feed.Icon == "" {
-		feed.Icon = "rss"
+		feed.Icon = "mdi:rss"
 	}
 	if feed.Color == "" {
 		feed.Color = "#8b5cf6"
@@ -418,7 +419,7 @@ func RefreshFeed(c *gin.Context) {
 
 func refreshFeedWorker(feedID uint) {
 	feedService := NewFeedService()
-	if err := feedService.RefreshFeed(feedID); err != nil {
+	if err := feedService.RefreshFeed(context.Background(), feedID); err != nil {
 		return
 	}
 }
@@ -500,7 +501,7 @@ func refreshAllFeedsWorker() {
 
 	feedService := NewFeedService()
 	for _, feed := range feeds {
-		if err := feedService.RefreshFeed(feed.ID); err != nil {
+		if err := feedService.RefreshFeed(context.Background(), feed.ID); err != nil {
 			continue
 		}
 	}

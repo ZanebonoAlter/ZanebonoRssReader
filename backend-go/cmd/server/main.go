@@ -1,17 +1,20 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
 
 	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 	appbootstrap "my-robot-backend/internal/app"
 	"my-robot-backend/internal/domain/digest"
 	"my-robot-backend/internal/platform/airouter"
 	"my-robot-backend/internal/platform/config"
 	"my-robot-backend/internal/platform/database"
 	"my-robot-backend/internal/platform/middleware"
+	"my-robot-backend/internal/platform/tracing"
 )
 
 func main() {
@@ -31,6 +34,18 @@ func main() {
 		log.Printf("Warning: Failed to migrate legacy AI summary config: %v", err)
 	}
 
+	traceCfg := tracing.DefaultConfig()
+	tp, err := tracing.InitTracerProvider(database.DB, traceCfg)
+	if err != nil {
+		log.Printf("Warning: Failed to initialize tracing: %v", err)
+	} else {
+		defer func() {
+			if err := tp.Shutdown(context.Background()); err != nil {
+				log.Printf("Warning: Failed to shutdown tracer: %v", err)
+			}
+		}()
+	}
+
 	if config.AppConfig != nil && config.AppConfig.Server.Mode == "release" {
 		gin.SetMode(gin.ReleaseMode)
 	} else {
@@ -38,6 +53,7 @@ func main() {
 	}
 
 	r := gin.Default()
+	r.Use(otelgin.Middleware("rss-reader-backend"))
 	if config.AppConfig != nil {
 		r.Use(middleware.CORS(config.AppConfig))
 	}

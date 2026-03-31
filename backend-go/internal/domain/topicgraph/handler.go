@@ -3,6 +3,7 @@ package topicgraph
 import (
 	"fmt"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -17,7 +18,10 @@ func GetTopicGraph(c *gin.Context) {
 		return
 	}
 
-	graph, err := BuildTopicGraph(kind, anchor)
+	categoryID := parseOptionalUintParam(c, "category_id")
+	feedID := parseOptionalUintParam(c, "feed_id")
+
+	graph, err := BuildTopicGraph(kind, anchor, categoryID, feedID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
 		return
@@ -35,7 +39,7 @@ func GetTopicDetail(c *gin.Context) {
 		return
 	}
 
-	detail, err := BuildTopicDetail(kind, slug, anchor)
+	detail, err := BuildTopicDetail(kind, slug, anchor, parseOptionalUintParam(c, "category_id"), parseOptionalUintParam(c, "feed_id"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
 		return
@@ -53,7 +57,7 @@ func GetTopicsByCategory(c *gin.Context) {
 		return
 	}
 
-	result, err := BuildTopicsByCategory(kind, anchor)
+	result, err := BuildTopicsByCategory(kind, anchor, parseOptionalUintParam(c, "category_id"), parseOptionalUintParam(c, "feed_id"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 		return
@@ -159,4 +163,44 @@ func parseIntParam(value string, min, max int) (int, error) {
 		return max, nil
 	}
 	return result, nil
+}
+
+func parseOptionalUintParam(c *gin.Context, key string) *uint {
+	val := c.Query(key)
+	if val == "" {
+		return nil
+	}
+	v, err := strconv.ParseUint(val, 10, 64)
+	if err != nil {
+		return nil
+	}
+	u := uint(v)
+	return &u
+}
+
+// GetPendingArticlesByTagHandler returns articles with the given tag that are not in any digest
+func GetPendingArticlesByTagHandler(c *gin.Context) {
+	tagSlug := c.Param("slug")
+	if tagSlug == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "tag slug is required"})
+		return
+	}
+
+	kind := c.DefaultQuery("type", "daily")
+	anchor, err := topictypes.ParseAnchorDate(c.Query("date"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	result, err := GetPendingArticlesByTag(tagSlug, kind, anchor)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    result,
+	})
 }

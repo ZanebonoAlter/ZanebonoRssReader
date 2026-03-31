@@ -202,6 +202,15 @@ func TestGetTopicDetailReturnsHistoryAndSummaries(t *testing.T) {
 	firstSummary := body.Data.Summaries[0]
 	require.NotEmpty(t, firstSummary["feed_name"])
 	require.NotEmpty(t, firstSummary["summary"])
+	hasAggregatedTags := false
+	for _, summary := range body.Data.Summaries {
+		aggregatedTags, ok := summary["aggregated_tags"].([]any)
+		if ok && len(aggregatedTags) > 0 {
+			hasAggregatedTags = true
+			break
+		}
+	}
+	require.True(t, hasAggregatedTags)
 	hasArticles := false
 	for _, summary := range body.Data.Summaries {
 		articles, ok := summary["articles"].([]any)
@@ -214,6 +223,40 @@ func TestGetTopicDetailReturnsHistoryAndSummaries(t *testing.T) {
 	searchLinks, ok := body.Data.SearchLinks["youtube_live"]
 	require.True(t, ok)
 	require.NotEmpty(t, searchLinks)
+}
+
+func TestGetDigestsByArticleTagReturnsAggregatedTags(t *testing.T) {
+	setupTopicGraphTestDB(t)
+	seedTopicGraphData(t)
+	gin.SetMode(gin.TestMode)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Params = gin.Params{{Key: "slug", Value: "ai-agent"}}
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/topic-graph/tag/ai-agent/digests?type=daily&date=2026-03-11", http.NoBody)
+
+	GetDigestsByArticleTagHandler(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	var body struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Digests []map[string]any `json:"digests"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
+	require.True(t, body.Success)
+	require.NotEmpty(t, body.Data.Digests)
+
+	firstDigest := body.Data.Digests[0]
+	aggregatedTags, ok := firstDigest["aggregated_tags"].([]any)
+	require.True(t, ok)
+	require.NotEmpty(t, aggregatedTags)
+	firstTag, ok := aggregatedTags[0].(map[string]any)
+	require.True(t, ok)
+	require.NotEmpty(t, firstTag["slug"])
+	require.NotEmpty(t, firstTag["article_count"])
 }
 
 func TestGetTopicArticlesSuccess(t *testing.T) {

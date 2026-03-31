@@ -1,6 +1,7 @@
 package contentprocessing
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -25,6 +26,9 @@ func setupServicesTestDB(t *testing.T) {
 	}
 
 	database.DB = db
+	if err := database.DB.AutoMigrate(&models.TopicTag{}, &models.ArticleTopicTag{}, &models.TagJob{}, &models.FirecrawlJob{}); err != nil {
+		t.Fatalf("migrate topic tag tables: %v", err)
+	}
 	if err := database.DB.AutoMigrate(&models.Feed{}, &models.Article{}, &models.SchedulerTask{}, &models.AIProvider{}, &models.AIRoute{}, &models.AIRouteProvider{}, &models.AICallLog{}); err != nil {
 		t.Fatalf("migrate test db: %v", err)
 	}
@@ -62,7 +66,7 @@ func TestCompleteArticleWithForceUsesAIRouterRoute(t *testing.T) {
 	}
 
 	service := NewContentCompletionService("http://localhost:11235")
-	if err := service.CompleteArticleWithForce(article.ID, false); err != nil {
+	if err := service.CompleteArticleWithForce(context.Background(), article.ID, false); err != nil {
 		t.Fatalf("complete article: %v", err)
 	}
 
@@ -78,6 +82,14 @@ func TestCompleteArticleWithForceUsesAIRouterRoute(t *testing.T) {
 	}
 	if refreshed.AIContentSummary == "" {
 		t.Fatal("expected AI content summary to be populated from router")
+	}
+
+	var jobCount int64
+	if err := database.DB.Model(&models.TagJob{}).Where("article_id = ?", article.ID).Count(&jobCount).Error; err != nil {
+		t.Fatalf("count tag jobs: %v", err)
+	}
+	if jobCount != 1 {
+		t.Fatalf("tag job count = %d, want 1", jobCount)
 	}
 }
 
@@ -201,7 +213,7 @@ func TestCompleteArticleWithForceRetriesUntilMaxAndLogsMetadata(t *testing.T) {
 	}
 
 	service := NewContentCompletionService("http://localhost:11235")
-	if err := service.CompleteArticleWithForce(article.ID, false); err == nil {
+	if err := service.CompleteArticleWithForce(context.Background(), article.ID, false); err == nil {
 		t.Fatal("expected first attempt to fail")
 	}
 
@@ -230,7 +242,7 @@ func TestCompleteArticleWithForceRetriesUntilMaxAndLogsMetadata(t *testing.T) {
 		t.Fatalf("request_meta missing feed_id: %s", callLogs[0].RequestMeta)
 	}
 
-	if err := service.CompleteArticleWithForce(article.ID, false); err == nil {
+	if err := service.CompleteArticleWithForce(context.Background(), article.ID, false); err == nil {
 		t.Fatal("expected second attempt to fail")
 	}
 	if err := database.DB.First(&refreshed, article.ID).Error; err != nil {
@@ -284,10 +296,10 @@ func TestCompleteArticleWithForceSkipsFreshPendingAndReclaimsStalePending(t *tes
 	}
 
 	service := NewContentCompletionService("http://localhost:11235")
-	if err := service.CompleteArticleWithForce(fresh.ID, false); err != nil {
+	if err := service.CompleteArticleWithForce(context.Background(), fresh.ID, false); err != nil {
 		t.Fatalf("fresh pending should be skipped without error: %v", err)
 	}
-	if err := service.CompleteArticleWithForce(stale.ID, false); err != nil {
+	if err := service.CompleteArticleWithForce(context.Background(), stale.ID, false); err != nil {
 		t.Fatalf("stale pending should be reclaimed: %v", err)
 	}
 
@@ -357,7 +369,7 @@ func TestCompleteArticleWithMetadataAddsSchedulerRunIDToCallLogs(t *testing.T) {
 	}
 
 	service := NewContentCompletionService("http://localhost:11235")
-	if err := service.CompleteArticleWithMetadata(article.ID, false, map[string]any{
+	if err := service.CompleteArticleWithMetadata(context.Background(), article.ID, false, map[string]any{
 		"scheduler_run_id": "run-123",
 		"trigger_source":   "scheduler",
 	}); err != nil {
@@ -378,5 +390,50 @@ func TestCompleteArticleWithMetadataAddsSchedulerRunIDToCallLogs(t *testing.T) {
 	}
 	if meta["trigger_source"] != "scheduler" {
 		t.Fatalf("trigger_source = %v, want scheduler", meta["trigger_source"])
+	}
+}
+
+func TestCompleteArticleEnqueuesRetagJobAfterSuccessfulCompletion(t *testing.T) {
+	setupServicesTestDB(t)
+
+	aiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"# OpenAI Agent Brief\n\n- OpenAI shipped an AI agent workflow."}}]}`))
+	}))
+	defer aiServer.Close()
+
+	provider := models.AIProvider{Name: "completion-primary", ProviderType: airouter.ProviderTypeOpenAICompatible, BaseURL: aiServer.URL, APIKey: "token", Model: "test-model", Enabled: true}
+	if err := database.DB.Create(&provider).Error; err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+	route := models.AIRoute{Name: airouter.DefaultRouteName, Capability: string(airouter.CapabilityArticleCompletion), Enabled: true, Strategy: "ordered_failover"}
+	if err := database.DB.Create(&route).Error; err != nil {
+		t.Fatalf("create route: %v", err)
+	}
+	if err := database.DB.Create(&models.AIRouteProvider{RouteID: route.ID, ProviderID: provider.ID, Priority: 1, Enabled: true}).Error; err != nil {
+		t.Fatalf("create route provider: %v", err)
+	}
+
+	feed := models.Feed{Title: "OpenAI Feed", URL: fmt.Sprintf("https://example.com/%s", t.Name()), ArticleSummaryEnabled: true, FirecrawlEnabled: true, MaxCompletionRetries: 2}
+	if err := database.DB.Create(&feed).Error; err != nil {
+		t.Fatalf("create feed: %v", err)
+	}
+
+	article := models.Article{FeedID: feed.ID, Title: "Daily brief", Link: "https://example.com/tag-after-completion", FirecrawlStatus: "completed", FirecrawlContent: "OpenAI built an AI agent runtime.", SummaryStatus: "incomplete"}
+	if err := database.DB.Create(&article).Error; err != nil {
+		t.Fatalf("create article: %v", err)
+	}
+
+	service := NewContentCompletionService("http://localhost:11235")
+	if err := service.CompleteArticle(context.Background(), article.ID); err != nil {
+		t.Fatalf("complete article: %v", err)
+	}
+
+	var jobCount int64
+	if err := database.DB.Model(&models.TagJob{}).Where("article_id = ?", article.ID).Count(&jobCount).Error; err != nil {
+		t.Fatalf("count tag jobs: %v", err)
+	}
+	if jobCount != 1 {
+		t.Fatalf("tag job count = %d, want 1", jobCount)
 	}
 }

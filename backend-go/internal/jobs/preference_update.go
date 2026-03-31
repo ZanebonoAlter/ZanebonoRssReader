@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"sync"
@@ -8,6 +9,7 @@ import (
 
 	"my-robot-backend/internal/domain/preferences"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/tracing"
 )
 
 type PreferenceUpdateScheduler struct {
@@ -84,40 +86,42 @@ func (s *PreferenceUpdateScheduler) Stop() {
 }
 
 func (s *PreferenceUpdateScheduler) runUpdate() {
-	s.mu.Lock()
-	if s.isExecuting {
-		s.mu.Unlock()
-		return
-	}
-	s.isExecuting = true
-	now := time.Now()
-	s.lastRun = &now
-	s.lastError = ""
-	s.mu.Unlock()
-	defer func() {
+	tracing.TraceSchedulerTick("preference_update", "cron", func(ctx context.Context) {
 		s.mu.Lock()
-		s.isExecuting = false
-		s.mu.Unlock()
-	}()
-
-	log.Println("Running preference update...")
-
-	preferenceService := preferences.NewPreferenceService(database.DB)
-	if err := preferenceService.UpdateAllPreferences(); err != nil {
-		s.mu.Lock()
-		s.totalRuns++
-		s.failedRuns++
-		s.lastError = err.Error()
-		s.mu.Unlock()
-		log.Printf("Preference update failed: %v", err)
-	} else {
-		s.mu.Lock()
-		s.totalRuns++
-		s.successRuns++
+		if s.isExecuting {
+			s.mu.Unlock()
+			return
+		}
+		s.isExecuting = true
+		now := time.Now()
+		s.lastRun = &now
 		s.lastError = ""
 		s.mu.Unlock()
-		log.Println("Preference update completed successfully")
-	}
+		defer func() {
+			s.mu.Lock()
+			s.isExecuting = false
+			s.mu.Unlock()
+		}()
+
+		log.Println("Running preference update...")
+
+		preferenceService := preferences.NewPreferenceService(database.DB)
+		if err := preferenceService.UpdateAllPreferences(); err != nil {
+			s.mu.Lock()
+			s.totalRuns++
+			s.failedRuns++
+			s.lastError = err.Error()
+			s.mu.Unlock()
+			log.Printf("Preference update failed: %v", err)
+		} else {
+			s.mu.Lock()
+			s.totalRuns++
+			s.successRuns++
+			s.lastError = ""
+			s.mu.Unlock()
+			log.Println("Preference update completed successfully")
+		}
+	})
 }
 
 func (s *PreferenceUpdateScheduler) TriggerNow() map[string]interface{} {

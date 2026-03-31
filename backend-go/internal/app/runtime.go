@@ -9,6 +9,7 @@ import (
 	"my-robot-backend/internal/app/runtimeinfo"
 	"my-robot-backend/internal/domain/contentprocessing"
 	"my-robot-backend/internal/domain/digest"
+	"my-robot-backend/internal/domain/topicextraction"
 	"my-robot-backend/internal/jobs"
 )
 
@@ -23,6 +24,13 @@ type Runtime struct {
 
 func StartRuntime() *Runtime {
 	runtime := &Runtime{}
+
+	// Start the tag queue worker for async article tagging
+	if err := topicextraction.GetTagQueue().Start(); err != nil {
+		log.Printf("Warning: Failed to start tag queue: %v", err)
+	} else {
+		log.Println("Tag queue started successfully")
+	}
 
 	runtime.AutoRefresh = jobs.NewAutoRefreshScheduler(60)
 	if err := runtime.AutoRefresh.Start(); err != nil {
@@ -94,6 +102,10 @@ func SetupGracefulShutdown(runtime *Runtime) {
 	go func() {
 		sig := <-sigChan
 		log.Printf("Received signal: %v, shutting down gracefully...", sig)
+
+		// Stop tag queue first to ensure all pending tag tasks are processed
+		log.Println("Stopping tag queue...")
+		topicextraction.GetTagQueue().Stop()
 
 		if runtime.AutoRefresh != nil {
 			log.Println("Stopping auto-refresh scheduler...")

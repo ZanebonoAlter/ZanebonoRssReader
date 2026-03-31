@@ -14,12 +14,16 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"gorm.io/gorm"
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/domain/preferences"
 	"my-robot-backend/internal/domain/topicextraction"
 	"my-robot-backend/internal/platform/airouter"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/tracing"
 	"my-robot-backend/internal/platform/ws"
 )
 
@@ -173,7 +177,7 @@ func (q *SummaryQueue) SubmitBatch(categoryIDs []uint, feedIDs []uint, config AI
 	}
 
 	q.running = true
-	go q.processBatch(config)
+	go q.processBatch(context.Background(), config)
 
 	return q.currentBatch
 }
@@ -253,7 +257,17 @@ func (q *SummaryQueue) broadcastProgress(currentJob *SummaryJob) {
 	hub.BroadcastProgress(msg)
 }
 
-func (q *SummaryQueue) processBatch(config AIConfig) {
+func (q *SummaryQueue) processBatch(ctx context.Context, config AIConfig) {
+	ctx, span := tracing.Tracer("summaries").Start(ctx, "SummaryQueue.processBatch",
+		trace.WithAttributes(attribute.String("batch.id", q.currentBatch.ID)),
+	)
+	defer span.End()
+
+	span.AddEvent("input", trace.WithAttributes(
+		attribute.Int("feeds.count", q.currentBatch.TotalJobs),
+		attribute.String("config.model", config.Model),
+	))
+
 	q.mu.Lock()
 	q.currentBatch.Status = "processing"
 	q.mu.Unlock()
@@ -267,7 +281,7 @@ func (q *SummaryQueue) processBatch(config AIConfig) {
 		default:
 		}
 
-		q.processJob(job, config)
+		q.processJob(ctx, job, config)
 	}
 
 	q.mu.Lock()
@@ -277,10 +291,33 @@ func (q *SummaryQueue) processBatch(config AIConfig) {
 	q.running = false
 	q.mu.Unlock()
 
+	span.AddEvent("output", trace.WithAttributes(
+		attribute.Int("summaries.created", q.currentBatch.CompletedJobs),
+		attribute.Int("summaries.failed", q.currentBatch.FailedJobs),
+	))
+	span.SetStatus(codes.Ok, "")
+
 	q.broadcastProgress(nil)
 }
 
-func (q *SummaryQueue) processJob(job *SummaryJob, config AIConfig) {
+func (q *SummaryQueue) processJob(ctx context.Context, job *SummaryJob, config AIConfig) {
+	feedID := 0
+	if job.FeedID != nil {
+		feedID = int(*job.FeedID)
+	}
+	ctx, span := tracing.Tracer("summaries").Start(ctx, "SummaryQueue.processJob",
+		trace.WithAttributes(
+			attribute.Int("job.feed_id", feedID),
+			attribute.String("job.status", string(job.Status)),
+		),
+	)
+	defer span.End()
+
+	span.AddEvent("input", trace.WithAttributes(
+		attribute.String("job.feed_name", job.FeedName),
+		attribute.String("job.category_name", job.CategoryName),
+	))
+
 	q.mu.Lock()
 	job.Status = JobProcessing
 	job.UpdatedAt = time.Now()
@@ -301,10 +338,16 @@ func (q *SummaryQueue) processJob(job *SummaryJob, config AIConfig) {
 		job.ErrorMessage = err.Error()
 		job.ErrorCode = classifyError(err)
 		q.currentBatch.FailedJobs++
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 	} else {
 		job.Status = JobCompleted
 		job.ResultID = &result.ID
 		q.currentBatch.CompletedJobs++
+		span.AddEvent("output", trace.WithAttributes(
+			attribute.Int("result.id", int(result.ID)),
+		))
+		span.SetStatus(codes.Ok, "")
 	}
 
 	q.mu.Unlock()
@@ -324,8 +367,8 @@ func (q *SummaryQueue) generateSummaryForFeed(feedID *uint, categoryID *uint, fe
 
 	var articles []models.Article
 	if feedID != nil {
-		database.DB.Where("feed_id = ? AND pub_date >= ?", *feedID, timeThreshold).
-			Order("pub_date DESC").
+		database.DB.Where("feed_id = ? AND created_at >= ?", *feedID, timeThreshold).
+			Order("created_at DESC").
 			Find(&articles)
 	} else {
 		return nil, &SummaryError{Code: "NO_FEED", Message: "未指定订阅源"}
@@ -369,8 +412,8 @@ func (q *SummaryQueue) generateSummaryForFeed(feedID *uint, categoryID *uint, fe
 			if err := topicextraction.TagSummary(existingSummary); err != nil {
 				log.Printf("[WARN] Failed to backfill tags for existing summary %d: %v", existingSummary.ID, err)
 			}
-			if err := topicextraction.TagArticles(batch, displayName, categoryName); err != nil {
-				log.Printf("[WARN] Failed to tag articles for existing feed %d batch %d: %v", *feedID, batchNum, err)
+			if err := topicextraction.BackfillArticleTags(batch, displayName, categoryName); err != nil {
+				log.Printf("[WARN] Failed to backfill article tags for existing feed %d batch %d: %v", *feedID, batchNum, err)
 			}
 			lastSummary = existingSummary
 			continue
@@ -422,8 +465,8 @@ func (q *SummaryQueue) generateSummaryForFeed(feedID *uint, categoryID *uint, fe
 			log.Printf("[WARN] Failed to tag summary %d: %v", aiSummary.ID, err)
 		}
 
-		if err := topicextraction.TagArticles(batch, displayName, categoryName); err != nil {
-			log.Printf("[WARN] Failed to tag articles for feed %d batch %d: %v", *feedID, batchNum, err)
+		if err := topicextraction.BackfillArticleTags(batch, displayName, categoryName); err != nil {
+			log.Printf("[WARN] Failed to backfill article tags for feed %d batch %d: %v", *feedID, batchNum, err)
 		}
 
 		lastSummary = &aiSummary

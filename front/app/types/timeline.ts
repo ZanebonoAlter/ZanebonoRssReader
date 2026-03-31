@@ -23,6 +23,9 @@ export interface TimelineDigestSourceArticle {
   id: number
   title: string
   link: string
+  feedName?: string
+  feedIcon?: string
+  feedColor?: string
 }
 
 export interface TimelineDigest {
@@ -31,6 +34,8 @@ export interface TimelineDigest {
   summary: string
   createdAt: string
   feedName: string
+  feedIcon?: string
+  feedColor?: string
   categoryName: string
   articleCount: number
   tags: TimelineArticleTag[]
@@ -39,4 +44,20 @@ export interface TimelineDigest {
 
 export interface TimelineDigestSelection extends TimelineDigest {
   matchedArticleIds: number[]
+  matchedArticlesTags?: TimelineArticleTag[]
+}
+
+export interface PendingArticle {
+  id: number
+  title: string
+  link: string
+  pubDate?: string
+  feedName: string
+  feedIcon?: string
+  feedColor?: string
+}
+
+export interface PendingArticlesResponse {
+  articles: PendingArticle[]
+  total: number
 }

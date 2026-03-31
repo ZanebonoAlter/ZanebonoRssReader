@@ -1,28 +1,37 @@
 <script setup lang="ts">
 import { Icon } from '@iconify/vue'
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useArticlesApi } from '~/api/articles'
 import {
   useTopicGraphApi,
   type HotspotDigestCard,
-  type TopicsByCategoryPayload,
   type TopicCategory,
   type TopicGraphDetailPayload,
+  type TopicGraphFilters,
   type TopicGraphType,
+  type TopicsByCategoryPayload,
 } from '~/api/topicGraph'
 import type { Article } from '~/types'
-import type { TimelineDigest, TimelineDigestSelection, TimelineFilters } from '~/types/timeline'
+import type { TimelineDigest, TimelineDigestSelection, PendingArticle } from '~/types/timeline'
 import ArticleContentView from '~/features/articles/components/ArticleContentView.vue'
+import { useApiStore } from '~/stores/api'
+import DigestDetail from '../../digest/components/DigestDetail.vue'
+import { normalizeArticle } from '../../articles/utils/normalizeArticle'
+import type { DigestPreviewSummary } from '~/api/digest'
+import FeedCategoryFilter from '~/features/topic-graph/components/FeedCategoryFilter.vue'
 import TopicGraphCanvas from '~/features/topic-graph/components/TopicGraphCanvas.client.vue'
 import TopicGraphFooterPanels from '~/features/topic-graph/components/TopicGraphFooterPanels.vue'
 import TopicGraphHeader from '~/features/topic-graph/components/TopicGraphHeader.vue'
 import TopicGraphSidebar from '~/features/topic-graph/components/TopicGraphSidebar.vue'
 import TopicTimeline from '~/features/topic-graph/components/TopicTimeline.vue'
+import { buildDisplayedTopicGraph, collectRelatedTopicSlugs } from '~/features/topic-graph/utils/buildDisplayedTopicGraph'
 import { buildTopicGraphViewModel } from '~/features/topic-graph/utils/buildTopicGraphViewModel'
 import { normalizeTopicCategory } from '~/features/topic-graph/utils/normalizeTopicCategory'
 
 const topicGraphApi = useTopicGraphApi()
 const articlesApi = useArticlesApi()
+const apiStore = useApiStore()
+
 
 function formatDateInput(date = new Date()) {
   const year = date.getFullYear()
@@ -33,12 +42,15 @@ function formatDateInput(date = new Date()) {
 
 const selectedType = ref<TopicGraphType>('daily')
 const selectedDate = ref(formatDateInput())
+const selectedFilterCategoryId = ref<string | null>(null)
+const selectedFilterFeedId = ref<string | null>(null)
 const graphPayload = ref<Awaited<ReturnType<typeof topicGraphApi.getGraph>>['data'] | null>(null)
 const selectedTopicSlug = ref<string | null>(null)
 const selectedCategory = ref<TopicCategory | null>(null)
 const selectedKeywordSlug = ref<string | null>(null)
 const selectedDigestId = ref<string | null>(null)
 const previewDigestId = ref<string | null>(null)
+const graphFocusRequestKey = ref(0)
 const detail = ref<TopicGraphDetailPayload | null>(null)
 const loadingGraph = ref(false)
 const loadingDetail = ref(false)
@@ -50,24 +62,18 @@ const previewArticles = ref<Article[]>([])
 // Hotspot topics state (from getTopicsByCategory API)
 const hotspotData = ref<TopicsByCategoryPayload | null>(null)
 const loadingHotspots = ref(false)
+const graphVisibilityOverrides = ref<Record<string, boolean>>({})
+const expandedTopicSlugs = ref<string[]>([])
 
 // Hotspot digests state (reverse trace: tag -> articles -> digests)
 const hotspotDigests = ref<HotspotDigestCard[]>([])
 const loadingHotspotDigests = ref(false)
 const selectedHotspotTag = ref<{ slug: string; label: string; category: TopicCategory } | null>(null)
 
-// Timeline state
-const timelineFilters = ref<TimelineFilters>({
-  dateRange: null,
-  sources: [],
-})
-
-// AI Analysis state
-const aiAnalysisStatus = ref<'idle' | 'loading' | 'completed' | 'error'>('idle')
-const aiAnalysisProgress = ref(0)
-const aiAnalysisResult = ref<any>(null)
-const aiAnalysisError = ref<string | null>(null)
-let aiAnalysisPollTimer: ReturnType<typeof setTimeout> | null = null
+// Pending articles state
+const pendingArticles = ref<PendingArticle[]>([])
+const selectedPendingNode = ref(false)
+const loadingPendingArticles = ref(false)
 
 const viewModel = computed(() => graphPayload.value
   ? buildTopicGraphViewModel(graphPayload.value)
@@ -85,24 +91,27 @@ const viewModel = computed(() => graphPayload.value
 
 const activeTopicNode = computed(() => {
   const focusSlug = selectedKeywordSlug.value || selectedTopicSlug.value
-  return viewModel.value.graph.nodes.find(node => node.slug === focusSlug) || null
+  return displayedGraph.value.nodes.find(node => node.slug === focusSlug) || null
 })
 const highlightedNodeIds = computed(() => {
   const highlighted = new Set<string>()
   const focusSlug = selectedKeywordSlug.value || selectedTopicSlug.value
   if (!focusSlug) return []
 
-  const focusNode = viewModel.value.graph.nodes.find(node => node.slug === focusSlug)
+  const focusNode = displayedGraph.value.nodes.find(node => node.slug === focusSlug)
   if (!focusNode) return []
 
   highlighted.add(focusNode.id)
 
-  for (const edge of viewModel.value.graph.edges) {
-    if (edge.source === focusNode.id) {
-      highlighted.add(edge.target)
+  for (const edge of displayedGraph.value.edges) {
+    const sourceId = resolveGraphLinkNodeId(edge.source)
+    const targetId = resolveGraphLinkNodeId(edge.target)
+
+    if (sourceId === focusNode.id) {
+      highlighted.add(targetId)
     }
-    if (edge.target === focusNode.id) {
-      highlighted.add(edge.source)
+    if (targetId === focusNode.id) {
+      highlighted.add(sourceId)
     }
   }
 
@@ -112,13 +121,60 @@ const relatedEdgeIds = computed(() => {
   const highlightedSet = new Set(highlightedNodeIds.value)
   if (!highlightedSet.size) return []
 
-  return viewModel.value.graph.edges
+  return displayedGraph.value.edges
     .filter(edge => {
-      return highlightedSet.has(edge.source) && highlightedSet.has(edge.target)
+      return highlightedSet.has(resolveGraphLinkNodeId(edge.source)) && highlightedSet.has(resolveGraphLinkNodeId(edge.target))
     })
     .map(edge => edge.id)
 })
-const topTopicLabels = computed(() => viewModel.value.topTopics.slice(0, 12))
+
+function resolveGraphLinkNodeId(node: string | { id: string }) {
+  return typeof node === 'string' ? node : node.id
+}
+
+function isTopicShownInGraph(slug: string) {
+  return graphVisibleTopicSlugs.value.has(slug)
+}
+
+function ensureTopicShownInGraph(slug: string) {
+  if (isTopicShownInGraph(slug)) return
+
+  graphVisibilityOverrides.value = {
+    ...graphVisibilityOverrides.value,
+    [slug]: true,
+  }
+}
+
+function toggleTopicGraphVisibility(slug: string) {
+  const nextVisible = !isTopicShownInGraph(slug)
+  const defaultVisible = defaultGraphTopicSlugs.value.has(slug)
+  const nextOverrides = { ...graphVisibilityOverrides.value }
+
+  if (nextVisible === defaultVisible) {
+    delete nextOverrides[slug]
+  } else {
+    nextOverrides[slug] = nextVisible
+  }
+
+  graphVisibilityOverrides.value = nextOverrides
+}
+
+function expandRelatedTopics(slug: string) {
+  const relatedSlugs = collectRelatedTopicSlugs(viewModel.value.graph, slug)
+  const nextExpanded = new Set(expandedTopicSlugs.value)
+  const nextOverrides = { ...graphVisibilityOverrides.value }
+
+  nextExpanded.add(slug)
+  nextOverrides[slug] = true
+
+  relatedSlugs.forEach((relatedSlug) => {
+    nextExpanded.add(relatedSlug)
+    nextOverrides[relatedSlug] = true
+  })
+
+  expandedTopicSlugs.value = Array.from(nextExpanded)
+  graphVisibilityOverrides.value = nextOverrides
+}
 
 // Hotspot categories now use data from getTopicsByCategory API
 // Hotspot search state
@@ -136,6 +192,16 @@ function filterTopics(topics: any[], query: string) {
   return topics.filter(topic =>
     topic.label.toLowerCase().includes(lowerQuery) ||
     topic.slug.toLowerCase().includes(lowerQuery)
+  )
+}
+
+function sortTopicsByFrequency<T extends { score: number }>(topics: T[]) {
+  return [...topics].sort((left, right) => right.score - left.score)
+}
+
+function buildFallbackTopics(category: TopicCategory) {
+  return sortTopicsByFrequency(
+    viewModel.value.topTopics.filter(topic => normalizeTopicCategory(topic.category, topic.kind) === category)
   )
 }
 
@@ -181,12 +247,12 @@ const hotspotCategories = computed(() => ([
     label: '事件',
     icon: 'mdi:calendar-alert-outline',
     headerClass: 'topic-category-header--event',
-    topics: hotspotData.value?.events || [],
-    filteredTopics: filterTopics(hotspotData.value?.events || [], hotspotSearchQueries.value.event),
+    topics: sortTopicsByFrequency(hotspotData.value?.events || buildFallbackTopics('event')),
+    filteredTopics: filterTopics(sortTopicsByFrequency(hotspotData.value?.events || buildFallbackTopics('event')), hotspotSearchQueries.value.event || ''),
     displayTopics: hotspotShowAll.value.event 
-      ? filterTopics(hotspotData.value?.events || [], hotspotSearchQueries.value.event)
-      : filterTopics(hotspotData.value?.events || [], hotspotSearchQueries.value.event).slice(0, 8),
-    hasMore: filterTopics(hotspotData.value?.events || [], hotspotSearchQueries.value.event).length > 8,
+      ? filterTopics(sortTopicsByFrequency(hotspotData.value?.events || buildFallbackTopics('event')), hotspotSearchQueries.value.event || '')
+      : filterTopics(sortTopicsByFrequency(hotspotData.value?.events || buildFallbackTopics('event')), hotspotSearchQueries.value.event || '').slice(0, 8),
+    hasMore: filterTopics(sortTopicsByFrequency(hotspotData.value?.events || buildFallbackTopics('event')), hotspotSearchQueries.value.event || '').length > 8,
     showAll: hotspotShowAll.value.event,
   },
   {
@@ -194,12 +260,12 @@ const hotspotCategories = computed(() => ([
     label: '人物',
     icon: 'mdi:account-voice-outline',
     headerClass: 'topic-category-header--person',
-    topics: hotspotData.value?.people || [],
-    filteredTopics: filterTopics(hotspotData.value?.people || [], hotspotSearchQueries.value.person),
+    topics: sortTopicsByFrequency(hotspotData.value?.people || buildFallbackTopics('person')),
+    filteredTopics: filterTopics(sortTopicsByFrequency(hotspotData.value?.people || buildFallbackTopics('person')), hotspotSearchQueries.value.person || ''),
     displayTopics: hotspotShowAll.value.person
-      ? filterTopics(hotspotData.value?.people || [], hotspotSearchQueries.value.person)
-      : filterTopics(hotspotData.value?.people || [], hotspotSearchQueries.value.person).slice(0, 8),
-    hasMore: filterTopics(hotspotData.value?.people || [], hotspotSearchQueries.value.person).length > 8,
+      ? filterTopics(sortTopicsByFrequency(hotspotData.value?.people || buildFallbackTopics('person')), hotspotSearchQueries.value.person || '')
+      : filterTopics(sortTopicsByFrequency(hotspotData.value?.people || buildFallbackTopics('person')), hotspotSearchQueries.value.person || '').slice(0, 8),
+    hasMore: filterTopics(sortTopicsByFrequency(hotspotData.value?.people || buildFallbackTopics('person')), hotspotSearchQueries.value.person || '').length > 8,
     showAll: hotspotShowAll.value.person,
   },
   {
@@ -207,60 +273,96 @@ const hotspotCategories = computed(() => ([
     label: '关键词',
     icon: 'mdi:key-variant',
     headerClass: 'topic-category-header--keyword',
-    topics: hotspotData.value?.keywords || [],
-    filteredTopics: filterTopics(hotspotData.value?.keywords || [], hotspotSearchQueries.value.keyword),
+    topics: sortTopicsByFrequency(hotspotData.value?.keywords || buildFallbackTopics('keyword')),
+    filteredTopics: filterTopics(sortTopicsByFrequency(hotspotData.value?.keywords || buildFallbackTopics('keyword')), hotspotSearchQueries.value.keyword || ''),
     displayTopics: hotspotShowAll.value.keyword
-      ? filterTopics(hotspotData.value?.keywords || [], hotspotSearchQueries.value.keyword)
-      : filterTopics(hotspotData.value?.keywords || [], hotspotSearchQueries.value.keyword).slice(0, 8),
-    hasMore: filterTopics(hotspotData.value?.keywords || [], hotspotSearchQueries.value.keyword).length > 8,
+      ? filterTopics(sortTopicsByFrequency(hotspotData.value?.keywords || buildFallbackTopics('keyword')), hotspotSearchQueries.value.keyword || '')
+      : filterTopics(sortTopicsByFrequency(hotspotData.value?.keywords || buildFallbackTopics('keyword')), hotspotSearchQueries.value.keyword || '').slice(0, 8),
+    hasMore: filterTopics(sortTopicsByFrequency(hotspotData.value?.keywords || buildFallbackTopics('keyword')), hotspotSearchQueries.value.keyword || '').length > 8,
     showAll: hotspotShowAll.value.keyword,
   },
 ]))
+const defaultGraphTopicSlugs = computed(() => {
+  const slugs = new Set<string>()
+
+  viewModel.value.graph.nodes.forEach((node) => {
+    if (node.kind === 'topic' && node.slug) {
+      slugs.add(node.slug)
+    }
+  })
+
+  return slugs
+})
+const graphVisibleTopicSlugs = computed(() => {
+  const slugs = new Set(defaultGraphTopicSlugs.value)
+
+  expandedTopicSlugs.value.forEach(slug => slugs.add(slug))
+
+  Object.entries(graphVisibilityOverrides.value).forEach(([slug, visible]) => {
+    if (visible) {
+      slugs.add(slug)
+      return
+    }
+
+    slugs.delete(slug)
+  })
+
+  return slugs
+})
+const displayedGraph = computed(() => buildDisplayedTopicGraph({
+  graph: viewModel.value.graph,
+  visibleTopicSlugs: graphVisibleTopicSlugs.value,
+}))
 const timelineItems = computed((): TimelineDigest[] => {
   const summaries = detail.value?.summaries || []
 
-  return summaries
-    .filter((summary) => matchesTimelineFilters(summary.created_at, timelineFilters.value))
-    .map(summary => ({
-      id: String(summary.id),
-      title: summary.title,
-      summary: summary.summary,
-      createdAt: summary.created_at,
-      feedName: summary.feed_name,
-      categoryName: summary.category_name,
-      articleCount: summary.article_count,
-      tags: summary.topics.map(topic => ({
-        slug: topic.slug,
-        label: topic.label,
-        category: normalizeTopicCategory(topic.category, topic.kind),
-      })),
-      articles: summary.articles.map(article => ({
-        id: article.id,
-        title: article.title,
-        link: article.link,
-      })),
-    }))
+  return summaries.map(summary => ({
+    id: String(summary.id),
+    title: summary.title,
+    summary: summary.summary,
+    createdAt: summary.created_at,
+    feedName: summary.feed_name,
+    feedIcon: summary.feed_icon,
+    categoryName: summary.category_name,
+    articleCount: summary.article_count,
+    tags: summary.aggregated_tags.map(topic => ({
+      slug: topic.slug,
+      label: topic.label,
+      category: normalizeTopicCategory(topic.category, topic.kind),
+    })),
+    articles: summary.articles.map(article => ({
+      id: article.id,
+      title: article.title,
+      link: article.link,
+    })),
+  }))
 })
 
 // Hotspot digests converted to TimelineDigest format for display
 const hotspotTimelineItems = computed((): TimelineDigest[] => {
   if (!hotspotDigests.value.length) return []
 
-  return hotspotDigests.value
-    .filter((digest) => matchesTimelineFilters(digest.created_at, timelineFilters.value))
-    .map(digest => ({
+  return hotspotDigests.value.map(digest => ({
       id: String(digest.id),
       title: digest.title,
       summary: digest.summary,
       createdAt: digest.created_at,
       feedName: digest.feed_name,
+      feedIcon: digest.feed_icon,
       categoryName: digest.category_name,
       articleCount: digest.article_count,
-      tags: [], // Hotspot digests don't have tags in the response
+      tags: digest.aggregated_tags.map(tag => ({
+        slug: tag.slug,
+        label: tag.label,
+        category: normalizeTopicCategory(tag.category, tag.kind),
+      })),
       articles: digest.matched_articles?.map(article => ({
         id: article.id,
         title: article.title,
         link: '',
+        feedName: article.feed_name,
+        feedIcon: article.feed_icon,
+        feedColor: article.feed_color,
       })) || [],
     }))
 })
@@ -287,6 +389,11 @@ const selectedDigest = computed<TimelineDigestSelection | null>(() => {
       return {
         ...digest,
         matchedArticleIds: hotspotDigest.matched_articles?.map(a => a.id) || [],
+        matchedArticlesTags: hotspotDigest.matched_articles_tags?.map(tag => ({
+          slug: tag.slug,
+          label: tag.label,
+          category: normalizeTopicCategory(tag.category, tag.kind),
+        })),
       }
     }
   }
@@ -307,11 +414,41 @@ const previewDigest = computed(() => {
   if (!previewDigestId.value) return null
   return effectiveTimelineItems.value.find(item => item.id === previewDigestId.value) || null
 })
-const statCards = computed(() => ([
-  { label: '主题数', value: viewModel.value.stats.topicCount },
-  { label: '文章数', value: viewModel.value.stats.articleCount },
-  { label: 'Feed 数', value: viewModel.value.stats.feedCount },
-]))
+const previewDigestSummary = computed<DigestPreviewSummary | null>(() => {
+  if (!previewDigest.value) return null
+
+  const summarySource = detail.value?.summaries.find(item => String(item.id) === previewDigest.value?.id)
+  const hotspotSource = hotspotDigests.value.find(item => String(item.id) === previewDigest.value?.id)
+
+  return {
+    id: Number(previewDigest.value.id),
+    feed_id: null,
+    feed_name: previewDigest.value.feedName,
+    feed_icon: 'mdi:rss',
+    feed_color: summarySource?.feed_color || hotspotSource?.feed_color || '#3b6b87',
+    category_id: 0,
+    category_name: previewDigest.value.categoryName,
+    summary_text: previewDigest.value.summary,
+    article_count: previewDigest.value.articleCount,
+    article_ids: previewDigest.value.articles.map(article => article.id),
+    topics: [],
+    aggregated_tags: previewDigest.value.tags.map(tag => ({
+      slug: tag.slug,
+      label: tag.label,
+      category: tag.category,
+      score: 0,
+      article_count: 0,
+    })),
+    created_at: previewDigest.value.createdAt,
+  }
+})
+function buildCurrentFilters(): TopicGraphFilters | undefined {
+  if (selectedFilterFeedId.value) return { feedId: selectedFilterFeedId.value }
+  if (selectedFilterCategoryId.value && selectedFilterCategoryId.value !== '__uncategorized__') {
+    return { categoryId: selectedFilterCategoryId.value }
+  }
+  return undefined
+}
 
 const pageState = computed(() => {
   if (loadingGraph.value) return 'loading'
@@ -347,7 +484,7 @@ const selectedTopicInfo = computed(() => {
 async function loadHotspots() {
   loadingHotspots.value = true
   try {
-    const response = await topicGraphApi.getTopicsByCategory(selectedType.value, selectedDate.value)
+    const response = await topicGraphApi.getTopicsByCategory(selectedType.value, selectedDate.value, buildCurrentFilters())
     if (response.success && response.data) {
       hotspotData.value = response.data
     } else {
@@ -367,7 +504,7 @@ async function loadGraph() {
   notice.value = null
 
   try {
-    const response = await topicGraphApi.getGraph(selectedType.value, selectedDate.value)
+    const response = await topicGraphApi.getGraph(selectedType.value, selectedDate.value, buildCurrentFilters())
     if (!response.success || !response.data) {
       notice.value = response.error || '主题图谱没拉下来'
       graphPayload.value = null
@@ -383,6 +520,7 @@ async function loadGraph() {
     selectedKeywordSlug.value = null
     selectedDigestId.value = null
     previewDigestId.value = null
+    expandedTopicSlugs.value = []
 
     if (selectedTopicSlug.value) {
       void loadTopicDetail(selectedTopicSlug.value)
@@ -412,7 +550,7 @@ async function loadTopicDetail(slug: string) {
   loadingDetail.value = true
 
   try {
-    const response = await topicGraphApi.getTopicDetail(slug, selectedType.value, selectedDate.value)
+    const response = await topicGraphApi.getTopicDetail(slug, selectedType.value, selectedDate.value, buildCurrentFilters())
     if (response.success && response.data) {
       detail.value = response.data
       selectedCategory.value = normalizeTopicCategory(response.data.topic.category, response.data.topic.kind)
@@ -433,6 +571,9 @@ async function loadTopicDetail(slug: string) {
 }
 
 async function handleTagSelect(slug: string, category: TopicCategory) {
+  ensureTopicShownInGraph(slug)
+  expandRelatedTopics(slug)
+  graphFocusRequestKey.value += 1
   selectedCategory.value = category
   selectedTopicSlug.value = slug
 
@@ -451,8 +592,14 @@ async function handleTagSelect(slug: string, category: TopicCategory) {
   // Update selected hotspot tag
   selectedHotspotTag.value = { slug, label: tagLabel, category }
 
+  // Reset pending node selection when selecting a new tag
+  selectedPendingNode.value = false
+
   // Load digests for this tag (reverse trace: tag -> articles -> digests)
   await loadHotspotDigests(slug)
+
+  // Load pending articles for this tag
+  void loadPendingArticles(slug)
 
   // Also load topic detail for the sidebar
   void loadTopicDetail(slug)
@@ -468,7 +615,7 @@ async function loadHotspotDigests(tagSlug: string) {
       20
     )
     if (response.success && response.data) {
-      hotspotDigests.value = response.data.digests
+      hotspotDigests.value = response.data.digests || []
     } else {
       hotspotDigests.value = []
       console.error('Failed to load hotspot digests:', response.error)
@@ -481,12 +628,67 @@ async function loadHotspotDigests(tagSlug: string) {
   }
 }
 
-function handleNodeClick(node: { slug?: string; kind: string; category?: TopicCategory }) {
+async function loadPendingArticles(tagSlug: string) {
+  loadingPendingArticles.value = true
+  try {
+    const response = await topicGraphApi.getPendingArticlesByTag(
+      tagSlug,
+      selectedType.value,
+      selectedDate.value
+    )
+    if (response.success && response.data) {
+      pendingArticles.value = (response.data.articles || []).map(article => ({
+        id: article.id,
+        title: article.title,
+        link: article.link,
+        pubDate: (article as any).pub_date || article.pubDate,
+        feedName: (article as any).feed_name || article.feedName,
+        feedIcon: (article as any).feed_icon || article.feedIcon,
+        feedColor: (article as any).feed_color || article.feedColor,
+      }))
+    } else {
+      pendingArticles.value = []
+    }
+  } catch (error) {
+    console.error('Failed to load pending articles:', error)
+    pendingArticles.value = []
+  } finally {
+    loadingPendingArticles.value = false
+  }
+}
+
+function handleSelectPending() {
+  selectedPendingNode.value = true
+  selectedDigestId.value = null
+  previewDigestId.value = null
+}
+
+function handleNodeClick(node: { slug?: string; kind: string; category?: TopicCategory; label?: string }) {
   if (node.kind !== 'topic' || !node.slug) return
+
+  ensureTopicShownInGraph(node.slug)
+  expandRelatedTopics(node.slug)
+  graphFocusRequestKey.value += 1
 
   if (node.category) {
     selectedCategory.value = node.category
   }
+
+  // Set hotspot tag state for the clicked node and load its digests
+  selectedHotspotTag.value = {
+    slug: node.slug,
+    label: node.label || node.slug,
+    category: node.category || 'keyword',
+  }
+
+  // Reset pending node selection when clicking a node
+  selectedPendingNode.value = false
+
+  // Load digests for this node (similar to handleTagSelect)
+  void loadHotspotDigests(node.slug)
+
+  // Load pending articles for this node
+  void loadPendingArticles(node.slug)
 
   void loadTopicDetail(node.slug)
 }
@@ -497,7 +699,7 @@ function handleKeywordHighlight(keywordSlug: string | null) {
     return
   }
 
-  const existsInGraph = viewModel.value.graph.nodes.some(node => node.kind === 'topic' && node.slug === keywordSlug)
+  const existsInGraph = displayedGraph.value.nodes.some(node => node.kind === 'topic' && node.slug === keywordSlug)
   selectedKeywordSlug.value = existsInGraph ? keywordSlug : null
 }
 
@@ -515,6 +717,7 @@ function closeDigestPreview() {
 }
 
 async function openArticlePreview(articleId: number) {
+  previewDigestId.value = null
   loadingPreviewArticle.value = true
 
   try {
@@ -524,7 +727,7 @@ async function openArticlePreview(articleId: number) {
       return
     }
 
-    selectedPreviewArticle.value = normalizeArticle(response.data as any)
+    selectedPreviewArticle.value = normalizeArticle(response.data)
 
     if (detail.value) {
       const ids = detail.value.summaries.flatMap(summary => summary.articles.map(article => article.id))
@@ -532,7 +735,7 @@ async function openArticlePreview(articleId: number) {
       const articleResponses = await Promise.all(uniqueIds.slice(0, 12).map(id => articlesApi.getArticle(id)))
       previewArticles.value = articleResponses
         .filter(item => item.success && item.data)
-        .map(item => normalizeArticle(item.data as any))
+        .map(item => normalizeArticle(item.data))
     }
   } catch (error) {
     console.error('Failed to open article preview:', error)
@@ -546,259 +749,32 @@ function closeArticlePreview() {
   selectedPreviewArticle.value = null
 }
 
-function normalizeArticle(article: any): Article {
-  return {
-    id: String(article.id),
-    feedId: String(article.feed_id),
-    title: article.title,
-    description: article.description || '',
-    content: article.content || '',
-    link: article.link,
-    pubDate: article.pub_date || article.created_at || '',
-    author: article.author,
-    category: article.category_id ? String(article.category_id) : '',
-    read: article.read || false,
-    favorite: article.favorite || false,
-    summaryStatus: article.summary_status,
-    summaryGeneratedAt: article.summary_generated_at,
-    completionAttempts: article.completion_attempts,
-    completionError: article.completion_error,
-    aiContentSummary: article.ai_content_summary,
-    firecrawlStatus: article.firecrawl_status,
-    firecrawlError: article.firecrawl_error,
-    firecrawlContent: article.firecrawl_content,
-    firecrawlCrawledAt: article.firecrawl_crawled_at,
-    imageUrl: article.image_url,
-  }
-}
+async function handleArticleFavorite(articleId: string) {
+  const response = await apiStore.toggleFavorite(articleId)
+  if (!response.success) return
 
-function handleTimelineFilterChange(filters: TimelineFilters) {
-  timelineFilters.value = filters
-}
-
-function handleTimelineAIAnalysis() {
-  // Trigger AI analysis start
-  handleAIAnalysisStart()
-}
-
-function clearAIAnalysisPolling() {
-  if (aiAnalysisPollTimer) {
-    clearTimeout(aiAnalysisPollTimer)
-    aiAnalysisPollTimer = null
-  }
-}
-
-function normalizeTimelineAnalysisPayload(payload: Record<string, any>) {
-  return {
-    summary: payload.summary,
-    timeline: Array.isArray(payload.timeline)
-      ? payload.timeline.map((item: any) => ({
-          date: item.date,
-          title: item.title,
-          summary: item.summary,
-          sources: Array.isArray(item.sources)
-            ? item.sources.map((source: any) => ({ articleId: source.articleId, title: source.title }))
-            : Array.isArray(item.source_articles)
-              ? item.source_articles.map((source: any) => ({
-                  articleId: source.articleId ?? source.article_id,
-                  title: source.title,
-                }))
-              : [],
-        }))
-      : undefined,
-    keyMoments: payload.keyMoments ?? payload.key_moments,
-    relatedEntities: payload.relatedEntities ?? payload.related_entities,
-    profile: payload.profile,
-    appearances: Array.isArray(payload.appearances)
-      ? payload.appearances.map((item: any) => ({
-          date: item.date,
-          context: item.context ?? item.scene,
-          quote: item.quote,
-          articleId: item.articleId ?? item.article_id,
-          articleTitle: item.articleTitle ?? item.article_title,
-          articleLink: item.articleLink ?? item.article_link,
-        }))
-      : undefined,
-    trend: payload.trend ?? payload.trend_data,
-    relatedTopics: Array.isArray(payload.relatedTopics ?? payload.related_topics)
-      ? (payload.relatedTopics ?? payload.related_topics).map((item: any) => typeof item === 'string' ? item : (item.topic ?? item.label ?? ''))
-          .filter(Boolean)
-      : undefined,
-    coOccurrence: Array.isArray(payload.coOccurrence ?? payload.co_occurrence)
-      ? (payload.coOccurrence ?? payload.co_occurrence).map((item: any) => ({
-          term: item.term ?? item.keyword,
-          count: item.count ?? item.score ?? 0,
-        }))
-      : undefined,
-    contextExamples: Array.isArray(payload.contextExamples ?? payload.context_examples)
-      ? (payload.contextExamples ?? payload.context_examples).map((item: any) => typeof item === 'string' ? item : item.text)
-      : undefined,
-  }
-}
-
-async function applyAIAnalysisResult() {
-  if (!detail.value?.topic.id || !selectedCategory.value) return false
-
-  const response = await topicGraphApi.getTopicAnalysis({
-    tagID: detail.value.topic.id,
-    analysisType: selectedCategory.value,
-    windowType: selectedType.value,
-    anchorDate: selectedDate.value,
-  })
-
-  if (!response.success || !response.data) {
-    return false
+  const target = previewArticles.value.find(article => article.id === articleId)
+  if (target) {
+    target.favorite = !target.favorite
   }
 
-  const payload = typeof response.data.payload_json === 'string'
-    ? JSON.parse(response.data.payload_json)
-    : response.data.payload_json
-
-  aiAnalysisResult.value = normalizeTimelineAnalysisPayload(payload || {})
-  aiAnalysisProgress.value = 100
-  aiAnalysisStatus.value = 'completed'
-  aiAnalysisError.value = null
-  clearAIAnalysisPolling()
-  return true
-}
-
-async function pollAIAnalysisStatus() {
-  if (!detail.value?.topic.id || !selectedCategory.value) return
-
-  const params = {
-    tagID: detail.value.topic.id,
-    analysisType: selectedCategory.value,
-    windowType: selectedType.value,
-    anchorDate: selectedDate.value,
-  }
-
-  try {
-    const response = await topicGraphApi.getAnalysisStatus(params)
-    const status = response.data?.status
-    const progress = response.data?.progress ?? 0
-
-    if (!response.success || !status) {
-      aiAnalysisStatus.value = 'error'
-      aiAnalysisError.value = response.error || '分析状态获取失败'
-      clearAIAnalysisPolling()
-      return
+  if (selectedPreviewArticle.value?.id === articleId) {
+    selectedPreviewArticle.value = {
+      ...selectedPreviewArticle.value,
+      favorite: !selectedPreviewArticle.value.favorite,
     }
-
-    if (status === 'ready' || status === 'completed') {
-      const loaded = await applyAIAnalysisResult()
-      if (!loaded) {
-        aiAnalysisStatus.value = 'error'
-        aiAnalysisError.value = '分析结果读取失败'
-      }
-      return
-    }
-
-    if (status === 'pending' || status === 'processing') {
-      aiAnalysisStatus.value = 'loading'
-      aiAnalysisProgress.value = Math.min(Math.max(Math.round(progress * 100), 1), 99)
-      clearAIAnalysisPolling()
-      aiAnalysisPollTimer = setTimeout(() => {
-        void pollAIAnalysisStatus()
-      }, 1800)
-      return
-    }
-
-    aiAnalysisStatus.value = 'error'
-    aiAnalysisError.value = status === 'failed' ? '分析任务失败' : '暂无分析结果'
-    clearAIAnalysisPolling()
-  } catch (error) {
-    aiAnalysisStatus.value = 'error'
-    aiAnalysisError.value = error instanceof Error ? error.message : '分析状态获取失败'
-    clearAIAnalysisPolling()
   }
 }
 
-async function handleAIAnalysisStart() {
-  if (!selectedTopicSlug.value || !selectedCategory.value) return
-
-  aiAnalysisStatus.value = 'loading'
-  aiAnalysisProgress.value = 0
-  aiAnalysisError.value = null
-  clearAIAnalysisPolling()
-
-  try {
-    const topicID = detail.value?.topic.id
-    if (!topicID) {
-      throw new Error('Topic not found')
-    }
-
-    const loaded = await applyAIAnalysisResult()
-    if (loaded) {
-      return
-    }
-
-    await topicGraphApi.rebuildTopicAnalysis({
-      tagID: topicID,
-      analysisType: selectedCategory.value,
-      windowType: selectedType.value,
-      anchorDate: selectedDate.value,
-    })
-
-    aiAnalysisProgress.value = 1
-    await pollAIAnalysisStatus()
-  } catch (error) {
-    console.error('AI analysis error:', error)
-    aiAnalysisError.value = error instanceof Error ? error.message : 'AI分析失败'
-    aiAnalysisStatus.value = 'error'
-    clearAIAnalysisPolling()
-  }
-}
-
-async function handleAIAnalysisRetry() {
-  await handleAIAnalysisStart()
-}
-
-function matchesTimelineFilters(createdAt: string, filters: TimelineFilters) {
-  const parsed = createdAt ? new Date(createdAt) : null
-  if (!parsed || Number.isNaN(parsed.getTime())) {
-    return filters.dateRange === null
+function handleArticleUpdate(articleId: string, updates: Partial<Article>) {
+  const target = previewArticles.value.find(article => article.id === articleId)
+  if (target) {
+    Object.assign(target, updates)
   }
 
-  const current = new Date(parsed)
-  current.setHours(0, 0, 0, 0)
-
-  if (filters.dateRange === 'custom') {
-    if (filters.startDate) {
-      const start = new Date(filters.startDate)
-      start.setHours(0, 0, 0, 0)
-      if (current < start) return false
-    }
-
-    if (filters.endDate) {
-      const end = new Date(filters.endDate)
-      end.setHours(23, 59, 59, 999)
-      if (parsed > end) return false
-    }
-
-    return true
+  if (selectedPreviewArticle.value?.id === articleId) {
+    Object.assign(selectedPreviewArticle.value, updates)
   }
-
-  if (filters.dateRange === 'today') {
-    const today = new Date()
-    today.setHours(0, 0, 0, 0)
-    return current.getTime() === today.getTime()
-  }
-
-  if (filters.dateRange === 'week') {
-    const weekStart = new Date()
-    weekStart.setHours(0, 0, 0, 0)
-    weekStart.setDate(weekStart.getDate() - 6)
-    return current >= weekStart
-  }
-
-  if (filters.dateRange === 'month') {
-    const monthStart = new Date()
-    monthStart.setHours(0, 0, 0, 0)
-    monthStart.setDate(monthStart.getDate() - 29)
-    return current >= monthStart
-  }
-
-  return true
 }
 
 watch(selectedType, () => {
@@ -809,30 +785,28 @@ watch(selectedDate, () => {
   void loadGraph()
 })
 
-watch(selectedTopicSlug, () => {
-  aiAnalysisStatus.value = 'idle'
-  aiAnalysisProgress.value = 0
-  aiAnalysisError.value = null
-  aiAnalysisResult.value = null
-  clearAIAnalysisPolling()
+watch([selectedFilterCategoryId, selectedFilterFeedId], () => {
+  void loadGraph()
 })
+
+watch([selectedFilterCategoryId, selectedFilterFeedId], () => {
+  void loadGraph()
+ })
 
 watch(effectiveTimelineItems, (items) => {
   if (!items.length) {
     selectedDigestId.value = null
     previewDigestId.value = null
+    selectedPendingNode.value = false
     return
   }
 
   const currentExists = selectedDigestId.value && items.some(item => item.id === selectedDigestId.value)
   if (!currentExists) {
     selectedDigestId.value = items[0]?.id || null
+    selectedPendingNode.value = false
   }
 }, { immediate: true })
-
-onBeforeUnmount(() => {
-  clearAIAnalysisPolling()
-})
 
 await loadGraph()
 </script>
@@ -864,25 +838,26 @@ await loadGraph()
                   <p class="text-xs uppercase tracking-[0.3em] text-white/42">Graph Field</p>
                   <h2 class="mt-2 font-serif text-2xl text-white md:text-[2.25rem]">{{ graphPayload?.period_label || '话题网络' }}</h2>
                   <p class="mt-3 text-sm leading-6 text-[rgba(255,255,255,0.68)]">
-                    默认只保留重点标签常显，点中节点后再展开完整名字和一跳关系，减少视觉重叠。
+                     事件、人物、关键词的热点题材默认全部进入拓扑图；底部可单独控制各节点的显示与隐藏。
                   </p>
                 </div>
 
-                <div class="mt-6 grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
-                  <article v-for="card in statCards" :key="card.label" class="topic-stat-card rounded-[24px] px-4 py-3">
-                    <p class="topic-stat-card__label">{{ card.label }}</p>
-                    <p class="topic-stat-card__value">{{ card.value }}</p>
-                  </article>
-                </div>
+                <FeedCategoryFilter
+                  :selected-category-id="selectedFilterCategoryId"
+                  :selected-feed-id="selectedFilterFeedId"
+                  @update:selected-category-id="selectedFilterCategoryId = $event"
+                  @update:selected-feed-id="selectedFilterFeedId = $event"
+                />
 
               </aside>
 
               <div class="space-y-4">
                 <TopicGraphCanvas
-                  :nodes="viewModel.graph.nodes"
-                  :edges="viewModel.graph.edges"
-                  :featured-node-ids="viewModel.graph.featuredNodeIds"
+                  :nodes="displayedGraph.nodes"
+                  :edges="displayedGraph.edges"
+                  :featured-node-ids="displayedGraph.featuredNodeIds"
                   :active-node-id="activeTopicNode?.id || null"
+                  :focus-request-key="graphFocusRequestKey"
                   :selected-category="selectedCategory"
                   :highlighted-node-ids="highlightedNodeIds"
                   :related-edge-ids="relatedEdgeIds"
@@ -946,19 +921,33 @@ await loadGraph()
                           @mousedown.prevent
                         >
                           <div class="topic-dropdown-scroll">
-                            <button
+                            <div
                               v-for="topic in category.displayTopics"
                               :key="topic.slug"
-                              type="button"
-                              class="topic-dropdown-item"
-                              :class="{
-                                'topic-dropdown-item--active': selectedTopicSlug === topic.slug,
-                              }"
-                              @click="handleTagSelect(topic.slug, normalizeTopicCategory(topic.category, topic.kind)); hotspotDropdownOpen[category.key] = false"
+                              class="topic-dropdown-row"
                             >
-                              <Icon v-if="topic.icon" :icon="topic.icon" width="14" />
-                              <span>{{ topic.label }}</span>
-                            </button>
+                              <button
+                                type="button"
+                                class="topic-dropdown-item"
+                                :class="{
+                                  'topic-dropdown-item--active': selectedTopicSlug === topic.slug,
+                                }"
+                                @click="handleTagSelect(topic.slug, normalizeTopicCategory(topic.category, topic.kind)); hotspotDropdownOpen[category.key] = false"
+                              >
+                                <Icon v-if="topic.icon" :icon="topic.icon" width="14" />
+                                <span>{{ topic.label }}</span>
+                              </button>
+                              <button
+                                type="button"
+                                class="topic-graph-toggle"
+                                :class="{ 'topic-graph-toggle--active': isTopicShownInGraph(topic.slug) }"
+                                :aria-label="isTopicShownInGraph(topic.slug) ? `从拓扑图隐藏 ${topic.label}` : `在拓扑图展示 ${topic.label}`"
+                                :title="isTopicShownInGraph(topic.slug) ? '从拓扑图隐藏' : '在拓扑图展示'"
+                                @click.stop="toggleTopicGraphVisibility(topic.slug)"
+                              >
+                                <Icon :icon="isTopicShownInGraph(topic.slug) ? 'mdi:eye-outline' : 'mdi:eye-off-outline'" width="14" />
+                              </button>
+                            </div>
                           </div>
                           <button
                             v-if="category.hasMore"
@@ -987,22 +976,36 @@ await loadGraph()
 
                       <!-- Quick Tags (show top 5 without search) -->
                       <div v-if="!hotspotSearchQueries[category.key]" class="topic-quick-tags mt-3">
-                        <button
+                        <div
                           v-for="topic in category.topics.slice(0, 5)"
                           :key="topic.slug"
-                          type="button"
-                          class="topic-badge text-left"
-                          :class="{
-                            'topic-badge--event': normalizeTopicCategory(topic.category, topic.kind) === 'event',
-                            'topic-badge--person': normalizeTopicCategory(topic.category, topic.kind) === 'person',
-                            'topic-badge--keyword': normalizeTopicCategory(topic.category, topic.kind) === 'keyword',
-                            'topic-badge--active': selectedTopicSlug === topic.slug,
-                          }"
-                          @click="handleTagSelect(topic.slug, normalizeTopicCategory(topic.category, topic.kind))"
+                          class="topic-badge-row"
                         >
-                          <Icon v-if="topic.icon" :icon="topic.icon" width="14" />
-                          {{ topic.label }}
-                        </button>
+                          <button
+                            type="button"
+                            class="topic-badge text-left"
+                            :class="{
+                              'topic-badge--event': normalizeTopicCategory(topic.category, topic.kind) === 'event',
+                              'topic-badge--person': normalizeTopicCategory(topic.category, topic.kind) === 'person',
+                              'topic-badge--keyword': normalizeTopicCategory(topic.category, topic.kind) === 'keyword',
+                              'topic-badge--active': selectedTopicSlug === topic.slug,
+                            }"
+                            @click="handleTagSelect(topic.slug, normalizeTopicCategory(topic.category, topic.kind))"
+                          >
+                            <Icon v-if="topic.icon" :icon="topic.icon" width="14" />
+                            {{ topic.label }}
+                          </button>
+                          <button
+                            type="button"
+                            class="topic-badge-toggle"
+                            :class="{ 'topic-badge-toggle--active': isTopicShownInGraph(topic.slug) }"
+                            :aria-label="isTopicShownInGraph(topic.slug) ? `从拓扑图隐藏 ${topic.label}` : `在拓扑图展示 ${topic.label}`"
+                            :title="isTopicShownInGraph(topic.slug) ? '从拓扑图隐藏' : '在拓扑图展示'"
+                            @click.stop="toggleTopicGraphVisibility(topic.slug)"
+                          >
+                            <Icon :icon="isTopicShownInGraph(topic.slug) ? 'mdi:eye-outline' : 'mdi:eye-off-outline'" width="14" />
+                          </button>
+                        </div>
                         <button
                           v-if="category.topics.length > 5"
                           class="topic-more-hint"
@@ -1026,22 +1029,16 @@ await loadGraph()
 
           <!-- Timeline Section -->
           <article class="topic-timeline-shell rounded-[34px] p-4 md:p-5">
-<TopicTimeline
-                :selected-topic="selectedTopicInfo"
-                :items="effectiveTimelineItems"
-                :filters="timelineFilters"
-                :active-digest-id="selectedDigestId"
-                :ai-analysis-status="aiAnalysisStatus"
-                :ai-analysis-progress="aiAnalysisProgress"
-                :ai-analysis-result="aiAnalysisResult"
-                :ai-analysis-error="aiAnalysisError"
-                @filter-change="handleTimelineFilterChange"
-                @select-digest="handleDigestSelect"
-                @preview-digest="handlePreviewDigest"
-                @ai-analysis="handleTimelineAIAnalysis"
-                @ai-analysis-start="handleAIAnalysisStart"
-                @ai-analysis-retry="handleAIAnalysisRetry"
-                @open-article="openArticlePreview"
+            <TopicTimeline
+              :selected-topic="selectedTopicInfo"
+              :items="effectiveTimelineItems"
+              :active-digest-id="selectedDigestId"
+              :pending-article-count="pendingArticles.length"
+              :selected-pending-node="selectedPendingNode"
+              @select-digest="handleDigestSelect"
+              @preview-digest="handlePreviewDigest"
+              @open-article="openArticlePreview"
+              @select-pending="handleSelectPending"
             />
           </article>
         </div>
@@ -1055,6 +1052,8 @@ await loadGraph()
             :data-state="detail ? 'detail' : (loadingDetail ? 'loading' : 'empty')"
             :selected-keyword="selectedKeywordSlug"
             :selected-tag-slug="selectedHotspotTag?.slug"
+            :pending-articles="selectedPendingNode ? pendingArticles : []"
+            :selected-pending-node="selectedPendingNode"
             @open-article="openArticlePreview"
             @highlight-keyword="handleKeywordHighlight"
           />
@@ -1069,46 +1068,20 @@ await loadGraph()
         data-testid="topic-graph-digest-preview"
         @click.self="closeDigestPreview"
       >
-        <div class="topic-digest-modal__panel">
-          <header class="topic-digest-modal__header">
-            <div>
-              <p class="text-xs uppercase tracking-[0.24em] text-white/42">日报预览</p>
-              <h3 class="mt-3 font-serif text-2xl text-white">{{ previewDigest.title }}</h3>
-              <p class="mt-2 text-sm text-white/58">{{ previewDigest.feedName }} · {{ previewDigest.createdAt }}</p>
-            </div>
+        <div class="topic-digest-modal__panel topic-digest-modal__panel--detail">
+          <button
+            class="topic-digest-modal__close btn-ghost min-h-11 min-w-11 px-0"
+            type="button"
+            aria-label="关闭日报弹窗"
+            @click="closeDigestPreview"
+          >
+            <Icon icon="mdi:close" width="18" />
+          </button>
 
-            <button
-              class="btn-ghost min-h-11 min-w-11 px-0"
-              type="button"
-              aria-label="关闭日报弹窗"
-              @click="closeDigestPreview"
-            >
-              <Icon icon="mdi:close" width="18" />
-            </button>
-          </header>
-
-          <div class="topic-digest-modal__body">
-            <p class="topic-digest-modal__summary">{{ previewDigest.summary }}</p>
-
-            <div v-if="previewDigest.tags.length" class="topic-digest-modal__tags">
-              <span v-for="tag in previewDigest.tags" :key="tag.slug" class="topic-digest-modal__tag">
-                {{ tag.label }}
-              </span>
-            </div>
-
-            <div class="topic-digest-modal__sources">
-              <p class="text-xs uppercase tracking-[0.22em] text-white/42">来源文章</p>
-              <button
-                v-for="article in previewDigest.articles"
-                :key="article.id"
-                type="button"
-                class="topic-digest-modal__source"
-                @click="openArticlePreview(article.id)"
-              >
-                {{ article.title }}
-              </button>
-            </div>
-          </div>
+          <DigestDetail
+            :summary="previewDigestSummary"
+            active-type-label="日报"
+          />
         </div>
       </div>
     </Teleport>
@@ -1141,7 +1114,10 @@ await loadGraph()
             <ArticleContentView
               :article="selectedPreviewArticle"
               :articles="previewArticles"
+              :highlighted-tag-slugs="selectedTopicSlug ? [selectedTopicSlug] : []"
               @navigate="selectedPreviewArticle = $event"
+              @favorite="handleArticleFavorite"
+              @article-update="handleArticleUpdate"
             />
           </div>
         </div>
@@ -1163,6 +1139,8 @@ await loadGraph()
 }
 
 .topic-canvas-shell {
+  position: relative;
+  z-index: 2;
   border: 1px solid rgba(255, 255, 255, 0.06);
   background: rgba(11, 18, 24, 0.4);
   box-shadow: 0 40px 120px rgba(0, 0, 0, 0.4);
@@ -1177,6 +1155,9 @@ await loadGraph()
 }
 
 .topic-hotspot-strip {
+  position: relative;
+  z-index: 4;
+  overflow: visible;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background:
     radial-gradient(circle at 12% 18%, rgba(240, 138, 75, 0.12), transparent 24%),
@@ -1192,6 +1173,8 @@ await loadGraph()
 }
 
 .topic-timeline-shell {
+  position: relative;
+  z-index: 1;
   border: 1px solid rgba(255, 255, 255, 0.06);
   background: rgba(11, 18, 24, 0.4);
   box-shadow: 0 40px 120px rgba(0, 0, 0, 0.4);
@@ -1247,7 +1230,7 @@ await loadGraph()
 }
 
 .topic-digest-modal__panel {
-  width: min(760px, 100%);
+  width: min(1100px, 100%);
   max-height: calc(100vh - 2rem);
   overflow: auto;
   border-radius: 1.75rem;
@@ -1396,6 +1379,9 @@ await loadGraph()
 }
 
 .topic-category-column {
+  position: relative;
+  z-index: 5;
+  overflow: visible;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: linear-gradient(180deg, rgba(20, 29, 40, 0.74), rgba(10, 15, 23, 0.92));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
@@ -1449,6 +1435,7 @@ await loadGraph()
 /* Hotspot Search Styles */
 .topic-search-wrapper {
   position: relative;
+  z-index: 6;
   width: 100%;
 }
 
@@ -1564,6 +1551,16 @@ await loadGraph()
   transition: all 0.15s ease;
 }
 
+.topic-dropdown-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.topic-dropdown-row + .topic-dropdown-row {
+  margin-top: 0.15rem;
+}
+
 .topic-dropdown-item:hover {
   background: rgba(255, 255, 255, 0.08);
   color: rgba(255, 255, 255, 0.95);
@@ -1572,6 +1569,51 @@ await loadGraph()
 .topic-dropdown-item--active {
   background: rgba(240, 138, 75, 0.2) !important;
   color: rgba(255, 235, 220, 0.95) !important;
+}
+
+.topic-graph-toggle,
+.topic-badge-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.55);
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    color 0.15s ease,
+    transform 0.15s ease;
+}
+
+.topic-graph-toggle:hover,
+.topic-graph-toggle:focus-visible,
+.topic-badge-toggle:hover,
+.topic-badge-toggle:focus-visible {
+  transform: translateY(-1px);
+  border-color: rgba(240, 138, 75, 0.38);
+  color: rgba(255, 238, 227, 0.92);
+}
+
+.topic-graph-toggle {
+  flex-shrink: 0;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+}
+
+.topic-badge-toggle {
+  flex-shrink: 0;
+  width: 2rem;
+  min-height: 2rem;
+  border-radius: 999px;
+}
+
+.topic-graph-toggle--active,
+.topic-badge-toggle--active {
+  border-color: rgba(240, 138, 75, 0.44);
+  background: rgba(240, 138, 75, 0.16);
+  color: rgba(255, 234, 220, 0.96);
 }
 
 .topic-dropdown-toggle {
@@ -1630,6 +1672,12 @@ await loadGraph()
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
+}
+
+.topic-badge-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
 }
 
 .topic-more-hint {

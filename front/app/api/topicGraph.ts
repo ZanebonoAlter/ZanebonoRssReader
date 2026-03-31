@@ -1,5 +1,6 @@
 import { apiClient } from './client'
 import type { TimelineFilters } from '~/types/timeline'
+import type { PendingArticlesResponse } from '~/types/timeline'
 
 export type TopicGraphType = 'daily' | 'weekly'
 export type TopicCategory = 'event' | 'person' | 'keyword'
@@ -28,6 +29,16 @@ export interface TopicTag {
   icon?: string
   aliases?: string[]
   score: number
+}
+
+export interface AggregatedTopicTag {
+  slug: string
+  label: string
+  category: TopicCategory
+  kind?: TopicKind
+  icon?: string
+  score: number
+  article_count: number
 }
 
 export interface GraphNode {
@@ -77,14 +88,20 @@ export interface HotspotDigestCard {
   title: string
   summary: string
   feed_name: string
+  feed_icon: string
   feed_color: string
   category_name: string
   article_count: number
   created_at: string
+  aggregated_tags: AggregatedTopicTag[]
   matched_articles?: Array<{
     id: number
     title: string
+    feed_name?: string
+    feed_icon?: string
+    feed_color?: string
   }>
+  matched_articles_tags?: AggregatedTopicTag[]
 }
 
 export interface HotspotDigestsResponse {
@@ -97,11 +114,13 @@ export interface TopicGraphSummaryCard {
   title: string
   summary: string
   feed_name: string
+  feed_icon: string
   feed_color: string
   category_name: string
   article_count: number
   created_at: string
   topics: TopicTag[]
+  aggregated_tags: AggregatedTopicTag[]
   articles: Array<{
     id: number
     title: string
@@ -159,6 +178,18 @@ export interface TopicAnalysisRecord {
   version: number
   created_at: string
   updated_at: string
+  // 支持后端PascalCase格式
+  ID?: number
+  TopicTagID?: number
+  AnalysisType?: TopicAnalysisType
+  WindowType?: TopicGraphType
+  AnchorDate?: string
+  SummaryCount?: number
+  PayloadJSON?: string
+  Source?: string
+  Version?: number
+  CreatedAt?: string
+  UpdatedAt?: string
 }
 
 export interface RebuildAnalysisParams extends RebuildAnalysisRequest {
@@ -210,14 +241,28 @@ function withQuery(endpoint: string, params: Record<string, string | undefined>)
   return query ? `${endpoint}?${query}` : endpoint
 }
 
+export interface TopicGraphFilters {
+  categoryId?: string
+  feedId?: string
+}
+
 export function useTopicGraphApi() {
   return {
-    async getGraph(type: TopicGraphType, date?: string) {
-      return apiClient.get<TopicGraphPayload>(withQuery(`/topic-graph/${type}`, { date }))
+    async getGraph(type: TopicGraphType, date?: string, filters?: TopicGraphFilters) {
+      return apiClient.get<TopicGraphPayload>(withQuery(`/topic-graph/${type}`, {
+        date,
+        category_id: filters?.categoryId,
+        feed_id: filters?.feedId,
+      }))
     },
 
-    async getTopicDetail(slug: string, type: TopicGraphType, date?: string) {
-      return apiClient.get<TopicGraphDetailPayload>(withQuery(`/topic-graph/topic/${slug}`, { type, date }))
+    async getTopicDetail(slug: string, type: TopicGraphType, date?: string, filters?: TopicGraphFilters) {
+      return apiClient.get<TopicGraphDetailPayload>(withQuery(`/topic-graph/topic/${slug}`, {
+        type,
+        date,
+        category_id: filters?.categoryId,
+        feed_id: filters?.feedId,
+      }))
     },
 
     async getTopicAnalysis(params: GetTopicAnalysisParams) {
@@ -256,8 +301,13 @@ export function useTopicGraphApi() {
       }), {})
     },
 
-    async getTopicsByCategory(type: TopicGraphType, date?: string) {
-      return apiClient.get<TopicsByCategoryPayload>(withQuery('/topic-graph/by-category', { type, date }))
+    async getTopicsByCategory(type: TopicGraphType, date?: string, filters?: TopicGraphFilters) {
+      return apiClient.get<TopicsByCategoryPayload>(withQuery('/topic-graph/by-category', {
+        type,
+        date,
+        category_id: filters?.categoryId,
+        feed_id: filters?.feedId,
+      }))
     },
 
     async getDigestsByArticleTag(slug: string, type: TopicGraphType, date?: string, limit?: number) {
@@ -284,6 +334,13 @@ export function useTopicGraphApi() {
       return apiClient.get<TopicArticlesResponse>(
         withQuery(`/topic-graph/topic/${params.slug}/articles`, queryParams)
       )
+    },
+
+    async getPendingArticlesByTag(slug: string, type: TopicGraphType, date?: string) {
+      return apiClient.get<PendingArticlesResponse>(withQuery(`/topic-graph/tag/${slug}/pending-articles`, {
+        type,
+        date,
+      }))
     },
   }
 }

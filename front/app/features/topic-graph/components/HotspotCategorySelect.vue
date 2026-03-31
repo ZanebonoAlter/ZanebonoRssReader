@@ -77,7 +77,10 @@ function handleKeydown(event: KeyboardEvent) {
     case 'Enter':
       event.preventDefault()
       if (highlightedIndex.value >= 0 && highlightedIndex.value < filteredTopics.value.length) {
-        selectTopic(filteredTopics.value[highlightedIndex.value])
+        const topic = filteredTopics.value[highlightedIndex.value]
+        if (topic) {
+          selectTopic(topic)
+        }
       }
       break
     case 'Escape':

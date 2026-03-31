@@ -1,22 +1,38 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { Icon } from '@iconify/vue'
 import LayoutAppHeader from '~/features/shell/components/AppHeaderShell.vue'
 import LayoutAppSidebar from '~/features/shell/components/AppSidebarShell.vue'
 import LayoutArticleListPanel from '~/features/shell/components/ArticleListPanelShell.vue'
+import { useArticlesApi } from '~/api/articles'
 import ArticleContent from '~/features/articles/components/ArticleContentView.vue'
+import { normalizeArticle } from '../../articles/utils/normalizeArticle'
 import { useGlobalAutoRefresh } from '~/features/feeds/composables/useAutoRefresh'
+import { useArticlePagination } from '~/features/articles/composables/useArticlePagination'
 import AISummariesList from '~/features/summaries/components/AISummariesListView.vue'
 import AISummaryDetail from '~/features/summaries/components/AISummaryDetailView.vue'
 import { SIDEBAR_DEFAULT_WIDTH, MAX_POLLING_TIME, REFRESH_POLLING_INTERVAL } from '~/utils/constants'
 
 const apiStore = useApiStore()
 const feedsStore = useFeedsStore()
-const articlesStore = useArticlesStore()
+const articlesApi = useArticlesApi()
 
-// 初始化全局自动刷新
+const {
+  state: paginationState,
+  fetchFirstPage,
+  loadMore,
+  updateArticle,
+} = useArticlePagination({ pageSize: 20 })
+
+const startDate = ref<string>('')
+const endDate = ref<string>('')
+
+const articles = computed(() => paginationState.articles)
+const hasMore = computed(() => paginationState.hasMore)
+const total = computed(() => paginationState.total)
+const loading = computed(() => paginationState.loading)
+
 useGlobalAutoRefresh()
 
-// 侧边栏状态
 const sidebarCollapsed = ref(false)
 const sidebarWidth = ref(SIDEBAR_DEFAULT_WIDTH)
 const selectedCategory = ref<string | null>(null)
@@ -25,25 +41,20 @@ const selectedArticle = ref<any>(null)
 const showAISummaries = ref(false)
 const selectedSummary = ref<any>(null)
 
-// 对话框状态
 const showAddFeedDialog = ref(false)
 const showAddCategoryDialog = ref(false)
 const showImportDialog = ref(false)
 const showGlobalSettings = ref(false)
 
-// 编辑对话框状态
 const editCategoryId = ref<string | null>(null)
 const editFeedId = ref<string | null>(null)
 
-// 刷新提示
 const refreshMessage = ref('')
 const refreshMessageType = ref<'success' | 'error' | 'info'>('info')
 const showRefreshMessage = ref(false)
 
-// 全局未读数
 const globalUnreadCount = ref(0)
 
-// 计算属性
 const editingCategory = computed(() =>
   editCategoryId.value ? feedsStore.categories.find(c => c.id === editCategoryId.value) : null
 )
@@ -51,22 +62,6 @@ const editingFeed = computed(() =>
   editFeedId.value ? feedsStore.feeds.find(f => f.id === editFeedId.value) : null
 )
 
-const filteredArticles = computed(() => {
-  let articles = articlesStore.articles
-
-  // 根据选中的订阅源筛选
-  if (selectedFeed.value) {
-    articles = articles.filter(a => a.feedId === selectedFeed.value)
-  }
-  // 根据收藏筛选
-  else if (selectedCategory.value === 'favorites') {
-    articles = articles.filter(a => a.favorite)
-  }
-
-  return articles
-})
-
-// 获取全局未读数
 async function fetchGlobalUnreadCount() {
   const response = await apiStore.fetchArticlesStats()
   if (response.success && response.data) {
@@ -74,66 +69,128 @@ async function fetchGlobalUnreadCount() {
   }
 }
 
-// 初始化
+async function fetchFeeds() {
+  if (selectedCategory.value === 'uncategorized') {
+    await apiStore.fetchFeeds({ uncategorized: true, per_page: 10000 })
+  } else if (selectedCategory.value && selectedCategory.value !== 'favorites' && selectedCategory.value !== 'ai-summaries') {
+    await apiStore.fetchFeeds({ category_id: parseInt(selectedCategory.value), per_page: 10000 })
+  } else {
+    await apiStore.fetchFeeds({ per_page: 10000 })
+  }
+}
+
+function buildArticleFilters() {
+  const filters: any = {}
+  if (selectedFeed.value) {
+    filters.feed_id = parseInt(selectedFeed.value)
+  } else if (selectedCategory.value === 'uncategorized') {
+    filters.uncategorized = true
+  } else if (selectedCategory.value === 'favorites') {
+    filters.favorite = true
+  } else if (selectedCategory.value && selectedCategory.value !== 'ai-summaries') {
+    filters.category_id = parseInt(selectedCategory.value)
+  }
+  if (startDate.value) {
+    filters.start_date = startDate.value
+  }
+  if (endDate.value) {
+    filters.end_date = endDate.value
+  }
+  return filters
+}
+
+async function loadArticles() {
+  await fetchFirstPage(buildArticleFilters())
+}
+
 onMounted(async () => {
+  await fetchFeeds()
+  await loadArticles()
   await fetchGlobalUnreadCount()
 })
 
-// 清理轮询
 onUnmounted(() => {
   stopPollingRefreshStatus()
 })
 
-// 处理文章点击
-function handleArticleClick(article: any) {
+async function hydrateSelectedArticle(article: any) {
   selectedArticle.value = article
-  // 标记为已读
+
+  try {
+    const response = await articlesApi.getArticle(Number(article.id))
+    if (response.success && response.data && selectedArticle.value?.id === article.id) {
+      selectedArticle.value = normalizeArticle(response.data)
+    }
+  } catch (error) {
+    console.error('Failed to load article detail:', error)
+  }
+}
+
+function handleArticleClick(article: any) {
+  void hydrateSelectedArticle(article)
   if (!article.read) {
+    updateArticle(article.id, { read: true })
+    if (selectedArticle.value) {
+      selectedArticle.value = { ...selectedArticle.value, read: true }
+    }
     apiStore.markAsRead(article.id)
   }
 }
 
-// 处理文章收藏
 function handleArticleFavorite(articleId: string) {
-  apiStore.toggleFavorite(articleId)
+  const article = articles.value.find(a => a.id === articleId)
+  const newFavorite = !article?.favorite
+  if (article) {
+    updateArticle(articleId, { favorite: newFavorite })
+  }
+  if (selectedArticle.value?.id === articleId) {
+    selectedArticle.value = { ...selectedArticle.value, favorite: newFavorite }
+  }
+  void articlesApi.updateArticle(Number(articleId), { favorite: newFavorite })
 }
 
-// 处理分类点击
+function handleArticleUpdate(articleId: string, updates: Partial<any>) {
+  updateArticle(articleId, updates)
+}
+
+function handleLoadMore() {
+  void loadMore()
+}
+
+function handleDateFilterChange(newStartDate: string, newEndDate: string) {
+  startDate.value = newStartDate
+  endDate.value = newEndDate
+  void loadArticles()
+}
+
+function handleDateFilterClear() {
+  startDate.value = ''
+  endDate.value = ''
+  void loadArticles()
+}
+
 const handleCategoryClick = async (categoryId: string) => {
   selectedCategory.value = categoryId
   selectedFeed.value = null
   showAISummaries.value = false
   selectedSummary.value = null
+  startDate.value = ''
+  endDate.value = ''
 
-  if (categoryId === 'uncategorized') {
-    await apiStore.fetchFeeds({ uncategorized: true, per_page: 10000 })
-    await apiStore.fetchArticles({ uncategorized: true, per_page: 10000 })
-  } else {
-    await apiStore.fetchFeeds({
-      category_id: parseInt(categoryId),
-      per_page: 10000
-    })
-    await apiStore.fetchArticles({
-      category_id: parseInt(categoryId),
-      per_page: 10000
-    })
-  }
+  await fetchFeeds()
+  await loadArticles()
   await fetchGlobalUnreadCount()
 }
 
-// 处理订阅源点击
 async function handleFeedClick(feedId: string) {
   selectedFeed.value = feedId
   showAISummaries.value = false
   selectedSummary.value = null
+  startDate.value = ''
+  endDate.value = ''
 
-  // 获取该订阅源的文章
-  await apiStore.fetchArticles({
-    feed_id: parseInt(feedId),
-    per_page: 10000
-  })
+  await loadArticles()
 
-  // 自动刷新该订阅源
   const response = await apiStore.refreshFeed(feedId)
 
   if (response.success) {
@@ -141,46 +198,42 @@ async function handleFeedClick(feedId: string) {
     refreshMessageType.value = 'info'
     showRefreshMessage.value = true
 
-    // 更新订阅源状态
     const feed = feedsStore.feeds.find(f => f.id === feedId)
     if (feed) {
       feed.refreshStatus = 'refreshing'
     }
 
-    // 开始轮询刷新状态
     pollRefreshStatus()
   } else {
-      refreshMessage.value = response.error || '刷新失败'
+    refreshMessage.value = response.error || '刷新失败'
     refreshMessageType.value = 'error'
     showRefreshMessage.value = true
   }
 }
 
-// 处理收藏夹点击
 async function handleFavoritesClick() {
   selectedCategory.value = 'favorites'
   selectedFeed.value = null
   showAISummaries.value = false
   selectedSummary.value = null
+  startDate.value = ''
+  endDate.value = ''
 
-  await apiStore.fetchArticles({
-    per_page: 10000,
-    favorite: true
-  })
+  await loadArticles()
 }
 
-// 处理全部文章点击
 async function handleAllArticlesClick() {
   selectedCategory.value = null
   selectedFeed.value = null
   showAISummaries.value = false
   selectedSummary.value = null
+  startDate.value = ''
+  endDate.value = ''
 
-  await apiStore.fetchFeeds({ per_page: 10000 })
-  await apiStore.fetchArticles({ per_page: 10000 })
+  await fetchFeeds()
+  await loadArticles()
 }
 
-// 处理 AI 总结点击
 function handleAISummariesClick() {
   selectedCategory.value = 'ai-summaries'
   selectedFeed.value = null
@@ -204,39 +257,50 @@ function handleTopicGraphClick() {
   navigateTo('/topics')
 }
 
-// 处理总结选择
 function handleSummarySelect(summary: any) {
   selectedSummary.value = summary
 }
 
-// 轮询刷新状态
 const refreshPollingInterval = ref<ReturnType<typeof setTimeout> | null>(null)
 
 async function pollRefreshStatus() {
   const startTime = Date.now()
 
   const poll = async () => {
-    // 超过最大轮询时间则停止
     if (Date.now() - startTime > MAX_POLLING_TIME) {
       stopPollingRefreshStatus()
       return
     }
 
-    // 获取最新的订阅源状态
-    if (selectedFeed.value) {
-      await apiStore.fetchFeeds({ per_page: 10000 })
-    } else if (selectedCategory.value === 'uncategorized') {
-      await apiStore.fetchFeeds({ uncategorized: true, per_page: 10000 })
-    } else if (selectedCategory.value && selectedCategory.value !== 'favorites' && selectedCategory.value !== 'ai-summaries') {
-      await apiStore.fetchFeeds({
-        category_id: parseInt(selectedCategory.value),
-        per_page: 10000
-      })
-    } else {
-      await apiStore.fetchFeeds({ per_page: 10000 })
+    const response = await apiStore.fetchFeeds({ per_page: 10000 })
+
+    if (response.success && response.data) {
+      const data = response.data as any
+      const items = data.items || data
+      apiStore.allFeeds = items.map((feed: any) => ({
+        id: String(feed.id),
+        title: feed.title,
+        description: feed.description || '',
+        url: feed.url,
+        category: feed.category_id ? String(feed.category_id) : '',
+        icon: feed.icon || undefined,
+        color: feed.color || '#6b7280',
+        lastUpdated: feed.last_updated || new Date().toISOString(),
+        articleCount: feed.article_count || 0,
+        unreadCount: feed.unread_count || 0,
+        maxArticles: feed.max_articles || 100,
+        refreshInterval: feed.refresh_interval || 60,
+        refreshStatus: feed.refresh_status || 'idle',
+        refreshError: feed.refresh_error,
+        lastRefreshAt: feed.last_refresh_at,
+        aiSummaryEnabled: feed.ai_summary_enabled !== undefined ? feed.ai_summary_enabled : true,
+        articleSummaryEnabled: feed.article_summary_enabled,
+        completionOnRefresh: feed.completion_on_refresh,
+        maxCompletionRetries: feed.max_completion_retries,
+        firecrawlEnabled: feed.firecrawl_enabled,
+      }))
     }
 
-    // 检查是否还有订阅源仍在刷新
     const monitoredFeeds = selectedFeed.value
       ? feedsStore.feeds.filter(f => f.id === selectedFeed.value)
       : feedsStore.feeds
@@ -247,21 +311,9 @@ async function pollRefreshStatus() {
       refreshPollingInterval.value = setTimeout(poll, REFRESH_POLLING_INTERVAL)
     } else {
       stopPollingRefreshStatus()
-
-      // 刷新完成后重新获取文章
-      const articleParams: any = { per_page: 10000 }
-      if (selectedFeed.value) {
-        articleParams.feed_id = parseInt(selectedFeed.value)
-      } else if (selectedCategory.value === 'uncategorized') {
-        articleParams.uncategorized = true
-      } else if (selectedCategory.value && selectedCategory.value !== 'favorites' && selectedCategory.value !== 'ai-summaries') {
-        articleParams.category_id = parseInt(selectedCategory.value)
-      }
-
-      await apiStore.fetchArticles(articleParams)
+      await loadArticles()
       await fetchGlobalUnreadCount()
 
-      // 显示成功消息
       refreshMessage.value = '刷新完成'
       refreshMessageType.value = 'success'
       showRefreshMessage.value = true
@@ -281,7 +333,6 @@ function stopPollingRefreshStatus() {
   }
 }
 
-// 刷新
 async function handleRefresh() {
   stopPollingRefreshStatus()
 
@@ -290,7 +341,7 @@ async function handleRefresh() {
     if (response.success) {
       refreshMessage.value = response.message || '已开始后台刷新当前订阅源'
       refreshMessageType.value = 'info'
-      await apiStore.fetchFeeds({ per_page: 10000 })
+      await fetchFeeds()
       pollRefreshStatus()
     } else {
       refreshMessage.value = response.error || '刷新失败'
@@ -301,7 +352,7 @@ async function handleRefresh() {
     if (response.success) {
       refreshMessage.value = response.message || '已开始后台刷新全部订阅源'
       refreshMessageType.value = 'info'
-      await apiStore.fetchFeeds({ per_page: 10000 })
+      await fetchFeeds()
       pollRefreshStatus()
     } else {
       refreshMessage.value = response.error || '刷新失败'
@@ -312,7 +363,6 @@ async function handleRefresh() {
   showRefreshMessage.value = true
 }
 
-// 全部标为已读
 async function handleMarkAllRead() {
   if (selectedFeed.value) {
     await apiStore.markAllAsRead(selectedFeed.value)
@@ -329,7 +379,6 @@ async function handleMarkAllRead() {
   await fetchGlobalUnreadCount()
 }
 
-// 导出 OPML
 async function handleExportOpml() {
   try {
     const blob = await apiStore.exportOpml()
@@ -344,22 +393,18 @@ async function handleExportOpml() {
   }
 }
 
-// 切换侧边栏
 function toggleSidebar() {
   sidebarCollapsed.value = !sidebarCollapsed.value
 }
 
-// 编辑分类
 function handleEditCategory(categoryId: string) {
   editCategoryId.value = categoryId
 }
 
-// 编辑订阅源
 function handleEditFeed(feedId: string) {
   editFeedId.value = feedId
 }
 
-// 删除分类
 async function handleDeleteCategory(categoryId: string, categoryName: string) {
   if (confirm(`确定要删除分类 "${categoryName}" 吗？这个操作不会删除分类下的订阅源。`)) {
     const response = await apiStore.deleteCategory(categoryId)
@@ -412,15 +457,23 @@ import '~/components/FeedLayout.css'
         @delete-category="handleDeleteCategory"
       />
 
-      <!-- 文章列表 -->
+<!-- 文章列表 -->
       <LayoutArticleListPanel
         v-if="!showAISummaries"
-        :articles="filteredArticles"
+        :articles="articles"
         :selected-category="selectedCategory"
         :selected-feed="selectedFeed"
         :selected-article="selectedArticle"
+        :loading="loading"
+        :has-more="hasMore"
+        :total="total"
+        :start-date="startDate"
+        :end-date="endDate"
         @article-click="handleArticleClick"
         @article-favorite="handleArticleFavorite"
+        @load-more="handleLoadMore"
+        @date-filter-change="handleDateFilterChange"
+        @date-filter-clear="handleDateFilterClear"
       />
 
       <!-- AI 总结列表 -->
@@ -430,13 +483,14 @@ import '~/components/FeedLayout.css'
         @select="handleSummarySelect"
       />
 
-      <!-- 文章内容 / AI 总结详情 -->
+<!-- 文章内容 / AI 总结详情 -->
       <div v-if="!showAISummaries && !selectedSummary" class="content-panel">
         <ArticleContent
           :article="selectedArticle"
-          :articles="filteredArticles"
+          :articles="articles"
           @favorite="handleArticleFavorite"
           @navigate="handleArticleClick"
+          @article-update="handleArticleUpdate"
         />
       </div>
 

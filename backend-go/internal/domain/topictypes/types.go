@@ -22,6 +22,19 @@ type TopicTag struct {
 	IsNew     bool     `json:"is_new,omitempty"`     // True if newly created
 	MatchedTo uint     `json:"matched_to,omitempty"` // ID of existing tag if matched
 	Kind      string   `json:"kind,omitempty"`       // Legacy: maps to Category for backward compat
+	FeedCount int      `json:"feed_count,omitempty"` // Distinct feed count referencing this tag
+}
+
+type AggregatedTopicTag struct {
+	Slug         string   `json:"slug"`
+	Label        string   `json:"label"`
+	Category     string   `json:"category"`
+	Kind         string   `json:"kind,omitempty"`
+	Icon         string   `json:"icon,omitempty"`
+	Aliases      []string `json:"aliases,omitempty"`
+	Score        float64  `json:"score"`
+	ArticleCount int      `json:"article_count"`
+	FeedCount    int      `json:"feed_count,omitempty"`
 }
 
 // ExtractedTag is the raw output from AI extraction
@@ -48,6 +61,7 @@ type SimilarTagInfo struct {
 	Aliases    []string `json:"aliases"`
 	Similarity float64  `json:"similarity"`
 	UsageCount int      `json:"usage_count,omitempty"`
+	FeedCount  int      `json:"feed_count,omitempty"`
 }
 
 // TagResolutionResponse is AI's decision on tag matching
@@ -85,16 +99,18 @@ type GraphEdge struct {
 
 // TopicSummaryCard represents a summary card with tags
 type TopicSummaryCard struct {
-	ID           uint               `json:"id"`
-	Title        string             `json:"title"`
-	Summary      string             `json:"summary"`
-	FeedName     string             `json:"feed_name"`
-	FeedColor    string             `json:"feed_color"`
-	CategoryName string             `json:"category_name"`
-	ArticleCount int                `json:"article_count"`
-	CreatedAt    string             `json:"created_at"`
-	Topics       []TopicTag         `json:"topics"`
-	Articles     []TopicArticleCard `json:"articles"`
+	ID             uint                 `json:"id"`
+	Title          string               `json:"title"`
+	Summary        string               `json:"summary"`
+	FeedName       string               `json:"feed_name"`
+	FeedIcon       string               `json:"feed_icon"`
+	FeedColor      string               `json:"feed_color"`
+	CategoryName   string               `json:"category_name"`
+	ArticleCount   int                  `json:"article_count"`
+	CreatedAt      string               `json:"created_at"`
+	Topics         []TopicTag           `json:"topics"`
+	AggregatedTags []AggregatedTopicTag `json:"aggregated_tags"`
+	Articles       []TopicArticleCard   `json:"articles"`
 }
 
 // TopicArticleCard represents an article in a topic context
@@ -160,4 +176,21 @@ type TopicsByCategoryResult struct {
 	Events   []TopicTag `json:"events"`
 	People   []TopicTag `json:"people"`
 	Keywords []TopicTag `json:"keywords"`
+}
+
+// PendingArticle represents an article that has a tag but is not yet in any digest
+type PendingArticle struct {
+	ID        uint   `json:"id"`
+	Title     string `json:"title"`
+	Link      string `json:"link"`
+	PubDate   string `json:"pub_date,omitempty"`
+	FeedName  string `json:"feed_name"`
+	FeedIcon  string `json:"feed_icon,omitempty"`
+	FeedColor string `json:"feed_color,omitempty"`
+}
+
+// PendingArticlesResponse is the response for pending articles API
+type PendingArticlesResponse struct {
+	Articles []PendingArticle `json:"articles"`
+	Total    int              `json:"total"`
 }

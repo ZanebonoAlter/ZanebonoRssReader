@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { Icon } from '@iconify/vue'
+import ArticleTagList from '../../articles/components/ArticleTagList.vue'
+import FeedIcon from '~/components/feed/FeedIcon.vue'
 import type { TimelineDigest } from '~/types/timeline'
 
 interface Props {
@@ -8,6 +10,7 @@ interface Props {
   isFirst: boolean
   isLast: boolean
   isActive?: boolean
+  highlightedTagSlugs?: string[]
 }
 
 const props = defineProps<Props>()
@@ -37,12 +40,6 @@ const formattedTime = computed(() => {
     hour12: false,
   }).format(dateValue.value)
 })
-
-const categoryColors: Record<string, string> = {
-  event: 'topic-tag--event',
-  person: 'topic-tag--person',
-  keyword: 'topic-tag--keyword',
-}
 
 function parseDateValue(value: string | null | undefined) {
   if (!value) return null
@@ -80,7 +77,10 @@ function handleKeydown(event: KeyboardEvent) {
       <div class="timeline-item__header">
         <time class="timeline-item__time">{{ formattedTime }}</time>
         <span class="timeline-item__date">{{ formattedDate }}</span>
-        <span class="timeline-item__source">{{ item.feedName }}</span>
+        <span class="timeline-item__source">
+          <FeedIcon :icon="item.feedIcon" :size="14" />
+          {{ item.feedName }}
+        </span>
       </div>
 
       <div
@@ -101,16 +101,14 @@ function handleKeydown(event: KeyboardEvent) {
           {{ item.summary }}
         </p>
 
-        <div v-if="item.tags.length" class="timeline-item__tags">
-          <span
-            v-for="tag in item.tags"
-            :key="tag.slug"
-            class="timeline-item__tag"
-            :class="categoryColors[tag.category]"
-          >
-            {{ tag.label }}
-          </span>
-        </div>
+        <ArticleTagList
+          v-if="item.tags.length"
+          class="timeline-item__tags"
+          :tags="item.tags"
+          :highlighted-slugs="highlightedTagSlugs || []"
+          compact
+          :max-visible="5"
+        />
 
         <div v-if="item.articles.length" class="timeline-item__sources">
           <button
@@ -221,6 +219,9 @@ function handleKeydown(event: KeyboardEvent) {
   background: rgba(255, 255, 255, 0.04);
   font-size: 0.72rem;
   color: rgba(220, 230, 239, 0.62);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
 }
 
 .timeline-item__body {
@@ -291,14 +292,9 @@ function handleKeydown(event: KeyboardEvent) {
   gap: 0.45rem;
 }
 
-.timeline-item__tag,
 .timeline-item__source-link {
   border-radius: 999px;
   font-size: 0.73rem;
-}
-
-.timeline-item__tag {
-  padding: 0.22rem 0.56rem;
 }
 
 .timeline-item__source-link {
@@ -313,24 +309,6 @@ function handleKeydown(event: KeyboardEvent) {
 .timeline-item__source-link:focus-visible {
   border-color: rgba(240, 138, 75, 0.4);
   background: rgba(240, 138, 75, 0.1);
-}
-
-.topic-tag--event {
-  border: 1px solid rgba(245, 158, 11, 0.36);
-  background: rgba(245, 158, 11, 0.13);
-  color: rgba(252, 211, 77, 0.94);
-}
-
-.topic-tag--person {
-  border: 1px solid rgba(16, 185, 129, 0.36);
-  background: rgba(16, 185, 129, 0.13);
-  color: rgba(110, 231, 183, 0.92);
-}
-
-.topic-tag--keyword {
-  border: 1px solid rgba(99, 102, 241, 0.36);
-  background: rgba(99, 102, 241, 0.13);
-  color: rgba(191, 199, 255, 0.94);
 }
 
 .timeline-item__footer {

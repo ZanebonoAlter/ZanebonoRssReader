@@ -126,7 +126,11 @@ func findOrCreateTag(tag topictypes.TopicTag, source string) (*models.TopicTag, 
 	}
 
 	// Create new tag
-	aliasesJSON, _ := json.Marshal(tag.Aliases)
+	aliases := tag.Aliases
+	if len(aliases) == 0 {
+		aliases = []string{}
+	}
+	aliasesJSON, _ := json.Marshal(aliases)
 	newTag := models.TopicTag{
 		Slug:        slug,
 		Label:       tag.Label,

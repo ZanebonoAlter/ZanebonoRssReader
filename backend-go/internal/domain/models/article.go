@@ -13,21 +13,22 @@ type Article struct {
 	Content                    string     `gorm:"type:text" json:"content"`
 	Link                       string     `gorm:"size:1000" json:"link"`
 	ImageURL                   string     `gorm:"size:1000" json:"image_url"`
-	PubDate                    *time.Time `json:"pub_date"`
+	PubDate                    *time.Time `gorm:"type:datetime" json:"pub_date"`
 	Author                     string     `gorm:"size:200" json:"author"`
 	Read                       bool       `gorm:"default:false" json:"read"`
 	Favorite                   bool       `gorm:"default:false" json:"favorite"`
 	SummaryStatus              string     `gorm:"size:20;default:complete" json:"summary_status"`
-	SummaryGeneratedAt         *time.Time `json:"summary_generated_at"`
-	SummaryProcessingStartedAt *time.Time `json:"summary_processing_started_at"`
+	SummaryGeneratedAt         *time.Time `gorm:"type:datetime" json:"summary_generated_at"`
+	SummaryProcessingStartedAt *time.Time `gorm:"type:datetime" json:"summary_processing_started_at"`
 	CompletionAttempts         int        `gorm:"default:0" json:"completion_attempts"`
 	CompletionError            string     `gorm:"type:text" json:"completion_error"`
 	AIContentSummary           string     `gorm:"type:text" json:"ai_content_summary"`
 	FirecrawlStatus            string     `gorm:"size:20;default:pending" json:"firecrawl_status"`
 	FirecrawlError             string     `gorm:"type:text" json:"firecrawl_error"`
 	FirecrawlContent           string     `gorm:"type:text" json:"firecrawl_content"`
-	FirecrawlCrawledAt         *time.Time `json:"firecrawl_crawled_at"`
+	FirecrawlCrawledAt         *time.Time `gorm:"type:datetime" json:"firecrawl_crawled_at"`
 	CreatedAt                  time.Time  `json:"created_at"`
+	TagCount                   int        `gorm:"->;column:tag_count" json:"tag_count"`
 	Feed                       Feed       `gorm:"foreignKey:FeedID" json:"feed,omitempty"`
 }
 
@@ -56,5 +57,6 @@ func (a *Article) ToDict() map[string]interface{} {
 		"firecrawl_content":             a.FirecrawlContent,
 		"firecrawl_crawled_at":          FormatDatetimeCSTPtr(a.FirecrawlCrawledAt),
 		"created_at":                    FormatDatetimeCST(a.CreatedAt),
+		"tag_count":                     a.TagCount,
 	}
 }
