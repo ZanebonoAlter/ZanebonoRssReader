@@ -750,7 +750,11 @@ function closeArticlePreview() {
 }
 
 async function handleArticleFavorite(articleId: string) {
-  const response = await apiStore.toggleFavorite(articleId)
+  const currentFavorite = selectedPreviewArticle.value?.id === articleId
+    ? selectedPreviewArticle.value.favorite
+    : previewArticles.value.find(a => a.id === articleId)?.favorite
+
+  const response = await articlesApi.updateArticle(Number(articleId), { favorite: !currentFavorite })
   if (!response.success) return
 
   const target = previewArticles.value.find(article => article.id === articleId)
