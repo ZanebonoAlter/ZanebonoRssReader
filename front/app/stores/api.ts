@@ -1,4 +1,4 @@
-import type { Category, RssFeed, Article } from '~/types'
+import type { Category, RssFeed, Article, BulkUpdateArticlesData } from '~/types'
 import { useCategoriesApi } from '~/api/categories'
 import { useFeedsApi } from '~/api/feeds'
 import { useArticlesApi } from '~/api/articles'
@@ -300,21 +300,35 @@ export const useApiStore = defineStore('api', () => {
     return updateArticle(id, { read: true })
   }
 
-  async function markAllAsRead(feedId?: string) {
-    const ids = feedId
-      ? articles.value.filter((a) => a.feedId === feedId).map((a) => Number(a.id))
-      : articles.value.map((a) => Number(a.id))
+  async function markAllAsRead(options?: { feedId?: string; categoryId?: number; uncategorized?: boolean }) {
+    const data: BulkUpdateArticlesData = { read: true }
+    if (options?.feedId) {
+      data.feed_id = Number(options.feedId)
+    } else if (options?.categoryId) {
+      data.category_id = options.categoryId
+    } else if (options?.uncategorized) {
+      data.uncategorized = true
+    }
 
     const articlesApi = useArticlesApi()
-    const response = await articlesApi.bulkUpdateArticles({
-      ids,
-      read: true,
-    })
+    const response = await articlesApi.bulkUpdateArticles(data)
 
     if (response.success) {
       articles.value.forEach((a) => {
-        if (!feedId || a.feedId === feedId) {
+        if (!options) {
           a.read = true
+        } else if (options.feedId && a.feedId === options.feedId) {
+          a.read = true
+        } else if (options.categoryId) {
+          const feed = feeds.value.find(f => f.id === a.feedId)
+          if (feed && Number(feed.category) === options.categoryId) {
+            a.read = true
+          }
+        } else if (options.uncategorized) {
+          const feed = feeds.value.find(f => f.id === a.feedId)
+          if (feed && !feed.category) {
+            a.read = true
+          }
         }
       })
     }

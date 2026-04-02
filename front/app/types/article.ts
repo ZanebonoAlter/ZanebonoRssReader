@@ -57,7 +57,10 @@ export interface UpdateArticleData {
 }
 
 export interface BulkUpdateArticlesData {
-  ids: number[]
+  ids?: number[]
+  feed_id?: number
+  category_id?: number
+  uncategorized?: boolean
   read?: boolean
   favorite?: boolean
 }

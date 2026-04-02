@@ -108,7 +108,7 @@ function handleAllArticlesClick() {
 }
 
 async function handleMarkFeedAsRead(feedId: string) {
-  const response = await apiStore.markAllAsRead(feedId)
+  const response = await apiStore.markAllAsRead({ feedId })
   if (!response.success) return
 
   const feed = feedsStore.feeds.find(f => f.id === feedId)

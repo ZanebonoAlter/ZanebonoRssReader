@@ -365,13 +365,15 @@ async function handleRefresh() {
 
 async function handleMarkAllRead() {
   if (selectedFeed.value) {
-    await apiStore.markAllAsRead(selectedFeed.value)
+    await apiStore.markAllAsRead({ feedId: selectedFeed.value })
   } else if (selectedCategory.value) {
-    const feedIds = feedsStore.feeds
-      .filter(f => f.category === selectedCategory.value)
-      .map(f => f.id)
-    for (const feedId of feedIds) {
-      await apiStore.markAllAsRead(feedId)
+    if (selectedCategory.value === 'uncategorized') {
+      await apiStore.markAllAsRead({ uncategorized: true })
+    } else {
+      const categoryId = parseInt(selectedCategory.value)
+      if (categoryId > 0) {
+        await apiStore.markAllAsRead({ categoryId })
+      }
     }
   } else {
     await apiStore.markAllAsRead()

@@ -30,9 +30,12 @@ type UpdateArticleRequest struct {
 }
 
 type BulkUpdateArticlesRequest struct {
-	IDs      []uint `json:"ids" binding:"required"`
-	Read     *bool  `json:"read"`
-	Favorite *bool  `json:"favorite"`
+	IDs           []uint `json:"ids"`
+	FeedID        *uint  `json:"feed_id"`
+	CategoryID    *uint  `json:"category_id"`
+	Uncategorized *bool  `json:"uncategorized"`
+	Read          *bool  `json:"read"`
+	Favorite      *bool  `json:"favorite"`
 }
 
 func GetArticlesStats(c *gin.Context) {
@@ -307,7 +310,7 @@ func BulkUpdateArticles(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
-			"error":   "ids is required",
+			"error":   err.Error(),
 		})
 		return
 	}
@@ -328,9 +331,19 @@ func BulkUpdateArticles(c *gin.Context) {
 		return
 	}
 
-	result := database.DB.Model(&models.Article{}).
-		Where("id IN ?", req.IDs).
-		Updates(updates)
+	query := database.DB.Model(&models.Article{})
+
+	if len(req.IDs) > 0 {
+		query = query.Where("id IN ?", req.IDs)
+	} else if req.FeedID != nil {
+		query = query.Where("feed_id = ?", *req.FeedID)
+	} else if req.CategoryID != nil {
+		query = query.Where("feed_id IN (SELECT id FROM feeds WHERE category_id = ?)", *req.CategoryID)
+	} else if req.Uncategorized != nil && *req.Uncategorized {
+		query = query.Where("feed_id IN (SELECT id FROM feeds WHERE category_id IS NULL)")
+	}
+
+	result := query.Updates(updates)
 
 	if result.Error != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
