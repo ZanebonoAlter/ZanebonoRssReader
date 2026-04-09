@@ -82,9 +82,6 @@ func TestAutoRefreshTriggerNowUpdatesSchedulerTaskAndFeedState(t *testing.T) {
 	if refreshedFeed.RefreshStatus != "refreshing" {
 		t.Fatalf("refresh status = %q, want refreshing", refreshedFeed.RefreshStatus)
 	}
-	if refreshedFeed.LastRefreshAt == nil {
-		t.Fatal("expected last refresh timestamp to be set")
-	}
 }
 
 func TestAutoRefreshTriggerNowRunsAutoSummaryAfterTriggeredRefreshesFinish(t *testing.T) {

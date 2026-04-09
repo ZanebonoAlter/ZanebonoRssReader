@@ -51,6 +51,7 @@ func (s *FeedService) RefreshFeed(ctx context.Context, feedID uint) (err error) 
 	feed.Title = parsed.Title
 	feed.Description = parsed.Description
 	feed.LastUpdated = &now
+	feed.LastRefreshAt = &now
 	feed.RefreshStatus = "success"
 	feed.RefreshError = ""
 

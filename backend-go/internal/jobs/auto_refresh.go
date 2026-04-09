@@ -35,8 +35,11 @@ type AutoRefreshRunSummary struct {
 	DueFeeds               int    `json:"due_feeds"`
 	TriggeredFeeds         int    `json:"triggered_feeds"`
 	AlreadyRefreshingFeeds int    `json:"already_refreshing_feeds"`
+	StaleResetFeeds        int    `json:"stale_reset_feeds"`
 	Reason                 string `json:"reason"`
 }
+
+const staleRefreshingTimeout = 5 * time.Minute
 
 func NewAutoRefreshScheduler(checkInterval int) *AutoRefreshScheduler {
 	feedService := feeds.NewFeedService()
@@ -168,6 +171,8 @@ func (s *AutoRefreshScheduler) runRefreshCycle(triggerSource string) (*AutoRefre
 	summary.ScannedFeeds = len(feeds)
 
 	now := time.Now()
+	summary.StaleResetFeeds = s.resetStaleRefreshingFeeds(now)
+
 	var refreshWG sync.WaitGroup
 	for _, feed := range feeds {
 		if !s.needsRefresh(&feed, now) {
@@ -180,7 +185,7 @@ func (s *AutoRefreshScheduler) runRefreshCycle(triggerSource string) (*AutoRefre
 			continue
 		}
 
-		s.markFeedRefreshing(feed.ID, now)
+		s.markFeedRefreshing(feed.ID)
 		refreshWG.Add(1)
 		go func(feedID uint) {
 			defer refreshWG.Done()
@@ -197,6 +202,9 @@ func (s *AutoRefreshScheduler) runRefreshCycle(triggerSource string) (*AutoRefre
 	summary.Reason = autoRefreshReason(summary)
 	if summary.TriggeredFeeds > 0 {
 		log.Printf("Auto-refresh: triggered %d feed(s)", summary.TriggeredFeeds)
+	}
+	if summary.StaleResetFeeds > 0 {
+		log.Printf("Auto-refresh: reset %d stale feed(s)", summary.StaleResetFeeds)
 	}
 
 	s.updateSchedulerStatus("idle", "", &startTime, summary)
@@ -215,9 +223,26 @@ func (s *AutoRefreshScheduler) needsRefresh(feed *models.Feed, now time.Time) bo
 }
 
 func (s *AutoRefreshScheduler) refreshFeedAsync(ctx context.Context, feedID uint) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[PANIC] refreshFeedAsync for feed %d: %v", feedID, r)
+			s.resetFeedStatus(feedID, fmt.Sprintf("panic: %v", r))
+		}
+	}()
+
 	if err := s.refreshFeed(ctx, feedID); err != nil {
 		log.Printf("Error refreshing feed %d: %v", feedID, err)
+		s.resetFeedStatus(feedID, err.Error())
 	}
+}
+
+func (s *AutoRefreshScheduler) resetFeedStatus(feedID uint, errMsg string) {
+	now := time.Now().In(time.FixedZone("CST", 8*3600))
+	database.DB.Model(&models.Feed{}).Where("id = ? AND refresh_status = ?", feedID, "refreshing").Updates(map[string]interface{}{
+		"refresh_status":  "error",
+		"refresh_error":   errMsg,
+		"last_refresh_at": &now,
+	})
 }
 
 func (s *AutoRefreshScheduler) triggerAutoSummaryAfterRefreshes(wg *sync.WaitGroup) {
@@ -308,10 +333,15 @@ func (s *AutoRefreshScheduler) TriggerNow() map[string]interface{} {
 	message := "手动扫描完成，没有 feed 到点。"
 	if summary.TriggeredFeeds > 0 {
 		message = fmt.Sprintf("手动扫描完成，已触发 %d 个 feed 刷新。", summary.TriggeredFeeds)
+		if summary.StaleResetFeeds > 0 {
+			message += fmt.Sprintf(" 重置了 %d 个卡住的 feed。", summary.StaleResetFeeds)
+		}
 	} else if summary.AlreadyRefreshingFeeds > 0 {
 		message = "手动扫描完成，但到点的 feed 已在刷新中。"
 	} else if summary.ScannedFeeds == 0 {
 		message = "当前没有开启自动刷新的 feed。"
+	} else if summary.StaleResetFeeds > 0 {
+		message = fmt.Sprintf("手动扫描完成，重置了 %d 个卡住的 feed。", summary.StaleResetFeeds)
 	}
 
 	return map[string]interface{}{
@@ -355,11 +385,25 @@ func (s *AutoRefreshScheduler) initSchedulerTask() {
 	database.DB.Create(&task)
 }
 
-func (s *AutoRefreshScheduler) markFeedRefreshing(feedID uint, now time.Time) {
+func (s *AutoRefreshScheduler) resetStaleRefreshingFeeds(now time.Time) int {
+	cutoff := now.Add(-staleRefreshingTimeout)
+	result := database.DB.Model(&models.Feed{}).
+		Where("refresh_status = ? AND last_refresh_at < ?", "refreshing", cutoff).
+		Updates(map[string]interface{}{
+			"refresh_status": "idle",
+			"refresh_error":  "stale refreshing state reset after 5 minutes",
+		})
+	count := int(result.RowsAffected)
+	if count > 0 {
+		log.Printf("Auto-refresh: reset %d stale refreshing feed(s) (stuck > %v)", count, staleRefreshingTimeout)
+	}
+	return count
+}
+
+func (s *AutoRefreshScheduler) markFeedRefreshing(feedID uint) {
 	database.DB.Model(&models.Feed{}).Where("id = ?", feedID).Updates(map[string]interface{}{
-		"refresh_status":  "refreshing",
-		"last_refresh_at": &now,
-		"refresh_error":   "",
+		"refresh_status": "refreshing",
+		"refresh_error":  "",
 	})
 }
 
@@ -367,6 +411,10 @@ func autoRefreshReason(summary *AutoRefreshRunSummary) string {
 	switch {
 	case summary.ScannedFeeds == 0:
 		return "no_feeds_enabled"
+	case summary.StaleResetFeeds > 0 && summary.TriggeredFeeds > 0:
+		return "stale_reset_and_feeds_triggered"
+	case summary.StaleResetFeeds > 0:
+		return "stale_reset"
 	case summary.TriggeredFeeds > 0:
 		return "feeds_triggered"
 	case summary.DueFeeds == 0:
