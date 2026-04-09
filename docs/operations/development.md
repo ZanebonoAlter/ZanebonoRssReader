@@ -75,6 +75,20 @@ Windows 下可以直接运行：
 start-all.bat
 ```
 
+也可以直接使用 Docker Compose：
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+- 前端端口通过 `FRONT_PORT` 配置
+- 后端端口通过 `BACKEND_PORT` 配置
+- SQLite 文件名通过 `SQLITE_DB_FILE` 配置
+- 数据文件会写到仓库根目录 `data/`
+- Docker 默认前端端口是 `3000`
+- 构建代理可通过 `.env` 里的 `GOPROXY`、`NPM_CONFIG_REGISTRY`、`HTTP_PROXY`、`HTTPS_PROXY` 配置
+
 ## 前后端联调约定
 
 - 前端 API 基础地址：`http://localhost:5000/api`

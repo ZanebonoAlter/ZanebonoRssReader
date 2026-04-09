@@ -78,6 +78,18 @@ rss的垃圾信息处理也在开发路上了
 
 ## 🚀 快速开始
 
+### Docker Compose
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+- 前端默认地址：`http://localhost:3000`
+- 后端默认地址：`http://localhost:5000`
+- SQLite 文件默认落在仓库根目录 `data/rss_reader.db`
+- 如果拉 Go 模块或 pnpm 依赖较慢，可以在 `.env` 里补 `GOPROXY`、`NPM_CONFIG_REGISTRY` 或常规 `HTTP_PROXY` / `HTTPS_PROXY`
+
 ### 前端
 
 ```bash
@@ -96,7 +108,7 @@ go run cmd/server/main.go
 
 ### 访问地址
 
-- 前端：http://localhost:3001
+- 前端本地开发：http://localhost:3000
 - 后端：http://localhost:5000
 
 ## 📂 项目结构

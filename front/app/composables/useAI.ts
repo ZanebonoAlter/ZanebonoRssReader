@@ -1,4 +1,5 @@
 import { useAIAdminApi } from '~/api'
+import { getApiBaseUrl } from '~/utils/api'
 
 interface AISummaryRequest {
   title: string
@@ -103,7 +104,7 @@ export const useAI = () => {
         throw new Error('AI 配置未完成，请先在设置中配置可用模型')
       }
 
-      const response = await fetch('http://localhost:5000/api/ai/summarize', {
+      const response = await fetch(`${getApiBaseUrl()}/ai/summarize`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

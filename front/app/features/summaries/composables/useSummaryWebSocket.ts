@@ -1,4 +1,5 @@
 import type { SummaryBatch, SummaryJob } from '~/types'
+import { getApiOrigin } from '~/utils/api'
 
 interface WSJob {
   id: string
@@ -28,7 +29,6 @@ interface WSMessage {
 type WSStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
 
 export function useSummaryWebSocket() {
-  const config = useRuntimeConfig()
   const ws = ref<WebSocket | null>(null)
   const status = ref<WSStatus>('disconnected')
   const lastMessage = ref<WSMessage | null>(null)
@@ -37,8 +37,7 @@ export function useSummaryWebSocket() {
   const reconnectDelay = 3000
 
   const getWsUrl = () => {
-    const apiBase = (config.public.apiBase as string) || 'http://localhost:5000'
-    const wsBase = apiBase.replace(/^http/, 'ws')
+    const wsBase = getApiOrigin().replace(/^http/, 'ws')
     return `${wsBase}/ws`
   }
 

@@ -4,11 +4,6 @@
  */
 
 /**
- * API 相关常量
- */
-export const API_BASE_URL = 'http://localhost:5000/api'
-
-/**
  * 分页相关常量
  */
 export const DEFAULT_PAGE_SIZE = 10

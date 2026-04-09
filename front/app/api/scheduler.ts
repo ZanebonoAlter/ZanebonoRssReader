@@ -1,11 +1,11 @@
 import type { ApiResponse } from '~/types'
 import type { SchedulerStatus, SchedulerTriggerResult } from '~/types/scheduler'
-import { API_BASE_URL } from '~/utils/constants'
+import { getApiBaseUrl } from '~/utils/api'
 import { apiClient } from './client'
 
 async function triggerSchedulerRequest(name: string): Promise<ApiResponse<SchedulerTriggerResult>> {
   try {
-    const response = await fetch(`${API_BASE_URL}/schedulers/${name}/trigger`, {
+    const response = await fetch(`${getApiBaseUrl()}/schedulers/${name}/trigger`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

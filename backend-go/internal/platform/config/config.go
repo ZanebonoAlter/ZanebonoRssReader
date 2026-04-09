@@ -3,6 +3,8 @@ package config
 import (
 	"github.com/spf13/viper"
 	"log"
+	"os"
+	"strings"
 )
 
 type Config struct {
@@ -58,5 +60,46 @@ func LoadConfig(configPath string) error {
 		return err
 	}
 
+	applyEnvOverrides(AppConfig)
+
 	return nil
+}
+
+func applyEnvOverrides(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+
+	if value := strings.TrimSpace(os.Getenv("SERVER_PORT")); value != "" {
+		cfg.Server.Port = value
+	}
+
+	if value := strings.TrimSpace(os.Getenv("SERVER_MODE")); value != "" {
+		cfg.Server.Mode = value
+	}
+
+	if value := strings.TrimSpace(os.Getenv("DATABASE_DRIVER")); value != "" {
+		cfg.Database.Driver = value
+	}
+
+	if value := strings.TrimSpace(os.Getenv("DATABASE_DSN")); value != "" {
+		cfg.Database.DSN = value
+	}
+
+	if value := strings.TrimSpace(os.Getenv("CORS_ORIGINS")); value != "" {
+		cfg.CORS.Origins = splitCommaSeparated(value)
+	}
+}
+
+func splitCommaSeparated(value string) []string {
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			continue
+		}
+		result = append(result, trimmed)
+	}
+	return result
 }

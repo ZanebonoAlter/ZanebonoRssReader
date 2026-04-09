@@ -1,4 +1,4 @@
-import { API_BASE_URL } from '~/utils/constants'
+import { getApiBaseUrl } from '~/utils/api'
 import type { ApiResponse } from '~/types'
 
 let currentTraceId: string | null = null
@@ -26,15 +26,19 @@ function captureTraceId(response: Response) {
 }
 
 class ApiClient {
-  private baseURL: string
+  private baseURL?: string
 
-  constructor(baseURL: string = API_BASE_URL) {
+  constructor(baseURL?: string) {
     this.baseURL = baseURL
+  }
+
+  private resolveBaseURL(): string {
+    return this.baseURL || getApiBaseUrl()
   }
 
   private async request<T>(endpoint: string, options: RequestInit = {}): Promise<ApiResponse<T>> {
     try {
-      const url = `${this.baseURL}${endpoint}`
+      const url = `${this.resolveBaseURL()}${endpoint}`
       const response = await fetch(url, {
         ...options,
         headers: {
@@ -95,7 +99,7 @@ class ApiClient {
 
   async upload<T>(endpoint: string, formData: FormData): Promise<ApiResponse<T>> {
     try {
-      const url = `${this.baseURL}${endpoint}`
+      const url = `${this.resolveBaseURL()}${endpoint}`
       const response = await fetch(url, {
         method: 'POST',
         body: formData,
@@ -128,7 +132,7 @@ class ApiClient {
   }
 
   async download(endpoint: string): Promise<Blob> {
-    const url = `${this.baseURL}${endpoint}`
+    const url = `${this.resolveBaseURL()}${endpoint}`
     const response = await fetch(url, {
       headers: {
         ...traceHeaders(),
