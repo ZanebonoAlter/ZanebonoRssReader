@@ -10,7 +10,7 @@ type Feed struct {
 	Description           string     `gorm:"type:text" json:"description"`
 	URL                   string     `gorm:"size:500;unique;not null" json:"url"`
 	CategoryID            *uint      `gorm:"index" json:"category_id"`
-	Icon                  string     `gorm:"size:50;default:rss" json:"icon"`
+	Icon                  string     `gorm:"size:1000;default:rss" json:"icon"`
 	Color                 string     `gorm:"size:20;default:#8b5cf6" json:"color"`
 	LastUpdated           *time.Time `json:"last_updated"`
 	CreatedAt             time.Time  `json:"created_at"`
@@ -26,6 +26,10 @@ type Feed struct {
 	FirecrawlEnabled      bool       `gorm:"default:false" json:"firecrawl_enabled"`
 	Articles              []Article  `gorm:"foreignKey:FeedID;constraint:OnDelete:CASCADE" json:"articles,omitempty"`
 	Category              *Category  `gorm:"foreignKey:CategoryID" json:"category,omitempty"`
+}
+
+func (Feed) TableName() string {
+	return "feeds"
 }
 
 func (f *Feed) ToDict(includeStats bool) map[string]interface{} {

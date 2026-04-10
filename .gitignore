@@ -6,7 +6,7 @@ dist/
 wheels/
 *.egg-info
 .claude/
-
+data/
 # Virtual environments
 .venv
 testsworkflow/.venv/
