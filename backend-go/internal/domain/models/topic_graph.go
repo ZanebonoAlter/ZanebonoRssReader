@@ -69,7 +69,7 @@ func (TopicTag) TableName() string {
 type TopicTagEmbedding struct {
 	ID         uint      `gorm:"primaryKey" json:"id"`
 	TopicTagID uint      `gorm:"uniqueIndex;not null" json:"topic_tag_id"`
-	Vector     string    `gorm:"type:text;not null" json:"vector"` // JSON array of float64 (embedding vector)
+	Vector     string    `gorm:"type:text;not null" json:"vector"` // Legacy JSON text payload kept until the staged pgvector runtime cutover lands.
 	Dimension  int       `gorm:"not null" json:"dimension"`        // Vector dimension (e.g., 1536 for ada-002)
 	Model      string    `gorm:"size:50;not null" json:"model"`    // Model used: "text-embedding-ada-002"
 	TextHash   string    `gorm:"size:64" json:"text_hash"`         // Hash of (label + aliases + category) for re-embedding detection
@@ -86,29 +86,34 @@ func (TopicTagEmbedding) TableName() string {
 
 // AISummaryTopic represents the many-to-many relationship between summaries and tags
 type AISummaryTopic struct {
-	ID         uint      `gorm:"primaryKey" json:"id"`
-	SummaryID  uint      `gorm:"index;not null" json:"summary_id"`
-	TopicTagID uint      `gorm:"index;not null" json:"topic_tag_id"`
-	Score      float64   `gorm:"default:0" json:"score"`
-	Source     string    `gorm:"size:20;default:llm" json:"source"`
-	CreatedAt  time.Time `json:"created_at"`
-	TopicTag   *TopicTag `gorm:"foreignKey:TopicTagID" json:"topic_tag,omitempty"`
+	ID         uint       `gorm:"primaryKey" json:"id"`
+	SummaryID  uint       `gorm:"index;not null" json:"summary_id"`
+	TopicTagID uint       `gorm:"index;not null" json:"topic_tag_id"`
+	Score      float64    `gorm:"default:0" json:"score"`
+	Source     string     `gorm:"size:20;default:llm" json:"source"`
+	CreatedAt  time.Time  `json:"created_at"`
+	Summary    *AISummary `gorm:"foreignKey:SummaryID;constraint:OnDelete:CASCADE" json:"summary,omitempty"`
+	TopicTag   *TopicTag  `gorm:"foreignKey:TopicTagID;constraint:OnDelete:CASCADE" json:"topic_tag,omitempty"`
+}
+
+func (AISummaryTopic) TableName() string {
+	return "ai_summary_topics"
 }
 
 // ArticleTopicTag represents the many-to-many relationship between articles and tags
 // This allows individual articles to be tagged for more granular topic tracking
 type ArticleTopicTag struct {
 	ID         uint      `gorm:"primaryKey" json:"id"`
-	ArticleID  uint      `gorm:"index:idx_article_topic_tag_article;not null" json:"article_id"`
-	TopicTagID uint      `gorm:"index:idx_article_topic_tag_topic;not null" json:"topic_tag_id"`
+	ArticleID  uint      `gorm:"index:idx_article_topic_tag_article;uniqueIndex:idx_article_topic_tags_link;not null" json:"article_id"`
+	TopicTagID uint      `gorm:"index:idx_article_topic_tag_topic;uniqueIndex:idx_article_topic_tags_link;not null" json:"topic_tag_id"`
 	Score      float64   `gorm:"default:0" json:"score"`
 	Source     string    `gorm:"size:20;default:llm" json:"source"` // llm, heuristic, manual
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
 
 	// Relations
-	Article  *Article  `gorm:"foreignKey:ArticleID" json:"article,omitempty"`
-	TopicTag *TopicTag `gorm:"foreignKey:TopicTagID" json:"topic_tag,omitempty"`
+	Article  *Article  `gorm:"foreignKey:ArticleID;constraint:OnDelete:CASCADE" json:"article,omitempty"`
+	TopicTag *TopicTag `gorm:"foreignKey:TopicTagID;constraint:OnDelete:CASCADE" json:"topic_tag,omitempty"`
 }
 
 // TableName specifies the table name for ArticleTopicTag

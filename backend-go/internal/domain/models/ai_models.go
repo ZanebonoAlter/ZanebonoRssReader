@@ -12,7 +12,7 @@ type AISummary struct {
 	Title         string           `gorm:"size:200;not null" json:"title"`
 	Summary       string           `gorm:"type:text;not null" json:"summary"`
 	KeyPoints     string           `gorm:"type:text" json:"key_points"`
-	Articles      string           `gorm:"type:text" json:"articles"`
+	Articles      string           `gorm:"type:text" json:"articles"` // First-batch Postgres cutover keeps this denormalized text payload.
 	ArticleCount  int              `gorm:"default:0" json:"article_count"`
 	TimeRange     int              `gorm:"default:180" json:"time_range"`
 	CreatedAt     time.Time        `json:"created_at"`
@@ -22,15 +22,23 @@ type AISummary struct {
 	SummaryTopics []AISummaryTopic `gorm:"foreignKey:SummaryID" json:"summary_topics,omitempty"`
 }
 
+func (AISummary) TableName() string {
+	return "ai_summaries"
+}
+
 type AISummaryFeed struct {
 	ID           uint      `gorm:"primaryKey" json:"id"`
 	SummaryID    uint      `gorm:"not null;index" json:"summary_id"`
 	FeedID       uint      `gorm:"not null;index" json:"feed_id"`
 	FeedTitle    string    `gorm:"size:200" json:"feed_title"`
-	FeedIcon     string    `gorm:"size:50" json:"feed_icon"`
+	FeedIcon     string    `gorm:"size:1000" json:"feed_icon"`
 	FeedColor    string    `gorm:"size:20" json:"feed_color"`
 	ArticleCount int       `gorm:"default:0" json:"article_count"`
 	CreatedAt    time.Time `json:"created_at"`
+}
+
+func (AISummaryFeed) TableName() string {
+	return "ai_summary_feeds"
 }
 
 func (a *AISummary) ToDict() map[string]interface{} {
@@ -135,7 +143,7 @@ type AIProvider struct {
 	TimeoutSeconds int       `gorm:"not null;default:120" json:"timeout_seconds"`
 	MaxTokens      *int      `json:"max_tokens,omitempty"`
 	Temperature    *float64  `json:"temperature,omitempty"`
-	Metadata       string    `gorm:"type:text" json:"metadata"`
+	Metadata       string    `gorm:"type:text" json:"metadata"` // First-batch Postgres cutover keeps metadata as text.
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
 }

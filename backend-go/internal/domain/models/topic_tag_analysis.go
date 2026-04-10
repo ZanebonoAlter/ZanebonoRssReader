@@ -10,8 +10,8 @@ type TopicTagAnalysis struct {
 	WindowType   string    `gorm:"index:idx_tag_analysis_date,unique" json:"window_type"`   // daily, weekly
 	AnchorDate   time.Time `gorm:"index:idx_tag_analysis_date,unique" json:"anchor_date"`
 	SummaryCount int       `json:"summary_count"`
-	PayloadJSON  string    `json:"payload_json"` // 存储分析结果的JSON
-	Source       string    `json:"source"`       // ai, heuristic, cached
+	PayloadJSON  string    `gorm:"type:text" json:"payload_json"` // 首批 Postgres 切换阶段继续保留为文本 JSON 载荷，不做结构化拆分。
+	Source       string    `json:"source"`                        // ai, heuristic, cached
 	Version      int       `json:"version"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
