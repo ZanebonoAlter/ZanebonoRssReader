@@ -1,158 +1,302 @@
+<!-- generated-by: gsd-doc-writer -->
+
 # 开发指南
 
-## 环境要求
+本地开发、构建、测试和提交前检查的完整参考。如果你是首次参与，请先阅读 [Getting Started](../guides/getting-started.md) 完成环境搭建。
 
-- Node.js 18+
-- pnpm 10.15.0+
-- Go 1.21+
+## 本地开发环境搭建
 
-## 启动顺序
+### 启动顺序
 
-1. 启动 `backend-go`
-2. 启动 `front`
-3. 确认前端能连到 `http://localhost:5000/api`
-
-## 前端开发
-
-```bash
-cd front
-pnpm install
-pnpm dev
-pnpm build
-pnpm exec nuxi typecheck
-pnpm test:unit
-```
-
-默认地址：`http://localhost:3001`
-
-## 后端开发
+1. **先启动后端** — 后端需要先初始化数据库和调度器：
 
 ```bash
 cd backend-go
 go mod tidy
 go run cmd/server/main.go
-go build ./...
-go test ./...
 ```
 
-默认地址：`http://localhost:5000`
+后端默认运行在 `http://localhost:5000`，首次启动会自动创建 SQLite 数据库文件。
 
-## 常用后端命令
+2. **再启动前端**（新终端）：
 
 ```bash
-cd backend-go
-
-# 启动服务
-go run cmd/server/main.go
-
-# 运行全部 Go 测试
-go test ./...
-
-# digest 迁移
-go run cmd/migrate-digest/main.go
-
-# digest 测试入口
-go run cmd/test-digest/main.go
-
-# scheduler 相关验证
-go test ./internal/schedulers ./internal/handlers
+cd front
+pnpm install
+pnpm dev
 ```
 
-## 后端阅读入口
+前端开发服务器运行在 `http://localhost:3001`。
 
-- 入口：`backend-go/cmd/server/main.go`
-- 路由：`backend-go/internal/app/router.go`
-- 运行时：`backend-go/internal/app/runtime.go`
-- 数据库：`backend-go/pkg/database/db.go`
+3. **验证联调** — 打开 `http://localhost:3001`，确认前端能连接到 `http://localhost:5000/api`。
 
-如果你要整理后端结构，先从 `internal/app/` 开始，不要直接把全部注意力丢进 `handlers/`。
+### 一键启动
 
-## 一键启动
+Windows 下可分别启动前后端（无一键脚本），或使用 Docker Compose 一键启动（见下文）。
 
-Windows 下可以直接运行：
-
-```bash
-start-all.bat
-```
-
-也可以直接使用 Docker Compose：
+### Docker Compose 启动
 
 ```bash
 cp .env.example .env
-docker compose up --build
+docker compose -f docker-compose.sqlite.yml up --build
 ```
 
-- 前端端口通过 `FRONT_PORT` 配置
-- 后端端口通过 `BACKEND_PORT` 配置
-- SQLite 文件名通过 `SQLITE_DB_FILE` 配置
-- 数据文件会写到仓库根目录 `data/`
-- Docker 默认前端端口是 `3000`
-- 构建代理可通过 `.env` 里的 `GOPROXY`、`NPM_CONFIG_REGISTRY`、`HTTP_PROXY`、`HTTPS_PROXY` 配置
+使用 PostgreSQL（支持 pgvector）：
 
-## 前后端联调约定
+```bash
+docker compose -f docker-compose.pgvector.yml up --build
+```
 
-- 前端 API 基础地址：`http://localhost:5000/api`
-- AI 总结 WebSocket：默认 `ws://localhost:5000/ws`
-- 后端 ID 是数字
-- 前端 store 内统一转成字符串
-- feed 文章总结开关统一使用 `article_summary_enabled` / `articleSummaryEnabled`
-- 文章总结状态统一使用 `summary_status` / `summaryStatus`
+端口和数据目录可在 `.env` 中配置，详见 [Configuration](../guides/configuration.md)。
 
-## 前端开发约束
+### 配置说明
 
-### 目录约束
+本地开发无需任何配置文件或 `.env` 文件即可启动——后端和前端均有开箱即用的默认值。
 
-- HTTP 逻辑只放 `front/app/api`
-- 业务实现优先放 `front/app/features`
-- 通用组件放 `front/app/components`
-- 路由页只做挂载，不写大段业务
+后端配置文件位于 `backend-go/configs/config.yaml`，通过 Viper 加载，环境变量可覆盖文件值。详见 [Configuration](../guides/configuration.md)。
 
-### 状态约束
+AI 相关设置（LLM、Firecrawl、Digest）通过 Web UI 的设置页面配置，存储在数据库中，无需手动编辑配置文件。
 
-- `useApiStore` 是主数据源
+## 构建命令
+
+### 前端命令（在 `front/` 目录执行）
+
+| 命令 | 说明 |
+|------|------|
+| `pnpm install` | 安装依赖 |
+| `pnpm dev` | 启动开发服务器（`http://localhost:3001`） |
+| `pnpm build` | 生产构建 |
+| `pnpm generate` | 静态站点生成 |
+| `pnpm preview` | 预览生产构建 |
+| `pnpm exec nuxi typecheck` | TypeScript 类型检查 |
+| `pnpm test:unit` | 运行 Vitest 单元测试 |
+| `pnpm test:e2e` | 运行 Playwright E2E 测试 |
+| `pnpm test:e2e:ui` | Playwright 测试 UI 模式 |
+
+运行单个单元测试文件：
+
+```bash
+pnpm test:unit -- app/utils/articleContentSource.test.ts
+```
+
+按测试名称过滤：
+
+```bash
+pnpm test:unit -- app/utils/articleContentSource.test.ts -t "prefers firecrawl"
+```
+
+### 后端命令（在 `backend-go/` 目录执行）
+
+| 命令 | 说明 |
+|------|------|
+| `go mod tidy` | 整理 Go 模块依赖 |
+| `go run cmd/server/main.go` | 启动后端服务 |
+| `go build ./...` | 编译所有包 |
+| `go test ./...` | 运行所有 Go 测试 |
+
+运行单个包的测试：
+
+```bash
+go test ./internal/domain/feeds -v
+```
+
+运行单个测试：
+
+```bash
+go test ./internal/domain/feeds -run TestBuildArticleFromEntryTracksOnlyRunnableStates -v
+```
+
+### 辅助工具命令
+
+| 命令 | 目录 | 说明 |
+|------|------|------|
+| `go run cmd/migrate-digest/main.go` | `backend-go/` | Digest 数据迁移 |
+| `go run cmd/test-digest/main.go` | `backend-go/` | Digest 测试入口 |
+| `go run cmd/migrate-tags/main.go` | `backend-go/` | 标签数据迁移 |
+| `go run cmd/migrate-db/main.go` | `backend-go/` | 数据库通用迁移 |
+
+### Python 集成测试（在 `tests/workflow/` 目录执行）
+
+```bash
+uv venv
+.venv\Scripts\activate    # Windows
+uv pip install -r requirements.txt
+pytest test_*.py -v
+```
+
+运行单个测试文件或测试用例：
+
+```bash
+pytest test_schedulers.py -v
+pytest test_schedulers.py::TestAutoRefreshScheduler::test_name -v
+```
+
+带覆盖率报告：
+
+```bash
+pytest --cov=. --cov-report=html
+```
+
+> **注意**：Python 集成测试需要 Go 后端运行在 `localhost:5000`。
+
+### Firecrawl 集成检查（在 `tests/firecrawl/` 目录执行）
+
+先启动后端，然后运行：
+
+```bash
+python test_firecrawl_integration.py
+```
+
+## 代码风格
+
+本项目没有配置 ESLint、Prettier 或 Biome 等格式化工具。代码风格通过以下方式维持：
+
+### 前端
+
+- TypeScript 全覆盖，新增代码使用 `<script setup lang="ts">`
+- 大部分前端文件不使用分号——保持与周围代码一致的风格
+- 源码必须保持 UTF-8 编码
+- 质量门禁：`pnpm exec nuxi typecheck` 和 `pnpm build`
+
+### 后端
+
+- 使用 `gofmt` 格式化 Go 代码
+- 导入分组：标准库 → 空行 → 第三方库 → 空行 → 本地包
+- JSON 字段使用 `snake_case` struct tag
+- 导出符号使用 `PascalCase`，私有符号使用 `lowerCamelCase`
+- 错误包装使用 `fmt.Errorf("...: %w", err)`
+
+## 目录结构约定
+
+### 前端目录约定
+
+| 目录 | 职责 |
+|------|------|
+| `front/app/api/` | HTTP 请求层（唯一网络请求边界） |
+| `front/app/features/` | 业务逻辑实现主体 |
+| `front/app/components/` | 通用可复用 UI 组件 |
+| `front/app/composables/` | 跨 feature 的通用 composable |
+| `front/app/stores/` | Pinia 状态管理 |
+| `front/app/types/` | 领域类型定义 |
+| `front/app/utils/` | 常量和纯工具函数 |
+| `front/app/pages/` | Nuxt 路由入口（只做挂载，不放业务逻辑） |
+
+### 前端状态约定
+
+- `useApiStore` 是主数据源，其他 store 从中派生
 - `useFeedsStore` 和 `useArticlesStore` 只做派生视图
-- 不再新增 `syncToLocalStores()` 一类的副本同步逻辑
+- 不新增 `syncToLocalStores()` 一类的副本同步逻辑
 
-### 代码约束
+### 前端数据映射约定
 
-- 新增前端代码默认使用 `<script setup lang="ts">`
-- 类型定义集中在 `front/app/types`
+- 后端数字 ID 在 API/store 边界转为字符串
+- `snake_case → camelCase` 映射集中在 API 或 store 层，不在组件里做
+- 字段重命名直接在类型和 store 映射层切换，不在组件里做兼容
 - API 返回值统一通过 `ApiResponse<T>` 包装
-- `snake_case -> camelCase` 的映射集中在 API 或 store 层
-- 字段重命名不在组件里做兼容，直接在类型和 store 映射层切换
 
-### 样式约束
+### 前端样式约定
 
-- 保持 editorial / magazine 主题
-- 不回退到蓝紫 SaaS 视觉
-- 尽量复用 `main.css` 里的主题变量
+- 保持 editorial / magazine 主题风格
+- 不回退到蓝紫色 SaaS 视觉
+- 复用 `app/assets/css/main.css` 里的主题变量
 - 对话框、卡片、状态标签优先沿用现有语义类
+- 图标使用 Iconify
 
-## 编码与文件写入
+### 后端目录约定
 
-- 前端源码必须使用 UTF-8
-- PowerShell 改写文件时要显式保持 UTF-8
-- 如果构建报 Vue / Vite 编码错误，先查文件编码，不要先怀疑业务逻辑
+| 目录 | 职责 |
+|------|------|
+| `cmd/server/` | 应用入口 |
+| `internal/app/` | HTTP 路由、中间件、运行时装配 |
+| `internal/domain/` | 业务域逻辑（feeds, articles, summaries, digest 等） |
+| `internal/domain/models/` | GORM 数据模型 |
+| `internal/jobs/` | 后台调度任务 |
+| `internal/platform/` | 共享基础设施（config, database, ws, ai, tracing） |
+| `configs/` | 配置文件 |
 
-## 提交前最低检查
+业务逻辑放在 `internal/domain/*`，HTTP 路由注册在 `internal/app/router.go`，不在 handler 中写复杂业务。
 
-前端改动至少执行其中一项：
+## 测试
 
-- `pnpm build`
-- `pnpm exec nuxi typecheck`
-- `pnpm test:unit`
+### 前端测试
 
-后端改动至少执行其中一项：
+- **框架**：Vitest（单元测试）、Playwright（E2E 测试）
+- **单元测试配置**：`front/vitest.config.ts`，使用 `happy-dom` 环境
+- **E2E 测试配置**：`front/playwright.config.ts`，针对 Chromium
+- **测试文件命名**：`*.test.ts`，与被测文件同目录
+- **运行全部单元测试**：`pnpm test:unit`
+- **运行 E2E 测试**：`pnpm test:e2e`
 
-- `go build ./...`
-- 对应范围的 Go 测试
+### 后端测试
 
-文档改动如果涉及功能、接口、结构变化，也要同步更新：
+- **框架**：Go 标准 `testing` 包，`testify` 用于部分断言
+- **测试文件命名**：`*_test.go`，与被测文件同目录
+- **偏好 table-driven 测试**
+- **运行全部测试**：`go test ./...`
+- **运行单个包**：`go test ./internal/domain/feeds -v`
+
+### 集成测试
+
+位于 `tests/workflow/`，使用 Python + pytest，验证后端调度器和完整工作流。这些测试需要后端运行在 `localhost:5000`。
+
+## 提交前检查
+
+### 前端改动
+
+至少执行以下其中一项：
+
+```bash
+pnpm build                    # 生产构建
+pnpm exec nuxi typecheck      # TypeScript 类型检查
+pnpm test:unit                # 单元测试
+```
+
+### 后端改动
+
+至少执行以下其中一项：
+
+```bash
+go build ./...                # 编译检查
+go test ./internal/domain/feeds -v   # 针对范围的单元测试
+go test ./...                 # 全量测试
+```
+
+### 文档改动
+
+如果改动涉及功能、接口或结构变化，需同步更新对应文档：
 
 - `docs/architecture/frontend.md`
-- `docs/architecture/frontend-components.md`
 - `docs/architecture/backend-go.md`
-- `docs/architecture/backend-runtime.md`
 - `docs/architecture/data-flow.md`
-- `docs/guides/frontend-features.md`
+- `docs/guides/content-processing.md`
 - `docs/operations/database.md`
+
+## Branch 规范与 PR 流程
+
+### Branch 规范
+
+本项目没有文档化的分支命名规范。主分支为 `main`。
+
+### PR 流程
+
+本项目没有预配置的 Pull Request 模板（无 `.github/PULL_REQUEST_TEMPLATE.md`）。提交 PR 时请确保：
+
+- 前端改动通过 `pnpm build` 或 `pnpm exec nuxi typecheck`
+- 后端改动通过 `go build ./...` 和对应的单元测试
+- 文档与代码变更保持同步
+- 在 PR 描述中说明改动范围和原因
+
+## 编码注意事项
+
+- 前端源码必须使用 **UTF-8** 编码
+- PowerShell 写文件时要显式保持 UTF-8
+- 如果构建报 Vue/Vite 编码错误，先检查文件编码，不要先怀疑业务逻辑
+- 后端 handler 应返回 `gin.H{"success": bool, "data"|"error"|"message": ...}` 格式
+- 不要添加新的 linter、formatter 或其他工具，除非明确要求
+
+## 相关文档
+
+- [Getting Started](../guides/getting-started.md) — 环境搭建与首次运行
+- [Configuration](../guides/configuration.md) — 环境变量、配置文件、AI 设置
+- [Architecture Overview](../architecture/overview.md) — 系统架构、组件关系、数据流
+- [Troubleshooting](troubleshooting.md) — 常见问题排查

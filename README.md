@@ -1,23 +1,21 @@
+<!-- generated-by: gsd-doc-writer -->
+
 # RSS Reader
 
-基于 Go + Nuxt 4 的 RSS 阅读器，三栏阅读界面，支持 AI 智能增强与内容汇总。
+基于 Go + Nuxt 4 的个人 RSS 阅读器，三栏阅读界面，支持 AI 智能增强、主题图谱与内容汇总。
 
 ![主界面截图](img/image-main.png)
 
 ## ✨ 核心功能
 
 ### 主题图谱
-- 你知道的，我一直想追踪一些事件的蛛丝马迹，比如事件之间的关联、事件的时间线发展（比如伊朗战争）
-- 互联网没有记忆，很多事情会随着时间沉淀在互联网的大海深处，打捞非常困难
-- 但是对于我们现在来说，使用AI去重、整理、打标签、梳理事件链路是一件相对来说有意义、并且有可行性的事情
-- 嘿，你不想有一天对着你的孩子说————看，这是你爸妈经历的人生，排除掉垃圾信息后的人生
+- 追踪事件之间的关联与时间线演变
+- AI 去重、打标签、梳理事件链路
+- 跨时间段分析、单事件演变、事件聚合
 
-还在开发中，目前仅简单的关联效果
-后续补充跨多时间段分析、单事件演变、事件聚合
-rss的垃圾信息处理也在开发路上了
 ![主题图谱](img/image-topic.png)
-![主题图谱](img/image-topic-timeline.png)
-![主题图谱](img/image-topic-article.png)
+![主题图谱时间线](img/image-topic-timeline.png)
+![主题图谱文章](img/image-topic-article.png)
 
 ### 📰 订阅管理
 
@@ -78,17 +76,30 @@ rss的垃圾信息处理也在开发路上了
 
 ## 🚀 快速开始
 
-### Docker Compose
+### 前置条件
+
+- [Node.js](https://nodejs.org/) >= 18
+- [pnpm](https://pnpm.io/) >= 10
+- [Go](https://go.dev/) >= 1.25
+- [Docker](https://www.docker.com/)（可选，用于容器化部署）
+
+### Docker Compose（推荐）
 
 ```bash
 cp .env.example .env
-docker compose up --build
+docker compose -f docker-compose.sqlite.yml up --build
 ```
 
-- 前端默认地址：`http://localhost:3000`
+- 前端默认地址：`http://localhost:3001`
 - 后端默认地址：`http://localhost:5000`
 - SQLite 文件默认落在仓库根目录 `data/rss_reader.db`
-- 如果拉 Go 模块或 pnpm 依赖较慢，可以在 `.env` 里补 `GOPROXY`、`NPM_CONFIG_REGISTRY` 或常规 `HTTP_PROXY` / `HTTPS_PROXY`
+- 如需自定义端口或代理，在 `.env` 中配置 `FRONT_PORT`、`BACKEND_PORT`、`GOPROXY`、`NPM_CONFIG_REGISTRY` 等
+
+如需 PostgreSQL（支持 pgvector 向量搜索），使用：
+
+```bash
+docker compose -f docker-compose.pgvector.yml up -d
+```
 
 ### 前端
 
@@ -98,6 +109,8 @@ pnpm install
 pnpm dev
 ```
 
+前端开发服务器默认运行在 `http://localhost:3001`。
+
 ### 后端
 
 ```bash
@@ -106,25 +119,31 @@ go mod tidy
 go run cmd/server/main.go
 ```
 
-### 访问地址
-
-- 前端本地开发：http://localhost:3000
-- 后端：http://localhost:5000
+后端默认运行在 `http://localhost:5000`。
 
 ## 📂 项目结构
 
 ```
 my-robot/
-├── front/        # Nuxt 4 前端
-├── backend-go/   # Go + Gin 后端
+├── front/        # Nuxt 4 前端（Vue 3 + TypeScript + Pinia）
+├── backend-go/   # Go + Gin 后端（GORM + SQLite）
 ├── docs/         # 项目文档
-└── tests/        # 测试材料
+├── tests/        # Python 集成测试
+├── docker/       # Docker 构建配置
+├── img/          # 截图和图片资源
+└── data/         # SQLite 数据库文件（运行时生成）
 ```
 
 ## 📚 文档
 
-- 项目总览：docs/architecture/overview.md
-- 前端架构：docs/architecture/frontend.md
-- 后端架构：docs/architecture/backend-go.md
-- 功能说明：docs/guides/frontend-features.md
-- 开发指南：docs/operations/development.md
+- [项目总览](docs/architecture/overview.md) — 架构与运行关系
+- [前端架构](docs/architecture/frontend.md) — Nuxt 4 前端结构
+- [后端架构](docs/architecture/backend-go.md) — Go 后端结构
+- [开发指南](docs/operations/development.md) — 本地开发、构建、测试
+- [内容处理](docs/guides/content-processing.md) — Firecrawl 与 AI 增强流程
+- [Digest 汇总](docs/guides/digest.md) — 日报/周报生成与推送
+- [主题图谱 API](docs/api/topic-graph.md) — 主题图谱接口说明
+
+## License
+
+[GNU General Public License v3.0](LICENSE)
