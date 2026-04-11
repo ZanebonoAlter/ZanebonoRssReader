@@ -11,6 +11,7 @@
 | [Go](https://go.dev/) | >= 1.25 | Required for the Gin backend |
 | [Docker](https://www.docker.com/) | — | Optional, for containerized deployment |
 | [Git](https://git-scm.com/) | — | For cloning the repository |
+| [Python](https://www.python.org/) | >= 3.10 | Optional, for running integration tests in `tests/workflow/` |
 
 No `.env` file is required for local development — the backend and frontend both have working defaults.
 
@@ -58,6 +59,14 @@ cp .env.example .env
 docker compose -f docker-compose.sqlite.yml up --build
 ```
 
+The `.env.example` file contains the minimal set of variables:
+
+```
+FRONT_PORT=3001
+BACKEND_PORT=5000
+SQLITE_DB_FILE=rss_reader.db
+```
+
 - Frontend: `http://localhost:3001`
 - Backend: `http://localhost:5000`
 - SQLite database persisted in `./data/rss_reader.db`
@@ -65,7 +74,7 @@ docker compose -f docker-compose.sqlite.yml up --build
 To use PostgreSQL with pgvector support instead:
 
 ```bash
-docker compose -f docker-compose.pgvector.yml up --build
+docker compose -f docker-compose.yml up --build
 ```
 
 Port mappings and other Docker settings can be customized via the `.env` file — see [Configuration](configuration.md) for the full list.
@@ -86,7 +95,7 @@ Once both services are running:
 If `http://localhost:5000` or `http://localhost:3001` is occupied, set the ports via environment variables:
 
 - Backend: set `SERVER_PORT` before running `go run cmd/server/main.go`.
-- Frontend: the Nuxt dev server port is configured in `nuxt.config.ts`.
+- Frontend: set the `NUXT_PUBLIC_API_BASE` environment variable if the backend runs on a non-default port.
 - Docker: set `FRONT_PORT` and `BACKEND_PORT` in `.env`.
 
 ### Backend fails to start with database errors
@@ -105,7 +114,7 @@ If `go mod tidy` is slow or fails, set a Go module proxy:
 go env -w GOPROXY=https://goproxy.cn,direct
 ```
 
-Similarly for npm, you can set a registry:
+Similarly for pnpm, you can set a registry:
 
 ```bash
 pnpm config set registry https://registry.npmmirror.com

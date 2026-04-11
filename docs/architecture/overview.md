@@ -74,7 +74,7 @@ Feed 管理（`backend-go/internal/domain/feeds/`）和文章管理（`backend-g
 
 ### 5. 阅读偏好
 
-行为追踪与偏好分析（`backend-go/internal/domain/preferences/`），前端通过 `useReadingTracker` composable 批量上报阅读事件。
+行为追踪与偏好分析（`backend-go/internal/domain/preferences/`），前端批量上报阅读事件，后端计算偏好分数并更新排序权重。
 
 ### 6. 链路追踪
 
@@ -116,15 +116,18 @@ my-robot/
 │   ├── app/
 │   │   ├── api/              # 唯一 HTTP 边界，领域 API 模块
 │   │   ├── assets/css/       # 全局主题与样式
-│   │   ├── components/       # 通用可复用组件
-│   │   ├── composables/      # 跨 feature 通用能力
+│   │   ├── components/       # 通用可复用组件（ai, article, category, common, dialog, feed, layout）
+│   │   ├── composables/      # 跨 feature 通用能力（useAI, useRssParser）
 │   │   ├── features/         # 业务实现主体（shell, articles, summaries, digest, feeds, preferences, topic-graph, ai）
 │   │   ├── pages/            # Nuxt 路由入口（index, digest/, topics）
-│   │   ├── plugins/          # Nuxt 插件
+│   │   ├── plugins/          # Nuxt 插件（dayjs）
 │   │   ├── stores/           # Pinia store（api, feeds, articles, preferences, aiAnalysis）
-│   │   ├── types/            # 领域类型定义
-│   │   └── utils/            # 常量和纯工具函数
-│   ├── nuxt.config.ts
+│   │   ├── types/            # 领域类型定义（api, article, category, feed, ai, common, reading_behavior, scheduler, timeline）
+│   │   └── utils/            # 常量和纯工具函数（api, date, text, storage, constants 等）
+│   ├── server/               # Nuxt 服务端工具
+│   ├── public/               # 静态资源
+│   ├── tests/                # 前端单元测试
+│   ├── nuxt.config.ts        # Nuxt 配置
 │   └── package.json
 ├── backend-go/               # Go + Gin 后端
 │   ├── cmd/                  # 启动入口（server, migrate-digest, migrate-tags, test-digest, migrate-db）
@@ -145,8 +148,8 @@ my-robot/
 ├── docker/                   # Docker 相关配置
 │   └── postgres/             # PostgreSQL 迁移支持
 ├── data/                     # 运行时数据（SQLite 数据库文件）
-├── docker-compose.sqlite.yml # Docker Compose（SQLite 模式）
-├── docker-compose.pgvector.yml # Docker Compose（PostgreSQL 模式）
+├── docker-compose.sqlite.yml # Docker Compose 主配置（SQLite 模式，前后端双容器）
+├── docker-compose.yml        # Docker Compose PostgreSQL 服务（pgvector 扩展）
 ├── .env.example              # 环境变量模板
 ├── AGENTS.md                 # 代理协作规则
 └── README.md                 # 项目简介与启动指南
@@ -169,7 +172,7 @@ my-robot/
 | AutoRefresh | 60 秒 | 扫描到点 feed 并触发 RSS 刷新 |
 | AutoSummary | 3600 秒 | 按 feed 聚合文章生成 AI 摘要 |
 | Firecrawl | 轮询 | 抓取待处理文章完整正文 |
-| ContentCompletion | 60 分钟 | 基于 Firecrawl 正文生成 AI 整理稿 |
+| ContentCompletion | 60 秒 | 基于 Firecrawl 正文生成 AI 整理稿 |
 | PreferenceUpdate | 1800 秒 | 更新阅读偏好分数 |
 | Digest | Cron | 按 daily/weekly 配置生成并分发 Digest |
 
@@ -196,12 +199,12 @@ my-robot/
 
 ## 部署方式
 
-系统通过 Docker Compose 部署，支持两种持久化模式：
+系统通过 Docker Compose 部署：
 
-- **SQLite 模式**（`docker-compose.sqlite.yml`）：默认方式，数据库文件落在 `data/rss_reader.db`
-- **PostgreSQL 模式**（`docker-compose.pgvector.yml`）：支持 pgvector 扩展
+- **SQLite 模式**（`docker-compose.sqlite.yml`）：默认方式，前后端双容器，数据库文件落在 `data/rss_reader.db`，通过 Docker volume 持久化
+- **PostgreSQL 模式**：`docker-compose.yml` 提供 pgvector 容器（`pgvector/pgvector:pg18-trixie`），可替代 SQLite 用于支持向量搜索
 
-默认端口：前端 `http://localhost:3000`，后端 `http://localhost:5000`。
+默认端口：前端 `http://localhost:3000`，后端 `http://localhost:5000`。开发模式下前端默认运行在 `http://localhost:3001`。
 
 ## 相关文档
 

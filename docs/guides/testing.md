@@ -204,53 +204,68 @@ cd front && pnpm exec nuxi typecheck && pnpm test:unit && pnpm build
 
 ```
 backend-go/
-├── internal/domain/feeds/service_test.go          # Feed parsing, article creation
-├── internal/domain/articles/handler_test.go       # Article HTTP handlers
+├── internal/domain/feeds/service_test.go                 # Feed parsing, article creation
+├── internal/domain/articles/handler_test.go              # Article HTTP handlers
 ├── internal/domain/summaries/summary_queue_test.go
 ├── internal/domain/summaries/ai_prompt_builder_test.go
-├── internal/domain/digest/generator_test.go       # Digest generation
+├── internal/domain/digest/generator_test.go              # Digest generation
 ├── internal/domain/digest/scheduler_test.go
 ├── internal/domain/digest/handler_test.go
 ├── internal/domain/digest/integration_test.go
 ├── internal/domain/digest/obsidian_test.go
 ├── internal/domain/digest/feishu_test.go
-├── internal/domain/contentprocessing/*_test.go    # Firecrawl job queue, completion
-├── internal/domain/topicextraction/*_test.go      # Topic tag extraction
+├── internal/domain/contentprocessing/firecrawl_job_queue_test.go
+├── internal/domain/contentprocessing/content_completion_service_test.go
+├── internal/domain/contentprocessing/content_completion_handler_test.go
+├── internal/domain/topicextraction/tag_job_queue_test.go
+├── internal/domain/topicextraction/metadata_test.go
+├── internal/domain/topicextraction/extractor_test.go
 ├── internal/domain/topicgraph/handler_test.go
 ├── internal/domain/topicanalysis/analysis_queue_test.go
 ├── internal/domain/preferences/handler_test.go
 ├── internal/domain/aiadmin/handler_test.go
-├── internal/jobs/*_test.go                        # Background job processors
-├── internal/platform/database/*_test.go           # DB and migration
+├── internal/jobs/auto_refresh_test.go                    # Background job processors
+├── internal/jobs/firecrawl_test.go
+├── internal/jobs/content_completion_test.go
+├── internal/jobs/preference_update_test.go
+├── internal/jobs/auto_summary_test.go
+├── internal/jobs/handler_test.go
+├── internal/platform/database/db_test.go                 # DB and migration
+├── internal/platform/database/datamigrate/writer_postgres_test.go
+├── internal/platform/database/datamigrate/verify_test.go
 ├── internal/platform/config/config_test.go
-├── internal/platform/airouter/*_test.go           # AI model routing
+├── internal/platform/airouter/router_test.go             # AI model routing
+├── internal/platform/airouter/store_test.go
+├── internal/platform/airouter/migration_test.go
 ├── internal/platform/opennotebook/client_test.go
 ├── internal/platform/aisettings/config_store_test.go
 └── cmd/migrate-db/main_test.go
 
 front/
-├── app/utils/api.test.ts                          # API client utilities
-├── app/utils/articleContentSource.test.ts         # Content source resolution
+├── app/utils/api.test.ts                                 # API client utilities
+├── app/utils/articleContentSource.test.ts                # Content source resolution
 ├── app/utils/articleContentGuards.test.ts
 ├── app/utils/schedulerMeta.test.ts
 ├── app/features/articles/components/ArticleTagList.test.ts
 ├── app/features/digest/components/digestLayout.test.ts
-├── app/features/topic-graph/utils/*.test.ts       # Topic graph utilities
+├── app/features/topic-graph/utils/buildDisplayedTopicGraph.test.ts
+├── app/features/topic-graph/utils/topicGraphCanvasLinks.test.ts
+├── app/features/topic-graph/utils/buildTopicGraphViewModel.test.ts
 ├── app/features/topic-graph/components/TopicTimeline.test.ts
 └── tests/e2e/
-    ├── baseline.spec.ts                           # Smoke tests
-    └── topic-graph.spec.ts                        # Topic graph E2E
+    ├── baseline.spec.ts                                  # Smoke tests
+    └── topic-graph.spec.ts                               # Topic graph E2E
 
 tests/
 ├── workflow/
-│   ├── test_schedulers.py                         # Scheduler unit tests
-│   ├── test_workflow_integration.py               # End-to-end workflow tests
-│   ├── test_error_handling.py                     # Error handling tests
-│   ├── utils/                                     # Shared test helpers
-│   │   ├── database.py                            # DatabaseHelper
-│   │   ├── api_client.py                          # APIClient
-│   │   └── mock_services.py                       # MockFirecrawl, MockAIService
-│   └── config.py                                  # Test configuration
+│   ├── test_schedulers.py                                # Scheduler unit tests
+│   ├── test_workflow_integration.py                      # End-to-end workflow tests
+│   ├── test_error_handling.py                            # Error handling tests
+│   ├── utils/                                            # Shared test helpers
+│   │   ├── database.py                                   # DatabaseHelper
+│   │   ├── api_client.py                                 # APIClient
+│   │   └── mock_services.py                              # MockFirecrawl, MockAIService
+│   └── config.py                                         # Test configuration
 └── firecrawl/
-    └── test_firecrawl_integration.py              # Firecrawl integration check
+    └── test_firecrawl_integration.py                     # Firecrawl integration check
 ```

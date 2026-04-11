@@ -8,7 +8,9 @@
 
 请先阅读以下文档完成本地环境配置：
 
-- [开发指南](docs/operations/development.md) — 环境要求、启动顺序、前后端联调约定
+- [快速上手](docs/guides/getting-started.md) — 前置条件与首次运行
+- [开发指南](docs/operations/development.md) — 本地开发、构建、测试流程
+- [配置说明](docs/guides/configuration.md) — 环境变量与配置项
 - [项目总览](docs/architecture/overview.md) — 架构与运行关系
 
 快速开始：

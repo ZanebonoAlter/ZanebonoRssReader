@@ -18,6 +18,18 @@ These environment variables override values from `backend-go/configs/config.yaml
 | `DATABASE_DSN` | No | `"rss_reader.db"` | Data source name. For SQLite: file path. For Postgres: connection string |
 | `CORS_ORIGINS` | No | `"http://localhost:3001,http://localhost:3000"` | Comma-separated list of allowed CORS origins |
 | `CRAWL_SERVICE_URL` | No | `"http://localhost:11235"` | URL for the crawl/content-completion service |
+| `REDIS_URL` | No | *(empty)* | Redis URL for the topic analysis job queue. When set, the queue uses Redis as a persistent backend; otherwise falls back to in-memory |
+
+### Topic Analysis Tuning
+
+These environment variables control the AI topic analysis module. They are read at runtime in `internal/domain/topicanalysis/ai_analysis.go` via `parseEnvInt` / `parseEnvFloat`.
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `TOPIC_ANALYSIS_MAX_TOKENS` | No | `2000` | Maximum tokens for topic analysis AI calls |
+| `TOPIC_ANALYSIS_TEMPERATURE` | No | `0.2` | Temperature for topic analysis AI calls |
+| `TOPIC_ANALYSIS_TIMEOUT_SECONDS` | No | `90` | Timeout in seconds for topic analysis AI calls |
+| `TOPIC_ANALYSIS_RETRY_COUNT` | No | `3` | Maximum retries for topic analysis AI calls |
 
 ### Frontend (Nuxt)
 
@@ -49,7 +61,7 @@ These variables are used by the Docker Compose files and have no effect outside 
 
 ## Config File Format
 
-The backend reads a YAML config file from `backend-go/configs/config.yaml`. This file is loaded via [Viper](https://github.com/spf13/viper) on startup.
+The backend reads a YAML config file from `backend-go/configs/config.yaml`. This file is loaded via [Viper](https://github.com/spf13/viper) on startup. The shipped `config.yaml` contains a PostgreSQL example, but the code defaults are SQLite — the app works without the file at all.
 
 ```yaml
 server:
@@ -123,6 +135,10 @@ The only scenario that causes a startup failure is an invalid or unreachable dat
 | Crawl service URL | `"http://localhost:11235"` | `runtime.go` fallback |
 | Tracing enabled | `true` | `tracing.DefaultConfig()` |
 | Tracing retention | `7` days | `tracing.DefaultConfig()` |
+| Topic analysis max tokens | `2000` | `ai_analysis.go` `parseEnvInt` |
+| Topic analysis temperature | `0.2` | `ai_analysis.go` `parseEnvFloat` |
+| Topic analysis timeout | `90` s | `ai_analysis.go` `parseEnvInt` |
+| Topic analysis retries | `3` | `ai_analysis.go` `parseEnvInt` |
 
 ### Frontend Defaults
 
@@ -156,10 +172,10 @@ The SQLite database file is persisted in `./data/` on the host.
 
 ### Docker (PostgreSQL + pgvector)
 
-Use `docker-compose.pgvector.yml` for PostgreSQL with the pgvector extension:
+Use `docker-compose.yml` for PostgreSQL with the pgvector extension:
 
 ```bash
-docker compose -f docker-compose.pgvector.yml up --build
+docker compose up -d
 ```
 
 Set `POSTGRES_PASSWORD` and other Postgres variables in your environment or a `.env` file for production. The database is persisted in `./data/` on the host. An init script at `docker/postgres/init/01-enable-pgvector.sql` enables the pgvector extension on first start.

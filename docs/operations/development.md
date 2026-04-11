@@ -36,18 +36,20 @@ Windows 下可分别启动前后端（无一键脚本），或使用 Docker Comp
 
 ### Docker Compose 启动
 
+使用 SQLite（推荐，开箱即用）：
+
 ```bash
 cp .env.example .env
 docker compose -f docker-compose.sqlite.yml up --build
 ```
 
-使用 PostgreSQL（支持 pgvector）：
+如需 PostgreSQL（支持 pgvector 向量搜索），单独启动数据库：
 
 ```bash
-docker compose -f docker-compose.pgvector.yml up --build
+docker compose up
 ```
 
-端口和数据目录可在 `.env` 中配置，详见 [Configuration](../guides/configuration.md)。
+这会启动一个 pgvector 容器，然后在本地运行后端并配置连接 PostgreSQL。端口和数据目录可在 `.env` 中配置，详见 [Configuration](../guides/configuration.md)。
 
 ### 配置说明
 
@@ -208,10 +210,10 @@ python test_firecrawl_integration.py
 |------|------|
 | `cmd/server/` | 应用入口 |
 | `internal/app/` | HTTP 路由、中间件、运行时装配 |
-| `internal/domain/` | 业务域逻辑（feeds, articles, summaries, digest 等） |
+| `internal/domain/` | 业务域逻辑（feeds, articles, summaries, digest, contentprocessing, categories, topicanalysis, topicextraction, topicgraph, topictypes, aiadmin, preferences 等） |
 | `internal/domain/models/` | GORM 数据模型 |
 | `internal/jobs/` | 后台调度任务 |
-| `internal/platform/` | 共享基础设施（config, database, ws, ai, tracing） |
+| `internal/platform/` | 共享基础设施（config, database, ws, ai, airouter, aisettings, middleware, tracing, opennotebook） |
 | `configs/` | 配置文件 |
 
 业务逻辑放在 `internal/domain/*`，HTTP 路由注册在 `internal/app/router.go`，不在 handler 中写复杂业务。

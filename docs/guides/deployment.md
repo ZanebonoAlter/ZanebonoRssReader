@@ -9,7 +9,7 @@ RSS Reader is designed for single-user, self-hosted deployment. The primary depl
 | Target | Config File | Notes |
 |--------|-------------|-------|
 | Docker Compose (SQLite) | `docker-compose.sqlite.yml` | Recommended for personal use. Backend + frontend, SQLite persistence via volume mount. |
-| Docker Compose (PostgreSQL + pgvector) | `docker-compose.pgvector.yml` | PostgreSQL with pgvector extension for vector search. Adds a `postgres` service. |
+| Docker Compose (PostgreSQL + pgvector) | `docker-compose.yml` | PostgreSQL with pgvector extension for vector search. Adds a `postgres` service. |
 
 No PaaS-specific config files (Vercel, Netlify, Fly.io, etc.) are present. The application is intended to run on a single host via Docker Compose.
 
@@ -39,9 +39,9 @@ docker compose -f docker-compose.sqlite.yml up --build -d
 This starts two services:
 
 - **backend**: Go API server on port 5000, SQLite data at `/app/data/` inside the container, mounted from `./data/` on the host.
-- **front**: Nuxt SSR server on port 3000 (mapped to host port 3001 by default), proxies API calls to the backend container internally via `http://backend:5000/api`.
+- **front**: Nuxt SSR server on internal port 3000, mapped to a host port via `${FRONT_PORT:-3000}` (the `.env.example` sets `FRONT_PORT=3001`). Proxies API calls to the backend container internally via `http://backend:5000/api`.
 
-After startup:
+After startup (with default `.env.example`):
 - Frontend: `http://localhost:3001`
 - Backend API: `http://localhost:5000/api`
 
@@ -50,7 +50,7 @@ After startup:
 ```bash
 cp .env.example .env
 # Edit .env to set POSTGRES_PASSWORD for production
-docker compose -f docker-compose.pgvector.yml up --build -d
+docker compose -f docker-compose.yml up --build -d
 ```
 
 This adds a third service:
@@ -124,7 +124,7 @@ cp ./data/rss_reader.db ./data/rss_reader.db.backup
 
 ### PostgreSQL
 
-Postgres data is mounted from `./data/` on the host (the `pgvector` compose file maps `./data/` to `/var/lib/postgresql`).
+Postgres data is mounted from `./data/` on the host (the `docker-compose.yml` maps `./data/` to `/var/lib/postgresql`).
 
 **Backup**:
 
@@ -158,11 +158,14 @@ If you tag releases, you can also `git checkout <tag>` instead of a commit hash.
 The backend includes built-in OpenTelemetry tracing with a custom SQLite span exporter. Traces are written to the `otel_spans` table in the same database as application data.
 
 Key tracing details:
-- **Library**: `go.opentelemetry.io/otel` with `otelgin` HTTP middleware
+- **Library**: `go.opentelemetry.io/otel` with `otelgin` HTTP middleware applied globally to all routes
 - **Exporter**: Custom `SQLiteSpanExporter` that writes spans to the `otel_spans` table
-- **Traced operations**: Feed refresh, Firecrawl scrape, content completion, AI summary queue, router chat
+- **HTTP middleware**: `otelgin.Middleware("rss-reader-backend")` captures request-level spans for all HTTP handlers
+- **Traced scheduler operations**: auto_refresh, firecrawl, content_completion, auto_summary, preference_update
+- **Traced domain operations**: AI summary queue batch processing, AI router chat
 - **Retention**: 7 days (configurable via `tracing.DefaultConfig()`)
-- **Query API**: The backend exposes trace query endpoints through `internal/platform/tracing/query.go` for listing traces, viewing spans, and computing latency percentiles
+- **Buffer**: 100 spans, flushed every 5 seconds
+- **Query API**: The backend exposes trace query endpoints through `internal/platform/tracing/handler.go` — recent traces, trace by ID, timeline view, stats, search by operation/status/duration, and OTLP JSON export
 
 No external monitoring services (Sentry, Datadog, New Relic) are configured. The built-in tracing provides basic observability for feed refresh cycles, AI operations, and HTTP request latency.
 
