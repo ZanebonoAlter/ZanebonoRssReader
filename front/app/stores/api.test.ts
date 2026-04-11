@@ -93,4 +93,32 @@ describe('useApiStore', () => {
     expect(store.allFeeds[0]?.unreadCount).toBe(1)
     expect(store.feeds[0]?.unreadCount).toBe(1)
   })
+
+  it('markAllAsRead refreshes all feed unread counts including uncategorized', async () => {
+    const store = await createStore()
+    const sidebarFeeds = [
+      createFeed({ id: '1', category: 'cat-1', unreadCount: 3 }),
+      createFeed({ id: '2', category: '', unreadCount: 4 }),
+    ]
+    const filteredFeeds = [
+      createFeed({ id: '1', category: 'cat-1', unreadCount: 3 }),
+      createFeed({ id: '2', category: '', unreadCount: 4 }),
+    ]
+
+    store.allFeeds = sidebarFeeds
+    store.feeds = filteredFeeds
+    store.articles = [
+      createArticle({ id: '1', feedId: '1', read: false }),
+      createArticle({ id: '2', feedId: '2', read: false }),
+    ]
+
+    bulkUpdateArticlesMock.mockResolvedValue({ success: true })
+
+    await store.markAllAsRead()
+
+    expect(bulkUpdateArticlesMock).toHaveBeenCalledWith({ read: true })
+    expect(store.articles.every(article => article.read)).toBe(true)
+    expect(store.allFeeds.map(feed => feed.unreadCount)).toEqual([0, 0])
+    expect(store.feeds.map(feed => feed.unreadCount)).toEqual([0, 0])
+  })
 })
