@@ -15,6 +15,10 @@ func TestTriggerNowStatusCode(t *testing.T) {
 	t.Run("content completion uses http status constant", func(t *testing.T) {
 		assertTriggerNowStatusCodeConstant(t, "content_completion.go")
 	})
+
+	t.Run("preference update uses http status constant", func(t *testing.T) {
+		assertTriggerNowStatusCodeConstant(t, "preference_update.go")
+	})
 }
 
 func assertTriggerNowStatusCodeConstant(t *testing.T, fileName string) {
