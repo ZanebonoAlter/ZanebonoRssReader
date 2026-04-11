@@ -3,6 +3,7 @@ package feeds
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -101,7 +102,7 @@ func (s *FeedService) RefreshFeed(ctx context.Context, feedID uint) (err error) 
 		}
 
 		if err := s.enqueueArticleProcessing(feed, article); err != nil {
-			return err
+			log.Printf("Error enqueueing processing for article %d (feed %d): %v", article.ID, feed.ID, err)
 		}
 
 		articlesAdded++
@@ -187,6 +188,9 @@ func (s *FeedService) buildArticleFromEntry(feed models.Feed, entry ParsedEntry)
 		if feed.ArticleSummaryEnabled {
 			article.SummaryStatus = "incomplete"
 		}
+	} else if feed.ArticleSummaryEnabled {
+		// STAT-03: 只开启摘要不开启Firecrawl时，设置为pending等待手动触发摘要
+		article.SummaryStatus = "pending"
 	}
 
 	return article
