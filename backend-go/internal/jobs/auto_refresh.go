@@ -402,6 +402,29 @@ func (s *AutoRefreshScheduler) initSchedulerTask() {
 
 func (s *AutoRefreshScheduler) resetStaleRefreshingFeeds(now time.Time) int {
 	cutoff := now.Add(-staleRefreshingTimeout)
+
+	// First, query the stale feeds to log details
+	var staleFeeds []models.Feed
+	if err := database.DB.Model(&models.Feed{}).
+		Where("refresh_status = ? AND last_refresh_at < ?", "refreshing", cutoff).
+		Find(&staleFeeds).Error; err != nil {
+		log.Printf("Error querying stale feeds: %v", err)
+		return 0
+	}
+
+	// Log each stale feed's details
+	for _, feed := range staleFeeds {
+		if feed.LastRefreshAt != nil {
+			staleDuration := now.Sub(*feed.LastRefreshAt)
+			log.Printf("[STALE] Feed %d stuck for %.1f minutes, resetting", feed.ID, staleDuration.Minutes())
+		}
+	}
+
+	// Then perform the batch update
+	if len(staleFeeds) == 0 {
+		return 0
+	}
+
 	result := database.DB.Model(&models.Feed{}).
 		Where("refresh_status = ? AND last_refresh_at < ?", "refreshing", cutoff).
 		Updates(map[string]interface{}{
