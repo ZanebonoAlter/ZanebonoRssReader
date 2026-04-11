@@ -111,6 +111,12 @@ Plans:
 
 **Requirements:** API-01, API-02, API-03, API-04
 
+**Plans:** 2 plans in 1 wave
+
+Plans:
+- [ ] 04-01-PLAN.md — API-01/02/03: 前端API调用统一 + 状态同步修复 (Wave 1)
+- [ ] 04-02-PLAN.md — API-04: 后端scheduler status API格式统一 (Wave 1)
+
 **Success Criteria:**
 1. 前端调用scheduler trigger使用统一的apiClient（查看scheduler.ts代码）
 2. 标记文章已读后，sidebar feed unread count正确减少
