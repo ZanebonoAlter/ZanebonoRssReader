@@ -7,3 +7,7 @@
 ## [2026-04-11] ingest | Phase 01 Plan 02 Firecrawl batch_id 返回
 - 新增 `phases/01-02-firecrawl-batch-id.md`
 - 记录 CONC-02 的 batch_id 返回契约与回归测试
+
+## [2026-04-11] ingest | Phase 01 Plan 03 Auto-refresh 完成通知
+- 新增 `phases/01-03-auto-refresh-completion.md`
+- 记录 `auto_refresh_complete` WebSocket 事件契约与广播顺序
