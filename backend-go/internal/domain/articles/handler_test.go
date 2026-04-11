@@ -171,3 +171,68 @@ func TestRetagArticleReturnsUpdatedTags(t *testing.T) {
 	require.Equal(t, article.ID, job.ArticleID)
 	require.True(t, job.ForceRetag)
 }
+
+func TestRetagArticleWithExistingLeasedJob(t *testing.T) {
+	setupArticlesHandlerTestDB(t)
+	gin.SetMode(gin.TestMode)
+
+	feed := models.Feed{Title: "Leased Feed", URL: "https://example.com/leased"}
+	require.NoError(t, database.DB.Create(&feed).Error)
+
+	article := models.Article{
+		FeedID:           feed.ID,
+		Title:            "Leased article",
+		Link:             "https://example.com/leased-article",
+		AIContentSummary: "Summary for leased test.",
+		CreatedAt:        time.Now(),
+	}
+	require.NoError(t, database.DB.Create(&article).Error)
+	require.NoError(t, database.DB.AutoMigrate(&models.TagJob{}))
+
+	// Simulate an existing leased job — worker has already claimed it.
+	now := time.Now()
+	leasedJob := models.TagJob{
+		ArticleID:            article.ID,
+		Status:               string(models.JobStatusLeased),
+		Priority:             0,
+		AttemptCount:         1,
+		MaxAttempts:          5,
+		AvailableAt:          now,
+		LeasedAt:             &now,
+		LeaseExpiresAt:       nil,
+		FeedNameSnapshot:     feed.Title,
+		CategoryNameSnapshot: "",
+		ForceRetag:           false,
+		Reason:               "auto",
+	}
+	require.NoError(t, database.DB.Create(&leasedJob).Error)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Params = gin.Params{{Key: "article_id", Value: fmt.Sprintf("%d", article.ID)}}
+	ctx.Request = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/articles/%d/tags", article.ID), http.NoBody)
+
+	RetagArticleHandler(ctx)
+
+	// Should succeed (200) and return the existing leased job, not a 500.
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	var body struct {
+		Success bool `json:"success"`
+		Data    struct {
+			JobID     uint   `json:"job_id"`
+			ArticleID uint   `json:"article_id"`
+			Status    string `json:"status"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
+	require.True(t, body.Success)
+	require.Equal(t, leasedJob.ID, body.Data.JobID)
+	require.Equal(t, article.ID, body.Data.ArticleID)
+	require.Equal(t, string(models.JobStatusLeased), body.Data.Status)
+
+	// Verify the existing job was updated with ForceRetag=true.
+	var updated models.TagJob
+	require.NoError(t, database.DB.First(&updated, leasedJob.ID).Error)
+	require.True(t, updated.ForceRetag)
+}

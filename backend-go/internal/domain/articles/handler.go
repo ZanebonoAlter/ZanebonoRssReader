@@ -224,8 +224,11 @@ func RetagArticleHandler(c *gin.Context) {
 		return
 	}
 
+	// Query both pending and leased: Enqueue may reuse an existing leased job,
+	// or a worker may claim the job between Enqueue and this query.
 	var tagJob models.TagJob
-	if err := database.DB.Where("article_id = ? AND status = ?", article.ID, string(models.JobStatusPending)).
+	if err := database.DB.Where("article_id = ? AND status IN ?", article.ID,
+		[]string{string(models.JobStatusPending), string(models.JobStatusLeased)}).
 		Order("id DESC").
 		First(&tagJob).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "failed to retrieve job_id"})
@@ -238,7 +241,7 @@ func RetagArticleHandler(c *gin.Context) {
 		"data": gin.H{
 			"job_id":     tagJob.ID,
 			"article_id": article.ID,
-			"status":     string(models.JobStatusPending),
+			"status":     tagJob.Status,
 		},
 	})
 }
