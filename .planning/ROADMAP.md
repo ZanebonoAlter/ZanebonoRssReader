@@ -28,6 +28,13 @@
 
 **Requirements:** CONC-01, CONC-02, CONC-03, CONC-04, CONC-05
 
+**Plans:** 3 plans in 2 waves
+
+Plans:
+- [ ] 01-01-PLAN.md — CONC-03: TriggerNow status_code consistency (Wave 1)
+- [ ] 01-02-PLAN.md — CONC-02: Firecrawl batch_id return (Wave 1)
+- [ ] 01-03-PLAN.md — CONC-01: Auto-refresh completion WebSocket (Wave 2)
+
 **Success Criteria:**
 1. 手动触发auto-refresh，观察日志确认所有feed刷新完成后再触发auto-summary
 2. 手动触发firecrawl，前端收到明确的执行结果（成功/失败/已运行）
@@ -37,8 +44,9 @@
 **Files affected:**
 - `backend-go/internal/jobs/auto_refresh.go`
 - `backend-go/internal/jobs/firecrawl.go`
-- `backend-go/internal/jobs/handler.go`
-- `backend-go/internal/domain/digest/scheduler.go`
+- `backend-go/internal/jobs/content_completion.go`
+- `backend-go/internal/jobs/preference_update.go`
+- `backend-go/internal/platform/ws/hub.go`
 
 ---
 
