@@ -81,6 +81,23 @@ type FirecrawlArticleProgress struct {
 	Error  string `json:"error,omitempty"`
 }
 
+// TagCompletedMessage 标签完成通知消息
+type TagCompletedMessage struct {
+	Type      string             `json:"type"` // "tag_completed"
+	ArticleID uint               `json:"article_id"`
+	JobID     uint               `json:"job_id"`
+	Tags      []TagCompletedItem `json:"tags"`
+}
+
+// TagCompletedItem 单个标签信息
+type TagCompletedItem struct {
+	Slug     string  `json:"slug"`
+	Label    string  `json:"label"`
+	Category string  `json:"category"`
+	Score    float64 `json:"score"`
+	Icon     string  `json:"icon"`
+}
+
 // AutoRefreshCompleteMessage Auto-refresh 完成通知消息
 type AutoRefreshCompleteMessage struct {
 	Type            string  `json:"type"`
