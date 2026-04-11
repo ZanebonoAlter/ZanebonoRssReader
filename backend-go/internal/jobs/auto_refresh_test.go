@@ -9,6 +9,7 @@ import (
 	"my-robot-backend/internal/app/runtimeinfo"
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/ws"
 )
 
 type stubAutoSummaryTrigger struct {
@@ -21,6 +22,42 @@ func (s stubAutoSummaryTrigger) TriggerNow() map[string]interface{} {
 	default:
 	}
 	return map[string]interface{}{"accepted": true, "started": true}
+}
+
+func TestAutoRefreshCompleteMessageJSON(t *testing.T) {
+	msg := ws.AutoRefreshCompleteMessage{
+		Type:            "auto_refresh_complete",
+		TriggeredFeeds:  3,
+		StaleResetFeeds: 1,
+		DurationSeconds: 2.5,
+		Timestamp:       "2026-04-11T04:20:00Z",
+	}
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("marshal auto refresh complete message: %v", err)
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("unmarshal auto refresh complete message: %v", err)
+	}
+
+	if payload["type"] != "auto_refresh_complete" {
+		t.Fatalf("type = %v, want auto_refresh_complete", payload["type"])
+	}
+	if payload["triggered_feeds"] != float64(3) {
+		t.Fatalf("triggered_feeds = %v, want 3", payload["triggered_feeds"])
+	}
+	if payload["stale_reset_feeds"] != float64(1) {
+		t.Fatalf("stale_reset_feeds = %v, want 1", payload["stale_reset_feeds"])
+	}
+	if payload["duration_seconds"] != 2.5 {
+		t.Fatalf("duration_seconds = %v, want 2.5", payload["duration_seconds"])
+	}
+	if payload["timestamp"] != "2026-04-11T04:20:00Z" {
+		t.Fatalf("timestamp = %v, want 2026-04-11T04:20:00Z", payload["timestamp"])
+	}
 }
 
 func TestAutoRefreshTriggerNowUpdatesSchedulerTaskAndFeedState(t *testing.T) {

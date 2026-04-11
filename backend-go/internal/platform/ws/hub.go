@@ -81,6 +81,15 @@ type FirecrawlArticleProgress struct {
 	Error  string `json:"error,omitempty"`
 }
 
+// AutoRefreshCompleteMessage Auto-refresh 完成通知消息
+type AutoRefreshCompleteMessage struct {
+	Type            string  `json:"type"`
+	TriggeredFeeds  int     `json:"triggered_feeds"`
+	StaleResetFeeds int     `json:"stale_reset_feeds"`
+	DurationSeconds float64 `json:"duration_seconds"`
+	Timestamp       string  `json:"timestamp"`
+}
+
 var hubInstance *Hub
 var hubOnce sync.Once
 
