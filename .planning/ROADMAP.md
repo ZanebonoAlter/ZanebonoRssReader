@@ -88,7 +88,7 @@ Plans:
 
 Plans:
 - [x] 03-01-PLAN.md — STAT-03: buildArticleFromEntry状态初始化修正 (Wave 1)
-- [ ] 03-02-PLAN.md — STAT-04/05: 阻塞文章恢复调度器 + 告警 (Wave 1)
+- [x] 03-02-PLAN.md — STAT-04/05: 阻塞文章恢复调度器 + 告警 (Wave 1)
 
 **Success Criteria:**
 1. 删除feed后，其文章firecrawl_status/summary_status显示"abandoned"
