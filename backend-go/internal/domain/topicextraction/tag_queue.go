@@ -79,18 +79,84 @@ func (q *TagQueue) Start() error {
 	}
 
 	q.stopChan = make(chan struct{})
-	q.queue = NewTagJobQueue(database.DB)
+	err := q.tryStart()
+	if err == nil {
+		log.Println("[INFO] Tag queue started successfully")
+		return nil
+	}
+
+	log.Printf("[WARN] TagQueue initial start failed: %v, retrying in background", err)
+	go q.backgroundRetry()
+
+	return nil // 立即返回，不阻塞应用启动
+}
+
+func (q *TagQueue) tryStart() error {
+	if database.DB == nil {
+		return fmt.Errorf("database is not initialized")
+	}
+
+	sqlDB, err := database.DB.DB()
+	if err != nil {
+		return fmt.Errorf("failed to get database connection: %w", err)
+	}
+	if err := sqlDB.Ping(); err != nil {
+		return fmt.Errorf("database ping failed: %w", err)
+	}
+
+	queue := NewTagJobQueue(database.DB)
+	if queue == nil {
+		return fmt.Errorf("failed to create tag job queue")
+	}
+
+	q.queue = queue
 	q.started = true
 	q.wg.Add(1)
 	go q.worker()
-
-	log.Println("Tag queue started successfully")
 	return nil
+}
+
+func (q *TagQueue) backgroundRetry() {
+	const (
+		maxRetries    = 10
+		retryInterval = 30 * time.Second
+	)
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		select {
+		case <-q.stopChan:
+			return
+		case <-time.After(retryInterval):
+		}
+
+		q.mu.Lock()
+		if q.started {
+			q.mu.Unlock()
+			return
+		}
+
+		err := q.tryStart()
+		if err == nil {
+			q.mu.Unlock()
+			log.Printf("[INFO] TagQueue started after %d retry attempts", attempt)
+			return
+		}
+
+		q.mu.Unlock()
+		log.Printf("[INFO] TagQueue retry attempt %d/%d: %v", attempt, maxRetries, err)
+	}
+
+	log.Printf("[ERROR] TagQueue failed to start after %d attempts, giving up", maxRetries)
 }
 
 func (q *TagQueue) Stop() {
 	q.mu.Lock()
 	if !q.started {
+		select {
+		case <-q.stopChan:
+		default:
+			close(q.stopChan)
+		}
 		q.mu.Unlock()
 		return
 	}
