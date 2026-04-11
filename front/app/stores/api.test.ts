@@ -30,8 +30,13 @@ vi.mock('~/api/summaries', () => ({
   useSummariesApi: () => ({}),
 }))
 
-globalThis.defineStore = defineStore
-globalThis.ref = ref
+const testGlobals = globalThis as typeof globalThis & {
+  defineStore: typeof defineStore
+  ref: typeof ref
+}
+
+testGlobals.defineStore = defineStore
+testGlobals.ref = ref
 
 async function createStore() {
   const { useApiStore } = await import('./api')

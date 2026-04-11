@@ -235,6 +235,21 @@ export const useApiStore = defineStore('api', () => {
     }
   }
 
+  function clearFeedUnreadCounts(matchFeed: (feed: RssFeed) => boolean) {
+    const seen = new Set<RssFeed>()
+
+    for (const collection of [feeds.value, allFeeds.value]) {
+      for (const feed of collection) {
+        if (!matchFeed(feed) || seen.has(feed)) {
+          continue
+        }
+
+        feed.unreadCount = 0
+        seen.add(feed)
+      }
+    }
+  }
+
   async function fetchArticles(filters: {
     page?: number
     per_page?: number
@@ -342,6 +357,16 @@ export const useApiStore = defineStore('api', () => {
           }
         }
       })
+
+      if (!options) {
+        clearFeedUnreadCounts(() => true)
+      } else if (options.feedId) {
+        clearFeedUnreadCounts(feed => feed.id === options.feedId)
+      } else if (options.categoryId) {
+        clearFeedUnreadCounts(feed => Number(feed.category) === options.categoryId)
+      } else if (options.uncategorized) {
+        clearFeedUnreadCounts(feed => !feed.category)
+      }
     }
 
     return response
