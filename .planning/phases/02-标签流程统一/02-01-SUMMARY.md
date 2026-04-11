@@ -111,9 +111,10 @@ None - no external service configuration required.
 - TAG-03 / TAG-04 已落地，后续前端只需消费新的异步响应与 `tag_completed` 事件。
 - 若需要更完整的手动验证，可在本地运行后调用 `/api/articles/:id/tags` 并观察 `tag_jobs` 与 WebSocket 消息。
 
-## Self-Check: PENDING
+## Self-Check: PASSED
 
-将在最终文档提交后补充文件与提交校验结果。
+- 已确认以下文件存在：`02-01-SUMMARY.md`、`wiki/phases/02-01-tag-flow-unification.md`、`docs/api/articles.md`、`backend-go/internal/platform/ws/hub_test.go`
+- 已确认以下提交可在 `git log --oneline --all` 中找到：`7404c23`、`3a82e36`、`c4762cb`、`372170b`、`efb70e4`、`d4d7369`、`ade8972`
 
 ---
 *Phase: 02-标签流程统一*
