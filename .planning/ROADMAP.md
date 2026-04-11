@@ -31,9 +31,9 @@
 **Plans:** 3 plans in 2 waves
 
 Plans:
-- [ ] 01-01-PLAN.md — CONC-03: TriggerNow status_code consistency (Wave 1)
-- [ ] 01-02-PLAN.md — CONC-02: Firecrawl batch_id return (Wave 1)
-- [ ] 01-03-PLAN.md — CONC-01: Auto-refresh completion WebSocket (Wave 2)
+- [x] 01-01-PLAN.md — CONC-03: TriggerNow status_code consistency (Wave 1)
+- [x] 01-02-PLAN.md — CONC-02: Firecrawl batch_id return (Wave 1)
+- [x] 01-03-PLAN.md — CONC-01: Auto-refresh completion WebSocket (Wave 2)
 
 **Success Criteria:**
 1. 手动触发auto-refresh，观察日志确认所有feed刷新完成后再触发auto-summary
@@ -55,6 +55,11 @@ Plans:
 **Goal:** 所有标签提取走统一队列，无绕过
 
 **Requirements:** TAG-01, TAG-02, TAG-03, TAG-04, TAG-05, TAG-06
+
+**Plans:** 1 plan in 1 wave
+
+Plans:
+- [ ] 02-01-PLAN.md — TAG-03/04: 异步API + 启动重试机制 (Wave 1)
 
 **Success Criteria:**
 1. Firecrawl完成后，文章标签通过TagJobQueue生成（查看tag_jobs表记录）
