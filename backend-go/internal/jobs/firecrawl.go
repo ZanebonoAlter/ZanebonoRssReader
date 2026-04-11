@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -64,7 +65,7 @@ func (s *FirecrawlScheduler) TriggerNow() map[string]interface{} {
 			"started":     false,
 			"reason":      "already_running",
 			"message":     "Firecrawl 正在执行中，稍后再试。",
-			"status_code": 409,
+			"status_code": http.StatusConflict,
 		}
 	}
 
