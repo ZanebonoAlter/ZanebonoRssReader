@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -102,7 +103,7 @@ func (s *ContentCompletionScheduler) TriggerNow() map[string]interface{} {
 			"started":     false,
 			"reason":      "already_running",
 			"message":     "内容补全正在执行中，稍后再试。",
-			"status_code": 409,
+			"status_code": http.StatusConflict,
 		}
 	}
 
