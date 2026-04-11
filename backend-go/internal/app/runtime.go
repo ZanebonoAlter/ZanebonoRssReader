@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"my-robot-backend/internal/app/runtimeinfo"
 	"my-robot-backend/internal/domain/contentprocessing"
@@ -14,12 +15,13 @@ import (
 )
 
 type Runtime struct {
-	AutoRefresh       *jobs.AutoRefreshScheduler
-	AutoSummary       *jobs.AutoSummaryScheduler
-	PreferenceUpdate  *jobs.PreferenceUpdateScheduler
-	ContentCompletion *jobs.ContentCompletionScheduler
-	Firecrawl         *jobs.FirecrawlScheduler
-	Digest            *digest.DigestScheduler
+	AutoRefresh            *jobs.AutoRefreshScheduler
+	AutoSummary            *jobs.AutoSummaryScheduler
+	PreferenceUpdate       *jobs.PreferenceUpdateScheduler
+	ContentCompletion      *jobs.ContentCompletionScheduler
+	Firecrawl              *jobs.FirecrawlScheduler
+	Digest                 *digest.DigestScheduler
+	BlockedArticleRecovery *jobs.BlockedArticleRecoveryScheduler
 }
 
 func StartRuntime() *Runtime {
@@ -85,6 +87,14 @@ func StartRuntime() *Runtime {
 		log.Println("Digest scheduler started successfully")
 	}
 
+	// STAT-04: Blocked article recovery scheduler (hourly)
+	runtime.BlockedArticleRecovery = jobs.NewBlockedArticleRecoveryScheduler(3600)
+	if err := runtime.BlockedArticleRecovery.Start(); err != nil {
+		log.Printf("Warning: Failed to start blocked article recovery scheduler: %v", err)
+	} else {
+		log.Println("Blocked article recovery scheduler started successfully")
+	}
+
 	runtimeinfo.AutoRefreshSchedulerInterface = runtime.AutoRefresh
 	runtimeinfo.AutoSummarySchedulerInterface = runtime.AutoSummary
 	runtimeinfo.PreferenceUpdateSchedulerInterface = runtime.PreferenceUpdate
@@ -103,41 +113,55 @@ func SetupGracefulShutdown(runtime *Runtime) {
 		sig := <-sigChan
 		log.Printf("Received signal: %v, shutting down gracefully...", sig)
 
-		// Stop tag queue first to ensure all pending tag tasks are processed
-		log.Println("Stopping tag queue...")
-		topicextraction.GetTagQueue().Stop()
+		done := make(chan struct{})
+		go func() {
+			log.Println("Stopping tag queue...")
+			topicextraction.GetTagQueue().Stop()
 
-		if runtime.AutoRefresh != nil {
-			log.Println("Stopping auto-refresh scheduler...")
-			runtime.AutoRefresh.Stop()
+			if runtime.AutoRefresh != nil {
+				log.Println("Stopping auto-refresh scheduler...")
+				runtime.AutoRefresh.Stop()
+			}
+
+			if runtime.AutoSummary != nil {
+				log.Println("Stopping auto-summary scheduler...")
+				runtime.AutoSummary.Stop()
+			}
+
+			if runtime.PreferenceUpdate != nil {
+				log.Println("Stopping preference update scheduler...")
+				runtime.PreferenceUpdate.Stop()
+			}
+
+			if runtime.ContentCompletion != nil {
+				log.Println("Stopping content completion scheduler...")
+				runtime.ContentCompletion.Stop()
+			}
+
+			if runtime.Firecrawl != nil {
+				log.Println("Stopping firecrawl scheduler...")
+				runtime.Firecrawl.Stop()
+			}
+
+			if runtime.Digest != nil {
+				log.Println("Stopping digest scheduler...")
+				runtime.Digest.Stop()
+			}
+
+			if runtime.BlockedArticleRecovery != nil {
+				log.Println("Stopping blocked article recovery scheduler...")
+				runtime.BlockedArticleRecovery.Stop()
+			}
+
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			log.Println("Graceful shutdown completed")
+		case <-time.After(30 * time.Second):
+			log.Println("Graceful shutdown timed out after 30s, forcing exit")
 		}
-
-		if runtime.AutoSummary != nil {
-			log.Println("Stopping auto-summary scheduler...")
-			runtime.AutoSummary.Stop()
-		}
-
-		if runtime.PreferenceUpdate != nil {
-			log.Println("Stopping preference update scheduler...")
-			runtime.PreferenceUpdate.Stop()
-		}
-
-		if runtime.ContentCompletion != nil {
-			log.Println("Stopping content completion scheduler...")
-			runtime.ContentCompletion.Stop()
-		}
-
-		if runtime.Firecrawl != nil {
-			log.Println("Stopping firecrawl scheduler...")
-			runtime.Firecrawl.Stop()
-		}
-
-		if runtime.Digest != nil {
-			log.Println("Stopping digest scheduler...")
-			runtime.Digest.Stop()
-		}
-
-		log.Println("Graceful shutdown completed")
 		os.Exit(0)
 	}()
 }
