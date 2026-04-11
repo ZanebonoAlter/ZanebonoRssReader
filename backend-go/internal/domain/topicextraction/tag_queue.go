@@ -233,6 +233,7 @@ func (q *TagQueue) processJob(job models.TagJob) {
 			msg := fmt.Sprintf("panic: %v", r)
 			log.Printf("[ERROR] Panic in tag job for article %d: %v", job.ArticleID, r)
 			_ = q.queue.MarkFailed(job, msg, q.failureBackoff(job.AttemptCount))
+			q.broadcastTagFailed(job.ID, job.ArticleID, msg)
 		}
 	}()
 
@@ -240,6 +241,7 @@ func (q *TagQueue) processJob(job models.TagJob) {
 	if err := database.DB.First(&article, job.ArticleID).Error; err != nil {
 		log.Printf("[WARN] Failed to fetch article %d for tagging: %v", job.ArticleID, err)
 		_ = q.queue.MarkFailed(job, err.Error(), q.failureBackoff(job.AttemptCount))
+		q.broadcastTagFailed(job.ID, job.ArticleID, err.Error())
 		return
 	}
 
@@ -252,6 +254,7 @@ func (q *TagQueue) processJob(job models.TagJob) {
 	if err != nil {
 		log.Printf("[WARN] Failed to tag article %d: %v", job.ArticleID, err)
 		_ = q.queue.MarkFailed(job, err.Error(), q.failureBackoff(job.AttemptCount))
+		q.broadcastTagFailed(job.ID, job.ArticleID, err.Error())
 		return
 	}
 
@@ -304,6 +307,24 @@ func (q *TagQueue) broadcastTagCompleted(jobID, articleID uint, tags []topictype
 	data, err := json.Marshal(msg)
 	if err != nil {
 		log.Printf("[WARN] Failed to marshal tag_completed message: %v", err)
+		return
+	}
+
+	hub.BroadcastRaw(data)
+}
+
+func (q *TagQueue) broadcastTagFailed(jobID, articleID uint, errMsg string) {
+	hub := ws.GetHub()
+	msg := ws.TagFailedMessage{
+		Type:      "tag_failed",
+		ArticleID: articleID,
+		JobID:     jobID,
+		Error:     errMsg,
+	}
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("[WARN] Failed to marshal tag_failed message: %v", err)
 		return
 	}
 

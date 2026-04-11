@@ -98,6 +98,14 @@ type TagCompletedItem struct {
 	Icon     string  `json:"icon"`
 }
 
+// TagFailedMessage 标签任务失败通知消息
+type TagFailedMessage struct {
+	Type      string `json:"type"` // "tag_failed"
+	ArticleID uint   `json:"article_id"`
+	JobID     uint   `json:"job_id"`
+	Error     string `json:"error"`
+}
+
 // AutoRefreshCompleteMessage Auto-refresh 完成通知消息
 type AutoRefreshCompleteMessage struct {
 	Type            string  `json:"type"`
