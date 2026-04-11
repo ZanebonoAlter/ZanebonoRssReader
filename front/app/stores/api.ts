@@ -221,6 +221,20 @@ export const useApiStore = defineStore('api', () => {
   const articles = ref<Article[]>([])
   const totalArticles = ref(0)
 
+  function syncFeedUnreadCount(feedId: string, updateCount: (current: number) => number) {
+    const seen = new Set<RssFeed>()
+
+    for (const collection of [feeds.value, allFeeds.value]) {
+      const feed = collection.find(item => item.id === feedId)
+      if (!feed || seen.has(feed)) {
+        continue
+      }
+
+      feed.unreadCount = updateCount(feed.unreadCount ?? 0)
+      seen.add(feed)
+    }
+  }
+
   async function fetchArticles(filters: {
     page?: number
     per_page?: number
@@ -263,6 +277,7 @@ export const useApiStore = defineStore('api', () => {
   ) {
     const articlesApi = useArticlesApi()
     const article = articles.value.find((a) => a.id === id)
+    const previousRead = article?.read
     const wasFavorite = article?.favorite
 
     const response = await articlesApi.updateArticle(Number(id), data)
@@ -272,12 +287,8 @@ export const useApiStore = defineStore('api', () => {
         Object.assign(article, data)
       }
 
-      if (data.read === true && article) {
-        const sourceFeeds = allFeeds.value.length > 0 ? allFeeds.value : feeds.value
-        const feed = sourceFeeds.find((f) => f.id === article.feedId)
-        if (feed && feed.unreadCount && feed.unreadCount > 0) {
-          feed.unreadCount--
-        }
+      if (article && data.read !== undefined && previousRead !== undefined && previousRead !== data.read) {
+        syncFeedUnreadCount(article.feedId, current => (data.read ? Math.max(0, current - 1) : current + 1))
       }
 
       if (data.favorite !== undefined && wasFavorite !== undefined && article) {
