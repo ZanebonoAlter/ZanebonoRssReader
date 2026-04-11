@@ -15,6 +15,7 @@ import (
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/platform/database"
 	"my-robot-backend/internal/platform/tracing"
+	"my-robot-backend/internal/platform/ws"
 )
 
 type AutoRefreshScheduler struct {
@@ -195,7 +196,7 @@ func (s *AutoRefreshScheduler) runRefreshCycle(triggerSource string) (*AutoRefre
 	}
 
 	if summary.TriggeredFeeds > 0 {
-		go s.triggerAutoSummaryAfterRefreshes(&refreshWG)
+		go s.triggerAutoSummaryAfterRefreshes(&refreshWG, startTime, summary)
 	}
 
 	summary.FinishedAt = time.Now().Format(time.RFC3339)
@@ -245,8 +246,23 @@ func (s *AutoRefreshScheduler) resetFeedStatus(feedID uint, errMsg string) {
 	})
 }
 
-func (s *AutoRefreshScheduler) triggerAutoSummaryAfterRefreshes(wg *sync.WaitGroup) {
+func (s *AutoRefreshScheduler) triggerAutoSummaryAfterRefreshes(wg *sync.WaitGroup, startTime time.Time, summary *AutoRefreshRunSummary) {
 	wg.Wait()
+
+	duration := time.Since(startTime).Seconds()
+	msg := ws.AutoRefreshCompleteMessage{
+		Type:            "auto_refresh_complete",
+		TriggeredFeeds:  summary.TriggeredFeeds,
+		StaleResetFeeds: summary.StaleResetFeeds,
+		DurationSeconds: duration,
+		Timestamp:       time.Now().Format(time.RFC3339),
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("Auto-refresh completion message marshal failed: %v", err)
+	} else {
+		ws.GetHub().BroadcastRaw(data)
+	}
 
 	if runtimeinfo.AutoSummarySchedulerInterface == nil {
 		return

@@ -3,6 +3,9 @@ package jobs
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -57,6 +60,50 @@ func TestAutoRefreshCompleteMessageJSON(t *testing.T) {
 	}
 	if payload["timestamp"] != "2026-04-11T04:20:00Z" {
 		t.Fatalf("timestamp = %v, want 2026-04-11T04:20:00Z", payload["timestamp"])
+	}
+}
+
+func TestAutoRefreshCompleteBroadcastSource(t *testing.T) {
+	sourcePath := filepath.Join("auto_refresh.go")
+	content, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatalf("read %s: %v", sourcePath, err)
+	}
+
+	source := string(content)
+
+	if !strings.Contains(source, `func (s *AutoRefreshScheduler) triggerAutoSummaryAfterRefreshes(wg *sync.WaitGroup, startTime time.Time, summary *AutoRefreshRunSummary)`) {
+		t.Fatalf("triggerAutoSummaryAfterRefreshes should accept startTime and summary")
+	}
+	if !strings.Contains(source, `go s.triggerAutoSummaryAfterRefreshes(&refreshWG, startTime, summary)`) {
+		t.Fatalf("runRefreshCycle should pass startTime and summary into triggerAutoSummaryAfterRefreshes")
+	}
+	if !strings.Contains(source, `msg := ws.AutoRefreshCompleteMessage{`) {
+		t.Fatalf("triggerAutoSummaryAfterRefreshes should build ws.AutoRefreshCompleteMessage")
+	}
+	if !strings.Contains(source, `Type:            "auto_refresh_complete"`) {
+		t.Fatalf("completion broadcast should use auto_refresh_complete type")
+	}
+	if !strings.Contains(source, `TriggeredFeeds:  summary.TriggeredFeeds`) {
+		t.Fatalf("completion broadcast should include triggered feed count")
+	}
+	if !strings.Contains(source, `StaleResetFeeds: summary.StaleResetFeeds`) {
+		t.Fatalf("completion broadcast should include stale reset feed count")
+	}
+	if !strings.Contains(source, `DurationSeconds: duration`) {
+		t.Fatalf("completion broadcast should include duration seconds")
+	}
+	if !strings.Contains(source, `Timestamp:       time.Now().Format(time.RFC3339)`) {
+		t.Fatalf("completion broadcast should include RFC3339 timestamp")
+	}
+	if !strings.Contains(source, `ws.GetHub().BroadcastRaw(data)`) {
+		t.Fatalf("triggerAutoSummaryAfterRefreshes should broadcast raw websocket payload")
+	}
+
+	broadcastIndex := strings.Index(source, `ws.GetHub().BroadcastRaw(data)`)
+	triggerIndex := strings.Index(source, `triggerable.TriggerNow()`)
+	if broadcastIndex == -1 || triggerIndex == -1 || broadcastIndex > triggerIndex {
+		t.Fatalf("completion broadcast should happen before auto summary trigger")
 	}
 }
 
