@@ -52,8 +52,14 @@ func TestFirecrawlTriggerNowBatchID(t *testing.T) {
 		t.Fatalf("unexpected batchID generation location")
 	}
 
-	if strings.Count(source, `time.Now().Format("20060102150405")`) != 1 {
-		t.Fatalf("batchID should be generated exactly once in firecrawl.go")
+	runCrawlCycleBodyStart := strings.Index(source, `func (s *FirecrawlScheduler) runCrawlCycle(batchID string) {`)
+	if runCrawlCycleBodyStart == -1 {
+		t.Fatalf("runCrawlCycle should accept batchID parameter")
+	}
+
+	runCrawlCycleBody := source[runCrawlCycleBodyStart:]
+	if strings.Contains(runCrawlCycleBody, `time.Now().Format("20060102150405")`) {
+		t.Fatalf("runCrawlCycle should use the passed batchID instead of generating a new one")
 	}
 
 	if !strings.Contains(source, `s.broadcastProgress(batchID, "processing"`) {

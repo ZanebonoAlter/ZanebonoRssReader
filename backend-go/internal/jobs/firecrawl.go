@@ -69,11 +69,14 @@ func (s *FirecrawlScheduler) TriggerNow() map[string]interface{} {
 		}
 	}
 
-	go s.runCrawlCycle()
+	batchID := time.Now().Format("20060102150405")
+
+	go s.runCrawlCycle(batchID)
 	return map[string]interface{}{
 		"accepted": true,
 		"started":  true,
 		"message":  "Firecrawl scheduler triggered",
+		"batch_id": batchID,
 	}
 }
 
@@ -119,11 +122,12 @@ func (s *FirecrawlScheduler) checkAndCrawl() {
 			return
 		}
 
-		s.runCrawlCycle()
+		batchID := time.Now().Format("20060102150405")
+		s.runCrawlCycle(batchID)
 	})
 }
 
-func (s *FirecrawlScheduler) runCrawlCycle() {
+func (s *FirecrawlScheduler) runCrawlCycle(batchID string) {
 	defer s.executionMutex.Unlock()
 
 	startTime := time.Now()
@@ -161,7 +165,6 @@ func (s *FirecrawlScheduler) runCrawlCycle() {
 		return
 	}
 
-	batchID := time.Now().Format("20060102150405")
 	s.broadcastProgress(batchID, "processing", len(jobs), 0, 0, nil)
 
 	atomic.StoreInt32(&s.queueSize, int32(len(jobs)))
