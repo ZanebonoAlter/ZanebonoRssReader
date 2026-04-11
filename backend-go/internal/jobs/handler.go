@@ -16,6 +16,14 @@ type UpdateSchedulerIntervalRequest struct {
 	Interval int `json:"interval" binding:"required"`
 }
 
+type SchedulerStatusResponse struct {
+	Name          string `json:"name"`
+	Status        string `json:"status"`
+	CheckInterval int64  `json:"check_interval"`
+	NextRun       int64  `json:"next_run"`
+	IsExecuting   bool   `json:"is_executing"`
+}
+
 type schedulerDescriptor struct {
 	Name        string
 	Aliases     []string
