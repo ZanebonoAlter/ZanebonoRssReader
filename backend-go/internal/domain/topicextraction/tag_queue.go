@@ -1,14 +1,20 @@
 package topicextraction
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"sync"
 	"time"
 
 	"my-robot-backend/internal/domain/models"
+	"my-robot-backend/internal/domain/topictypes"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/ws"
 )
+
+const drainTimeout = 10 * time.Second
 
 type TagQueue struct {
 	stopChan     chan struct{}
@@ -114,7 +120,17 @@ func (q *TagQueue) worker() {
 }
 
 func (q *TagQueue) drainRemaining() {
+	ctx, cancel := context.WithTimeout(context.Background(), drainTimeout)
+	defer cancel()
+
 	for {
+		select {
+		case <-ctx.Done():
+			log.Printf("[INFO] Tag queue drain timed out after %v, remaining jobs will be processed on next start", drainTimeout)
+			return
+		default:
+		}
+
 		jobs, err := q.queue.Claim(q.batchSize, q.lease)
 		if err != nil {
 			log.Printf("[WARN] Failed to claim tag jobs during drain: %v", err)
@@ -124,6 +140,10 @@ func (q *TagQueue) drainRemaining() {
 			return
 		}
 		for _, job := range jobs {
+			if ctx.Err() != nil {
+				log.Printf("[INFO] Tag queue drain timed out, %d job(s) remaining for next start", len(jobs))
+				return
+			}
 			q.processJob(job)
 		}
 	}
@@ -175,6 +195,13 @@ func (q *TagQueue) processJob(job models.TagJob) {
 	}
 
 	log.Printf("[DEBUG] Successfully tagged article %d", job.ArticleID)
+	tags, broadcastErr := GetArticleTags(job.ArticleID)
+	if broadcastErr != nil {
+		log.Printf("[WARN] Failed to fetch tags for WebSocket broadcast: %v", broadcastErr)
+		return
+	}
+
+	q.broadcastTagCompleted(job.ID, job.ArticleID, tags)
 }
 
 func (q *TagQueue) failureBackoff(attempt int) time.Duration {
@@ -186,6 +213,35 @@ func (q *TagQueue) failureBackoff(attempt int) time.Duration {
 		return 30 * time.Minute
 	}
 	return backoff
+}
+
+func (q *TagQueue) broadcastTagCompleted(jobID, articleID uint, tags []topictypes.TopicTag) {
+	hub := ws.GetHub()
+	tagItems := make([]ws.TagCompletedItem, len(tags))
+	for i, tag := range tags {
+		tagItems[i] = ws.TagCompletedItem{
+			Slug:     tag.Slug,
+			Label:    tag.Label,
+			Category: tag.Category,
+			Score:    tag.Score,
+			Icon:     tag.Icon,
+		}
+	}
+
+	msg := ws.TagCompletedMessage{
+		Type:      "tag_completed",
+		ArticleID: articleID,
+		JobID:     jobID,
+		Tags:      tagItems,
+	}
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("[WARN] Failed to marshal tag_completed message: %v", err)
+		return
+	}
+
+	hub.BroadcastRaw(data)
 }
 
 func min(a, b int) int {
