@@ -213,29 +213,32 @@ func RetagArticleHandler(c *gin.Context) {
 		return
 	}
 
-	if err := topicextraction.RetagArticle(&article, feed.Title, ""); err != nil {
+	queue := topicextraction.NewTagJobQueue(database.DB)
+	if err := queue.Enqueue(topicextraction.TagJobRequest{
+		ArticleID:  article.ID,
+		FeedName:   feed.Title,
+		ForceRetag: true,
+		Reason:     "manual_api_trigger",
+	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 		return
 	}
 
-	refreshedArticle, err := loadArticleWithTagCount(article.ID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
-		return
-	}
-
-	tags, err := topicextraction.GetArticleTags(article.ID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+	var tagJob models.TagJob
+	if err := database.DB.Where("article_id = ? AND status = ?", article.ID, string(models.JobStatusPending)).
+		Order("id DESC").
+		First(&tagJob).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "failed to retrieve job_id"})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"message": "文章标签已更新",
+		"message": "标签任务已提交，请稍后刷新查看结果",
 		"data": gin.H{
-			"tag_count": refreshedArticle.TagCount,
-			"tags":      tags,
+			"job_id":     tagJob.ID,
+			"article_id": article.ID,
+			"status":     string(models.JobStatusPending),
 		},
 	})
 }
