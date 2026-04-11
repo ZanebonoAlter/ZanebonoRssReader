@@ -11,6 +11,10 @@ func TestTriggerNowStatusCode(t *testing.T) {
 	t.Run("firecrawl uses http status constant", func(t *testing.T) {
 		assertTriggerNowStatusCodeConstant(t, "firecrawl.go")
 	})
+
+	t.Run("content completion uses http status constant", func(t *testing.T) {
+		assertTriggerNowStatusCodeConstant(t, "content_completion.go")
+	})
 }
 
 func assertTriggerNowStatusCodeConstant(t *testing.T, fileName string) {
