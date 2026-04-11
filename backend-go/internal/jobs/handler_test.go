@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"testing"
 
@@ -238,4 +239,71 @@ func TestGetTasksStatusAggregatesRuntimeWork(t *testing.T) {
 
 	tasks := data["tasks"].([]any)
 	require.Len(t, tasks, 2)
+}
+
+func TestGetSchedulerStatusReturnsUnifiedResponseShape(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	resetSchedulerInterfaces()
+	defer resetSchedulerInterfaces()
+
+	runtimeinfo.AutoRefreshSchedulerInterface = &stubManagedScheduler{status: SchedulerStatusResponse{
+		Name:          "Auto Refresh",
+		Status:        "idle",
+		CheckInterval: 60,
+		NextRun:       1710000000,
+		IsExecuting:   false,
+	}}
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Params = gin.Params{{Key: "name", Value: "auto_refresh"}}
+
+	GetSchedulerStatus(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
+	data := body["data"].(map[string]any)
+
+	keys := make([]string, 0, len(data))
+	for key := range data {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	require.Equal(t, []string{"check_interval", "is_executing", "name", "next_run", "status"}, keys)
+	require.Equal(t, "Auto Refresh", data["name"])
+	require.EqualValues(t, 60, data["check_interval"])
+	require.EqualValues(t, 1710000000, data["next_run"])
+	require.Equal(t, false, data["is_executing"])
+}
+
+func TestGetSchedulerStatusAliasUsesSameUnifiedShape(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	resetSchedulerInterfaces()
+	defer resetSchedulerInterfaces()
+
+	runtimeinfo.AISummarySchedulerInterface = &stubManagedScheduler{status: SchedulerStatusResponse{
+		Name:          "Content Completion",
+		Status:        "running",
+		CheckInterval: 3600,
+		NextRun:       1710003600,
+		IsExecuting:   true,
+	}}
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Params = gin.Params{{Key: "name", Value: "ai_summary"}}
+
+	GetSchedulerStatus(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
+	data := body["data"].(map[string]any)
+	require.NotContains(t, data, "requested_name")
+	require.NotContains(t, data, "alias_of")
+	require.Equal(t, "Content Completion", data["name"])
+	require.Equal(t, "running", data["status"])
 }
