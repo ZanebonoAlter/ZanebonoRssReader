@@ -47,6 +47,20 @@ func TestFirecrawlTriggerNowBatchID(t *testing.T) {
 	if !strings.Contains(source, `func (s *FirecrawlScheduler) runCrawlCycle(batchID string)`) {
 		t.Fatalf("runCrawlCycle should accept batchID parameter")
 	}
+}
+
+func TestFirecrawlRunCrawlCycleUsesInjectedBatchID(t *testing.T) {
+	sourcePath := filepath.Join("firecrawl.go")
+	content, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatalf("read %s: %v", sourcePath, err)
+	}
+
+	source := string(content)
+
+	if !strings.Contains(source, `func (s *FirecrawlScheduler) runCrawlCycle(batchID string)`) {
+		t.Fatalf("runCrawlCycle should accept batchID parameter")
+	}
 
 	if strings.Contains(source, `batchID := time.Now().Format("20060102150405")`) && !strings.Contains(source, `func (s *FirecrawlScheduler) TriggerNow()`) {
 		t.Fatalf("unexpected batchID generation location")
