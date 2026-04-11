@@ -35,7 +35,12 @@ See `.planning/REQUIREMENTS.md` for full list.
 
 ## Validated Requirements
 
-(None yet — project starting)
+**Phase 03 (状态一致性修复):**
+- STAT-01: Feed删除时文章级联删除 (CASCADE实现)
+- STAT-02: 文章清理不误删活跃文章
+- STAT-03: Summary-only feed文章summary_status初始化为pending
+- STAT-04: 阻塞文章自动恢复机制
+- STAT-05: 阻塞数量超过阈值时WARN告警
 
 ## Out of Scope
 
@@ -80,4 +85,4 @@ This document evolves at phase transitions and milestone boundaries.
 
 ---
 
-*Last updated: 2026-04-11*
+*Last updated: 2026-04-11 (Phase 03 complete)*
