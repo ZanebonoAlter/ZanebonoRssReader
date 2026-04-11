@@ -87,7 +87,7 @@ Plans:
 **Plans:** 2 plans in 1 wave
 
 Plans:
-- [ ] 03-01-PLAN.md — STAT-03: buildArticleFromEntry状态初始化修正 (Wave 1)
+- [x] 03-01-PLAN.md — STAT-03: buildArticleFromEntry状态初始化修正 (Wave 1)
 - [ ] 03-02-PLAN.md — STAT-04/05: 阻塞文章恢复调度器 + 告警 (Wave 1)
 
 **Success Criteria:**
