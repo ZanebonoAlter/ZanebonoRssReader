@@ -3,6 +3,11 @@ package jobs
 import (
 	"reflect"
 	"testing"
+	"time"
+
+	"my-robot-backend/internal/domain/contentprocessing"
+	"my-robot-backend/internal/domain/models"
+	"my-robot-backend/internal/platform/database"
 )
 
 func TestSchedulerStatusResponseDefinition(t *testing.T) {
@@ -36,5 +41,132 @@ func TestSchedulerStatusResponseDefinition(t *testing.T) {
 		if field.Tag.Get("json") != want.jsonTag {
 			t.Fatalf("field %s json tag = %q, want %q", want.name, field.Tag.Get("json"), want.jsonTag)
 		}
+	}
+}
+
+func TestSchedulerStatusFormat(t *testing.T) {
+	setupSchedulersTestDB(t)
+
+	nextRun := time.Now().Add(10 * time.Minute).UTC().Truncate(time.Second)
+	if err := database.DB.Create(&models.SchedulerTask{
+		Name:              "auto_refresh",
+		Description:       "Auto-refresh RSS feeds",
+		CheckInterval:     60,
+		Status:            "idle",
+		NextExecutionTime: &nextRun,
+	}).Error; err != nil {
+		t.Fatalf("create auto_refresh task: %v", err)
+	}
+
+	if err := database.DB.Create(&models.SchedulerTask{
+		Name:              "auto_summary",
+		Description:       "Auto-generate AI summaries for feeds",
+		CheckInterval:     3600,
+		Status:            "idle",
+		NextExecutionTime: &nextRun,
+	}).Error; err != nil {
+		t.Fatalf("create auto_summary task: %v", err)
+	}
+
+	if err := database.DB.Create(&models.SchedulerTask{
+		Name:              "ai_summary",
+		Description:       "AI summarize Firecrawl content",
+		CheckInterval:     3600,
+		Status:            "idle",
+		NextExecutionTime: &nextRun,
+	}).Error; err != nil {
+		t.Fatalf("create ai_summary task: %v", err)
+	}
+
+	autoRefresh := NewAutoRefreshScheduler(60)
+	autoRefresh.isRunning = true
+	autoRefresh.isExecuting = true
+	autoRefreshStatus := autoRefresh.GetStatus()
+	assertSchedulerStatus(t, autoRefreshStatus, SchedulerStatusResponse{
+		Name:          "Auto Refresh",
+		Status:        "running",
+		CheckInterval: 60,
+		NextRun:       nextRun.Unix(),
+		IsExecuting:   true,
+	})
+
+	autoSummary := NewAutoSummaryScheduler(3600)
+	autoSummary.isRunning = true
+	autoSummaryStatus := autoSummary.GetStatus()
+	assertSchedulerStatus(t, autoSummaryStatus, SchedulerStatusResponse{
+		Name:          "Auto Summary",
+		Status:        "idle",
+		CheckInterval: 3600,
+		NextRun:       nextRun.Unix(),
+		IsExecuting:   false,
+	})
+
+	preference := NewPreferenceUpdateScheduler(1800)
+	preference.running = true
+	preference.isExecuting = true
+	preference.nextRun = &nextRun
+	preferenceStatus := preference.GetStatus()
+	assertSchedulerStatus(t, preferenceStatus, SchedulerStatusResponse{
+		Name:          "Preference Update",
+		Status:        "running",
+		CheckInterval: 1800,
+		NextRun:       nextRun.Unix(),
+		IsExecuting:   true,
+	})
+
+	feed := models.Feed{
+		Title:                 "Feed",
+		URL:                   "https://feed.example/rss",
+		ArticleSummaryEnabled: true,
+		FirecrawlEnabled:      true,
+		MaxCompletionRetries:  3,
+	}
+	if err := database.DB.Create(&feed).Error; err != nil {
+		t.Fatalf("create feed: %v", err)
+	}
+	article := models.Article{
+		FeedID:           feed.ID,
+		Title:            "Queue me",
+		Link:             "https://feed.example/a1",
+		FirecrawlStatus:  "completed",
+		SummaryStatus:    "incomplete",
+		FirecrawlContent: "ready",
+	}
+	if err := database.DB.Create(&article).Error; err != nil {
+		t.Fatalf("create article: %v", err)
+	}
+
+	completion := &ContentCompletionScheduler{
+		completionService: contentprocessing.NewContentCompletionService("http://localhost:11235"),
+		checkInterval:     time.Hour,
+		taskName:          "ai_summary",
+		isRunning:         true,
+	}
+	completionStatus := completion.GetStatus()
+	assertSchedulerStatus(t, completionStatus, SchedulerStatusResponse{
+		Name:          "Content Completion",
+		Status:        "idle",
+		CheckInterval: 3600,
+		NextRun:       nextRun.Unix(),
+		IsExecuting:   false,
+	})
+
+	firecrawl := NewFirecrawlScheduler()
+	firecrawl.status = "running"
+	firecrawl.nextRun = &nextRun
+	firecrawlStatus := firecrawl.GetStatus()
+	assertSchedulerStatus(t, firecrawlStatus, SchedulerStatusResponse{
+		Name:          "Firecrawl Crawler",
+		Status:        "running",
+		CheckInterval: 300,
+		NextRun:       nextRun.Unix(),
+		IsExecuting:   false,
+	})
+}
+
+func assertSchedulerStatus(t *testing.T, got, want SchedulerStatusResponse) {
+	t.Helper()
+	if got != want {
+		t.Fatalf("status = %#v, want %#v", got, want)
 	}
 }
