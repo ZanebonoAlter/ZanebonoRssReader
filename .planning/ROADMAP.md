@@ -59,7 +59,7 @@ Plans:
 **Plans:** 1 plan in 1 wave
 
 Plans:
-- [ ] 02-01-PLAN.md — TAG-03/04: 异步API + 启动重试机制 (Wave 1)
+- [x] 02-01-PLAN.md — TAG-03/04: 异步API + 启动重试机制 (Wave 1)
 
 **Success Criteria:**
 1. Firecrawl完成后，文章标签通过TagJobQueue生成（查看tag_jobs表记录）
@@ -83,6 +83,12 @@ Plans:
 **Goal:** 文章状态正确转换，无卡死
 
 **Requirements:** STAT-01, STAT-02, STAT-03, STAT-04, STAT-05
+
+**Plans:** 2 plans in 1 wave
+
+Plans:
+- [ ] 03-01-PLAN.md — STAT-03: buildArticleFromEntry状态初始化修正 (Wave 1)
+- [ ] 03-02-PLAN.md — STAT-04/05: 阻塞文章恢复调度器 + 告警 (Wave 1)
 
 **Success Criteria:**
 1. 删除feed后，其文章firecrawl_status/summary_status显示"abandoned"
