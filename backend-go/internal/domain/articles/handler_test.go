@@ -141,9 +141,7 @@ func TestRetagArticleReturnsUpdatedTags(t *testing.T) {
 	}
 	require.NoError(t, database.DB.Create(&article).Error)
 
-	oldTag := models.TopicTag{Label: "Legacy", Slug: "legacy", Category: models.TagCategoryKeyword, Kind: "keyword"}
-	require.NoError(t, database.DB.Create(&oldTag).Error)
-	require.NoError(t, database.DB.Create(&models.ArticleTopicTag{ArticleID: article.ID, TopicTagID: oldTag.ID, Score: 1, Source: "manual"}).Error)
+	require.NoError(t, database.DB.AutoMigrate(&models.TagJob{}))
 
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
@@ -157,19 +155,19 @@ func TestRetagArticleReturnsUpdatedTags(t *testing.T) {
 	var body struct {
 		Success bool `json:"success"`
 		Data    struct {
-			TagCount int `json:"tag_count"`
-			Tags     []struct {
-				Slug string `json:"slug"`
-			} `json:"tags"`
+			JobID     uint   `json:"job_id"`
+			ArticleID uint   `json:"article_id"`
+			Status    string `json:"status"`
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
 	require.True(t, body.Success)
-	require.NotZero(t, body.Data.TagCount)
-	require.NotEmpty(t, body.Data.Tags)
-	require.NotEqual(t, "legacy", body.Data.Tags[0].Slug)
+	require.NotZero(t, body.Data.JobID)
+	require.Equal(t, article.ID, body.Data.ArticleID)
+	require.Equal(t, "pending", body.Data.Status)
 
-	var linkCount int64
-	require.NoError(t, database.DB.Model(&models.ArticleTopicTag{}).Where("article_id = ?", article.ID).Count(&linkCount).Error)
-	require.Equal(t, int64(body.Data.TagCount), linkCount)
+	var job models.TagJob
+	require.NoError(t, database.DB.First(&job, body.Data.JobID).Error)
+	require.Equal(t, article.ID, job.ArticleID)
+	require.True(t, job.ForceRetag)
 }
