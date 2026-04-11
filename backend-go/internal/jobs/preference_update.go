@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"sync"
 	"time"
 
@@ -133,7 +134,7 @@ func (s *PreferenceUpdateScheduler) TriggerNow() map[string]interface{} {
 			"started":     false,
 			"reason":      "already_running",
 			"message":     "偏好更新正在执行中，稍后再试。",
-			"status_code": 409,
+			"status_code": http.StatusConflict,
 		}
 	}
 	s.mu.Unlock()
