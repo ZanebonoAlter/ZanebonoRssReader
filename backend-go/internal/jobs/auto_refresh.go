@@ -279,16 +279,17 @@ func (s *AutoRefreshScheduler) triggerAutoSummaryAfterRefreshes(wg *sync.WaitGro
 	}
 }
 
-func (s *AutoRefreshScheduler) GetStatus() map[string]interface{} {
+func (s *AutoRefreshScheduler) GetStatus() SchedulerStatusResponse {
 	entries := s.cron.Entries()
 
-	var nextRun time.Time
+	var nextRun int64
 	if len(entries) > 0 {
-		nextRun = entries[0].Next
+		nextRun = entries[0].Next.Unix()
 	}
 
-	status := map[string]interface{}{
-		"status": func() string {
+	status := SchedulerStatusResponse{
+		Name: "Auto Refresh",
+		Status: func() string {
 			if s.isExecuting {
 				return "running"
 			}
@@ -297,17 +298,15 @@ func (s *AutoRefreshScheduler) GetStatus() map[string]interface{} {
 			}
 			return "stopped"
 		}(),
-		"check_interval": int(s.checkInterval.Seconds()),
-		"next_run":       nextRun.Format(time.RFC3339),
-		"is_executing":   s.isExecuting,
+		CheckInterval: int64(s.checkInterval.Seconds()),
+		NextRun:       nextRun,
+		IsExecuting:   s.isExecuting,
 	}
 
 	var task models.SchedulerTask
 	if err := database.DB.Where("name = ?", "auto_refresh").First(&task).Error; err == nil {
-		status["database_state"] = task.ToDict()
-		status["next_run"] = task.NextExecutionTime
-		if summary := parseAutoRefreshRunSummary(task); summary != nil {
-			status["last_run_summary"] = summary
+		if task.NextExecutionTime != nil {
+			status.NextRun = task.NextExecutionTime.Unix()
 		}
 	}
 

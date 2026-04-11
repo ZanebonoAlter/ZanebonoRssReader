@@ -25,6 +25,7 @@ type FirecrawlScheduler struct {
 	wg                sync.WaitGroup
 	executionMutex    sync.Mutex
 	status            string
+	nextRun           *time.Time
 	lastExecutionTime *time.Time
 	lastError         string
 	concurrency       int
@@ -46,6 +47,8 @@ func NewFirecrawlScheduler() *FirecrawlScheduler {
 
 func (s *FirecrawlScheduler) Start() error {
 	s.stopChan = make(chan struct{})
+	nextRun := time.Now().Add(time.Duration(s.checkInterval) * time.Second)
+	s.nextRun = &nextRun
 	s.wg.Add(1)
 	go s.run()
 	log.Printf("[Firecrawl] Scheduler started")
@@ -55,6 +58,7 @@ func (s *FirecrawlScheduler) Start() error {
 func (s *FirecrawlScheduler) Stop() {
 	close(s.stopChan)
 	s.wg.Wait()
+	s.nextRun = nil
 	log.Printf("[Firecrawl] Scheduler stopped")
 }
 
@@ -108,6 +112,8 @@ func (s *FirecrawlScheduler) run() {
 	for {
 		select {
 		case <-ticker.C:
+			nextRun := time.Now().Add(time.Duration(s.checkInterval) * time.Second)
+			s.nextRun = &nextRun
 			s.checkAndCrawl()
 		case <-s.stopChan:
 			return
@@ -328,11 +334,22 @@ func (s *FirecrawlScheduler) broadcastProgress(batchID, status string, total, co
 	hub.BroadcastRaw(data)
 }
 
-func (s *FirecrawlScheduler) GetStatus() map[string]interface{} {
+func (s *FirecrawlScheduler) GetStatus() SchedulerStatusResponse {
+	return SchedulerStatusResponse{
+		Name:          "Firecrawl Crawler",
+		Status:        s.status,
+		CheckInterval: int64(s.checkInterval),
+		NextRun:       optionalTimeToUnix(s.nextRun),
+		IsExecuting:   s.status == "running",
+	}
+}
+
+func (s *FirecrawlScheduler) GetTaskStatusDetails() map[string]interface{} {
 	return map[string]interface{}{
-		"name":                s.name,
 		"status":              s.status,
 		"check_interval":      s.checkInterval,
+		"next_run":            s.nextRun,
+		"is_executing":        s.status == "running",
 		"last_execution_time": s.lastExecutionTime,
 		"last_error":          s.lastError,
 		"concurrency":         s.concurrency,

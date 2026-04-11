@@ -438,7 +438,36 @@ func (s *ContentCompletionScheduler) reschedule(intervalSeconds int) error {
 	return nil
 }
 
-func (s *ContentCompletionScheduler) GetStatus() map[string]interface{} {
+func (s *ContentCompletionScheduler) GetStatus() SchedulerStatusResponse {
+	var task models.SchedulerTask
+	if err := database.DB.Where("name = ?", s.taskName).First(&task).Error; err == nil {
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	status := SchedulerStatusResponse{
+		Name: "Content Completion",
+		Status: func() string {
+			if s.isExecuting {
+				return "running"
+			}
+			if s.isRunning {
+				return "idle"
+			}
+			return "stopped"
+		}(),
+		CheckInterval: int64(s.checkInterval.Seconds()),
+		IsExecuting:   s.isExecuting,
+	}
+	if task.NextExecutionTime != nil {
+		status.NextRun = task.NextExecutionTime.Unix()
+	}
+
+	return status
+}
+
+func (s *ContentCompletionScheduler) GetTaskStatusDetails() map[string]interface{} {
 	var task models.SchedulerTask
 	var taskData map[string]interface{}
 	if err := database.DB.Where("name = ?", s.taskName).First(&task).Error; err == nil {
@@ -454,32 +483,23 @@ func (s *ContentCompletionScheduler) GetStatus() map[string]interface{} {
 	defer s.mu.RUnlock()
 
 	status := map[string]interface{}{
-		"status": func() string {
-			if s.isExecuting {
-				return "running"
-			}
-			if s.isRunning {
-				return "idle"
-			}
-			return "stopped"
-		}(),
-		"check_interval":  int(s.checkInterval.Seconds()),
-		"task_name":       s.taskName,
-		"is_executing":    s.isExecuting,
-		"current_article": s.currentArticle,
-		"last_processed":  s.lastProcessed,
-		"live_processing_count": func() int {
-			if s.isExecuting && s.currentArticle != nil {
-				return 1
-			}
-			return 0
-		}(),
+		"status":              s.GetStatus().Status,
+		"is_executing":        s.isExecuting,
+		"current_article":     s.currentArticle,
+		"last_processed":      s.lastProcessed,
+		"check_interval":      int(s.checkInterval.Seconds()),
 		"last_execution_time": s.lastExecutionTime,
 		"last_error": func() string {
 			if task.LastError != "" {
 				return task.LastError
 			}
 			return s.lastError
+		}(),
+		"live_processing_count": func() int {
+			if s.isExecuting && s.currentArticle != nil {
+				return 1
+			}
+			return 0
 		}(),
 	}
 	if taskData != nil {

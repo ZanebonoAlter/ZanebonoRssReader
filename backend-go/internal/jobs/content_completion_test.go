@@ -77,31 +77,36 @@ func TestContentCompletionSchedulerGetStatusIncludesOverviewAndCurrentArticle(t 
 	}
 
 	status := scheduler.GetStatus()
-	if status["is_executing"] != true {
-		t.Fatalf("is_executing = %v, want true", status["is_executing"])
+	if !status.IsExecuting {
+		t.Fatalf("is_executing = %v, want true", status.IsExecuting)
+	}
+	if status.Name != "Content Completion" {
+		t.Fatalf("name = %q, want Content Completion", status.Name)
 	}
 
-	overview, ok := status["overview"].(map[string]interface{})
+	details := scheduler.GetTaskStatusDetails()
+
+	overview, ok := details["overview"].(map[string]interface{})
 	if !ok {
-		t.Fatalf("overview missing or invalid: %#v", status["overview"])
+		t.Fatalf("overview missing or invalid: %#v", details["overview"])
 	}
 	if overview["pending_count"] != 1 {
 		t.Fatalf("pending_count = %v, want 1", overview["pending_count"])
 	}
 
-	current, ok := status["current_article"].(*contentprocessing.ContentCompletionArticleRef)
+	current, ok := details["current_article"].(*contentprocessing.ContentCompletionArticleRef)
 	if !ok {
-		t.Fatalf("current article missing or invalid: %#v", status["current_article"])
+		t.Fatalf("current article missing or invalid: %#v", details["current_article"])
 	}
 	if current.Title != "Queue me" {
 		t.Fatalf("current article title = %q, want Queue me", current.Title)
 	}
 
-	if status["live_processing_count"] != 1 {
-		t.Fatalf("live_processing_count = %v, want 1", status["live_processing_count"])
+	if details["live_processing_count"] != 1 {
+		t.Fatalf("live_processing_count = %v, want 1", details["live_processing_count"])
 	}
-	if status["stale_processing_count"] != 0 {
-		t.Fatalf("stale_processing_count = %v, want 0", status["stale_processing_count"])
+	if details["stale_processing_count"] != 0 {
+		t.Fatalf("stale_processing_count = %v, want 0", details["stale_processing_count"])
 	}
 }
 

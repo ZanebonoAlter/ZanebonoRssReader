@@ -160,7 +160,7 @@ func TestSchedulerStatusFormat(t *testing.T) {
 		Status:        "running",
 		CheckInterval: 300,
 		NextRun:       nextRun.Unix(),
-		IsExecuting:   false,
+		IsExecuting:   true,
 	})
 }
 

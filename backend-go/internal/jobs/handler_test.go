@@ -21,15 +21,20 @@ func (s stubTriggerScheduler) TriggerNow() map[string]interface{} {
 }
 
 type stubManagedScheduler struct {
-	status             map[string]interface{}
+	status             SchedulerStatusResponse
+	taskStatus         map[string]interface{}
 	triggerResult      map[string]interface{}
 	updatedInterval    int
 	resetCalled        bool
 	triggerCalledCount int
 }
 
-func (s *stubManagedScheduler) GetStatus() map[string]interface{} {
+func (s *stubManagedScheduler) GetStatus() SchedulerStatusResponse {
 	return s.status
+}
+
+func (s *stubManagedScheduler) GetTaskStatusDetails() map[string]interface{} {
+	return s.taskStatus
 }
 
 func (s *stubManagedScheduler) TriggerNow() map[string]interface{} {
@@ -108,12 +113,12 @@ func TestGetSchedulersStatusIncludesPreferenceUpdateAndDigest(t *testing.T) {
 	resetSchedulerInterfaces()
 	defer resetSchedulerInterfaces()
 
-	autoRefresh := &stubManagedScheduler{status: map[string]interface{}{"status": "idle"}}
-	autoSummary := &stubManagedScheduler{status: map[string]interface{}{"status": "idle"}}
-	preference := &stubManagedScheduler{status: map[string]interface{}{"status": "idle"}}
-	completion := &stubManagedScheduler{status: map[string]interface{}{"status": "idle"}}
-	firecrawl := &stubManagedScheduler{status: map[string]interface{}{"status": "idle"}}
-	digest := &stubManagedScheduler{status: map[string]interface{}{"running": true}}
+	autoRefresh := &stubManagedScheduler{status: SchedulerStatusResponse{Name: "Auto Refresh", Status: "idle"}}
+	autoSummary := &stubManagedScheduler{status: SchedulerStatusResponse{Name: "Auto Summary", Status: "idle"}}
+	preference := &stubManagedScheduler{status: SchedulerStatusResponse{Name: "Preference Update", Status: "idle"}}
+	completion := &stubManagedScheduler{status: SchedulerStatusResponse{Name: "Content Completion", Status: "idle"}}
+	firecrawl := &stubManagedScheduler{status: SchedulerStatusResponse{Name: "Firecrawl Crawler", Status: "idle"}}
+	digest := &stubManagedScheduler{status: SchedulerStatusResponse{Name: "Digest", Status: "running", IsExecuting: true}}
 
 	runtimeinfo.AutoRefreshSchedulerInterface = autoRefresh
 	runtimeinfo.AutoSummarySchedulerInterface = autoSummary
@@ -139,12 +144,12 @@ func TestGetSchedulersStatusIncludesPreferenceUpdateAndDigest(t *testing.T) {
 		names[entry["name"].(string)] = true
 	}
 
-	require.True(t, names["auto_refresh"])
-	require.True(t, names["auto_summary"])
-	require.True(t, names["preference_update"])
-	require.True(t, names["content_completion"])
-	require.True(t, names["firecrawl"])
-	require.True(t, names["digest"])
+	require.True(t, names["Auto Refresh"])
+	require.True(t, names["Auto Summary"])
+	require.True(t, names["Preference Update"])
+	require.True(t, names["Content Completion"])
+	require.True(t, names["Firecrawl Crawler"])
+	require.True(t, names["Digest"])
 }
 
 func TestTriggerSchedulerSupportsContentCompletionAliasAndLegacyName(t *testing.T) {
@@ -211,10 +216,10 @@ func TestGetTasksStatusAggregatesRuntimeWork(t *testing.T) {
 	resetSchedulerInterfaces()
 	defer resetSchedulerInterfaces()
 
-	completion := &stubManagedScheduler{status: map[string]interface{}{
+	completion := &stubManagedScheduler{taskStatus: map[string]interface{}{
 		"overview": map[string]interface{}{"pending_count": 3, "processing_count": 1},
 	}}
-	firecrawl := &stubManagedScheduler{status: map[string]interface{}{"queue_size": 2, "processing": 1}}
+	firecrawl := &stubManagedScheduler{taskStatus: map[string]interface{}{"status": "running", "queue_size": 2, "processing": 1}}
 	runtimeinfo.AISummarySchedulerInterface = completion
 	runtimeinfo.FirecrawlSchedulerInterface = firecrawl
 

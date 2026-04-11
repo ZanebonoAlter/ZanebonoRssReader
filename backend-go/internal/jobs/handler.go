@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"my-robot-backend/internal/app/runtimeinfo"
@@ -26,6 +27,7 @@ type SchedulerStatusResponse struct {
 
 type schedulerDescriptor struct {
 	Name        string
+	DisplayName string
 	Aliases     []string
 	Description string
 	TaskName    string
@@ -36,6 +38,7 @@ func schedulerDescriptors() []schedulerDescriptor {
 	return []schedulerDescriptor{
 		{
 			Name:        "auto_refresh",
+			DisplayName: "Auto Refresh",
 			Description: "Auto-refresh RSS feeds",
 			TaskName:    "auto_refresh",
 			Get: func() interface{} {
@@ -44,6 +47,7 @@ func schedulerDescriptors() []schedulerDescriptor {
 		},
 		{
 			Name:        "auto_summary",
+			DisplayName: "Auto Summary",
 			Description: "Auto-generate AI summaries for feeds",
 			TaskName:    "auto_summary",
 			Get: func() interface{} {
@@ -52,6 +56,7 @@ func schedulerDescriptors() []schedulerDescriptor {
 		},
 		{
 			Name:        "preference_update",
+			DisplayName: "Preference Update",
 			Description: "Update reading preferences from behavior data",
 			Get: func() interface{} {
 				return runtimeinfo.PreferenceUpdateSchedulerInterface
@@ -59,6 +64,7 @@ func schedulerDescriptors() []schedulerDescriptor {
 		},
 		{
 			Name:        "content_completion",
+			DisplayName: "Content Completion",
 			Aliases:     []string{"ai_summary"},
 			Description: "Complete article content and generate article summaries",
 			TaskName:    "ai_summary",
@@ -68,6 +74,7 @@ func schedulerDescriptors() []schedulerDescriptor {
 		},
 		{
 			Name:        "firecrawl",
+			DisplayName: "Firecrawl Crawler",
 			Description: "Auto-crawl full content for articles",
 			Get: func() interface{} {
 				return runtimeinfo.FirecrawlSchedulerInterface
@@ -75,6 +82,7 @@ func schedulerDescriptors() []schedulerDescriptor {
 		},
 		{
 			Name:        "digest",
+			DisplayName: "Digest",
 			Description: "Run digest cron schedules",
 			Get: func() interface{} {
 				return runtimeinfo.DigestSchedulerInterface
@@ -97,33 +105,37 @@ func resolveScheduler(name string) (*schedulerDescriptor, interface{}) {
 	return nil, nil
 }
 
-func safeGetStatus(scheduler interface{}, name, description string) map[string]interface{} {
+func safeGetStatus(scheduler interface{}, displayName string) *SchedulerStatusResponse {
 	if scheduler == nil {
 		return nil
 	}
 
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("Panic in %s scheduler GetStatus: %v", name, r)
+			log.Printf("Panic in %s scheduler GetStatus: %v", displayName, r)
 		}
 	}()
 
-	if status, ok := scheduler.(interface{ GetStatus() map[string]interface{} }); ok {
+	if status, ok := scheduler.(interface {
+		GetStatus() SchedulerStatusResponse
+	}); ok {
 		result := status.GetStatus()
-		if result != nil {
-			result["name"] = name
-			result["description"] = description
-			return result
-		}
+		result = normalizeSchedulerStatus(result, displayName)
+		return &result
+	}
+
+	if legacy, ok := scheduler.(interface{ GetStatus() map[string]interface{} }); ok {
+		result := schedulerStatusFromMap(legacy.GetStatus(), displayName)
+		return &result
 	}
 	return nil
 }
 
 func GetSchedulersStatus(c *gin.Context) {
-	schedulers := make([]map[string]interface{}, 0)
+	schedulers := make([]SchedulerStatusResponse, 0)
 	for _, descriptor := range schedulerDescriptors() {
-		if status := safeGetStatus(descriptor.Get(), descriptor.Name, descriptor.Description); status != nil {
-			schedulers = append(schedulers, status)
+		if status := safeGetStatus(descriptor.Get(), descriptor.DisplayName); status != nil {
+			schedulers = append(schedulers, *status)
 		}
 	}
 
@@ -141,11 +153,7 @@ func GetSchedulerStatus(c *gin.Context) {
 		return
 	}
 
-	if status := safeGetStatus(scheduler, descriptor.Name, descriptor.Description); status != nil {
-		if name != descriptor.Name {
-			status["requested_name"] = name
-			status["alias_of"] = descriptor.Name
-		}
+	if status := safeGetStatus(scheduler, descriptor.DisplayName); status != nil {
 		c.JSON(http.StatusOK, gin.H{"success": true, "data": status})
 		return
 	}
@@ -292,7 +300,7 @@ func GetTasksStatus(c *gin.Context) {
 		})
 	}
 
-	if status := safeGetStatus(runtimeinfo.AISummarySchedulerInterface, "content_completion", "Complete article content and generate article summaries"); status != nil {
+	if status := safeGetTaskStatus(runtimeinfo.AISummarySchedulerInterface); status != nil {
 		if overview, ok := status["overview"].(map[string]interface{}); ok {
 			pendingCount := asInt(overview["pending_count"])
 			processingCount := asInt(overview["processing_count"])
@@ -310,7 +318,7 @@ func GetTasksStatus(c *gin.Context) {
 		}
 	}
 
-	if status := safeGetStatus(runtimeinfo.FirecrawlSchedulerInterface, "firecrawl", "Auto-crawl full content for articles"); status != nil {
+	if status := safeGetTaskStatus(runtimeinfo.FirecrawlSchedulerInterface); status != nil {
 		queueCount := asInt(status["queue_size"])
 		processingCount := asInt(status["processing"])
 		if queueCount > 0 || processingCount > 0 {
@@ -333,6 +341,57 @@ func GetTasksStatus(c *gin.Context) {
 			"tasks":        tasks,
 		},
 	})
+}
+
+func safeGetTaskStatus(scheduler interface{}) map[string]interface{} {
+	if scheduler == nil {
+		return nil
+	}
+
+	if status, ok := scheduler.(interface{ GetTaskStatusDetails() map[string]interface{} }); ok {
+		return status.GetTaskStatusDetails()
+	}
+
+	if legacy, ok := scheduler.(interface{ GetStatus() map[string]interface{} }); ok {
+		return legacy.GetStatus()
+	}
+
+	return nil
+}
+
+func normalizeSchedulerStatus(status SchedulerStatusResponse, displayName string) SchedulerStatusResponse {
+	if status.Name == "" {
+		status.Name = displayName
+	}
+	return status
+}
+
+func schedulerStatusFromMap(status map[string]interface{}, displayName string) SchedulerStatusResponse {
+	if status == nil {
+		return SchedulerStatusResponse{Name: displayName}
+	}
+
+	response := SchedulerStatusResponse{
+		Name:        displayName,
+		Status:      asString(status["status"]),
+		NextRun:     toUnixTimestamp(status["next_run"]),
+		IsExecuting: asBool(status["is_executing"]),
+	}
+	if response.Status == "" {
+		if asBool(status["running"]) {
+			response.Status = "running"
+		} else {
+			response.Status = "idle"
+		}
+	}
+	if name := asString(status["name"]); name != "" {
+		response.Name = name
+	}
+	response.CheckInterval = asInt64(status["check_interval"])
+	if !response.IsExecuting && response.Status == "running" {
+		response.IsExecuting = true
+	}
+	return response
 }
 
 func resetSchedulerTask(taskName string) error {
@@ -365,6 +424,71 @@ func asInt(value interface{}) int {
 		return int(typed)
 	case float64:
 		return int(typed)
+	default:
+		return 0
+	}
+}
+
+func asInt64(value interface{}) int64 {
+	switch typed := value.(type) {
+	case int:
+		return int64(typed)
+	case int32:
+		return int64(typed)
+	case int64:
+		return typed
+	case float64:
+		return int64(typed)
+	default:
+		return 0
+	}
+}
+
+func asString(value interface{}) string {
+	if typed, ok := value.(string); ok {
+		return typed
+	}
+	return ""
+}
+
+func asBool(value interface{}) bool {
+	if typed, ok := value.(bool); ok {
+		return typed
+	}
+	return false
+}
+
+func toUnixTimestamp(value interface{}) int64 {
+	switch typed := value.(type) {
+	case nil:
+		return 0
+	case int:
+		return int64(typed)
+	case int32:
+		return int64(typed)
+	case int64:
+		return typed
+	case float64:
+		return int64(typed)
+	case time.Time:
+		if typed.IsZero() {
+			return 0
+		}
+		return typed.Unix()
+	case *time.Time:
+		if typed == nil || typed.IsZero() {
+			return 0
+		}
+		return typed.Unix()
+	case string:
+		if typed == "" {
+			return 0
+		}
+		parsed, err := time.Parse(time.RFC3339, typed)
+		if err != nil {
+			return 0
+		}
+		return parsed.Unix()
 	default:
 		return 0
 	}

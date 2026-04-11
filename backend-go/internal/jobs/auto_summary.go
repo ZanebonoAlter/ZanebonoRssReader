@@ -846,19 +846,20 @@ func (s *AutoSummaryScheduler) updateSchedulerStatus(status, lastError string, s
 	}
 }
 
-func (s *AutoSummaryScheduler) GetStatus() map[string]interface{} {
+func (s *AutoSummaryScheduler) GetStatus() SchedulerStatusResponse {
 	entries := s.cron.Entries()
 
-	var nextRun time.Time
+	var nextRun int64
 	if len(entries) > 0 {
-		nextRun = entries[0].Next
+		nextRun = entries[0].Next.Unix()
 	}
 
 	var task models.SchedulerTask
 	err := database.DB.Where("name = ?", "auto_summary").First(&task).Error
 
-	status := map[string]interface{}{
-		"status": func() string {
+	status := SchedulerStatusResponse{
+		Name: "Auto Summary",
+		Status: func() string {
 			if s.isExecuting {
 				return "running"
 			}
@@ -867,18 +868,14 @@ func (s *AutoSummaryScheduler) GetStatus() map[string]interface{} {
 			}
 			return "stopped"
 		}(),
-		"check_interval": int(s.checkInterval.Seconds()),
-		"next_run":       nextRun.Format(time.RFC3339),
-		"ai_configured":  s.aiConfig != nil,
-		"is_executing":   s.isExecuting,
-		"database_state": nil,
+		CheckInterval: int64(s.checkInterval.Seconds()),
+		NextRun:       nextRun,
+		IsExecuting:   s.isExecuting,
 	}
 
 	if err == nil {
-		status["database_state"] = task.ToDict()
-		status["next_run"] = task.NextExecutionTime
-		if summary := parseAutoSummaryRunSummary(task); summary != nil {
-			status["last_run_summary"] = summary
+		if task.NextExecutionTime != nil {
+			status.NextRun = task.NextExecutionTime.Unix()
 		}
 	}
 
