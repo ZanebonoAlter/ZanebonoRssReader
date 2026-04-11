@@ -19,3 +19,7 @@
 ## [2026-04-11] ingest | Phase 04 Plan 01 前端 API 一致性与未读数同步
 - 新增 `phases/04-01-frontend-api-consistency.md`
 - 记录 scheduler trigger 统一 `apiClient`、已读未读数同步以及未分类 feed 清零策略
+
+## [2026-04-11] ingest | Phase 04 Plan 02 统一后端 scheduler status API 返回格式
+- 新增 `phases/04-02-scheduler-status-format.md`
+- 记录统一的五字段 status 契约、Unix `next_run` 以及 task details 补充接口
