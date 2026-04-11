@@ -11,3 +11,7 @@
 ## [2026-04-11] ingest | Phase 01 Plan 03 Auto-refresh 完成通知
 - 新增 `phases/01-03-auto-refresh-completion.md`
 - 记录 `auto_refresh_complete` WebSocket 事件契约与广播顺序
+
+## [2026-04-11] ingest | Phase 02 Plan 01 标签流程统一
+- 新增 `phases/02-01-tag-flow-unification.md`
+- 记录手动重打标签异步入队、`tag_completed` 事件契约与 TagQueue 后台重试策略
