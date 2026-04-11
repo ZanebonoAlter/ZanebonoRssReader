@@ -5,3 +5,4 @@
 - [01-02 Firecrawl batch_id 返回](phases/01-02-firecrawl-batch-id.md) - Firecrawl TriggerNow 成功返回 batch_id，并与 WebSocket 进度广播保持一致。
 - [01-03 Auto-refresh 完成通知](phases/01-03-auto-refresh-completion.md) - Auto-refresh 在 feed 刷新完成后广播 `auto_refresh_complete`，前端可在 auto-summary 前收到完成时机。
 - [02-01 标签流程统一](phases/02-01-tag-flow-unification.md) - 手动重打标签统一入队 `tag_jobs`，完成后广播 `tag_completed`，且 TagQueue 启动失败改为后台重试。
+- [04-01 前端 API 一致性与未读数同步](phases/04-01-frontend-api-consistency.md) - Scheduler trigger 统一走 `apiClient`，单篇/批量已读都会同步分类与未分类 feed 的未读数。

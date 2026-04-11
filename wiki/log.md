@@ -15,3 +15,7 @@
 ## [2026-04-11] ingest | Phase 02 Plan 01 标签流程统一
 - 新增 `phases/02-01-tag-flow-unification.md`
 - 记录手动重打标签异步入队、`tag_completed` 事件契约与 TagQueue 后台重试策略
+
+## [2026-04-11] ingest | Phase 04 Plan 01 前端 API 一致性与未读数同步
+- 新增 `phases/04-01-frontend-api-consistency.md`
+- 记录 scheduler trigger 统一 `apiClient`、已读未读数同步以及未分类 feed 清零策略
