@@ -2,8 +2,10 @@ package database
 
 import (
 	"fmt"
+	"log"
 
 	"gorm.io/gorm"
+	"my-robot-backend/internal/domain/models"
 )
 
 func postgresMigrations() []Migration {
@@ -44,6 +46,31 @@ func postgresMigrations() []Migration {
 			Up: func(db *gorm.DB) error {
 				if err := db.Exec("CREATE INDEX IF NOT EXISTS idx_topic_tag_embeddings_embedding ON topic_tag_embeddings USING hnsw (embedding vector_cosine_ops)").Error; err != nil {
 					return fmt.Errorf("create hnsw index on topic_tag_embeddings.embedding: %w", err)
+				}
+				return nil
+			},
+		},
+		{
+			Version:     "20260413_0002",
+			Description: "Create embedding_config table with default configuration values.",
+			Up: func(db *gorm.DB) error {
+				if err := db.AutoMigrate(&models.EmbeddingConfig{}); err != nil {
+					return fmt.Errorf("auto-migrate embedding_config: %w", err)
+				}
+				// Seed default config values (upsert)
+				defaults := []models.EmbeddingConfig{
+					{Key: "high_similarity_threshold", Value: "0.97", Description: "Auto-reuse existing tag if similarity >= this value"},
+					{Key: "low_similarity_threshold", Value: "0.78", Description: "Auto-create new tag if similarity < this value"},
+					{Key: "embedding_model", Value: "", Description: "Override embedding model name (empty = read from provider)"},
+					{Key: "embedding_dimension", Value: "1536", Description: "Embedding vector dimension"},
+				}
+				for _, d := range defaults {
+					var existing models.EmbeddingConfig
+					if err := db.Where("key = ?", d.Key).First(&existing).Error; err != nil {
+						if err := db.Create(&d).Error; err != nil {
+							log.Printf("Warning: failed to seed embedding_config key %s: %v", d.Key, err)
+						}
+					}
 				}
 				return nil
 			},

@@ -161,6 +161,7 @@ func SetupRoutes(r *gin.Engine) {
 			topicGraph.GET("/topic/:slug/articles", topicgraphdomain.GetTopicArticles)
 		}
 		topicanalysisdomain.RegisterAnalysisRoutes(topicGraph, topicanalysisdomain.GetAnalysisService(database.DB))
+		topicanalysisdomain.RegisterEmbeddingConfigRoutes(api)
 
 		digestGroup := api.Group("/digest")
 		{

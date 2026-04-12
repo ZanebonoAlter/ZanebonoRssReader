@@ -60,10 +60,16 @@ type EmbeddingService struct {
 
 // NewEmbeddingService creates a new embedding service
 func NewEmbeddingService() *EmbeddingService {
+	thresholds := DefaultThresholds
+	configService := NewEmbeddingConfigService()
+	if loaded, err := configService.LoadThresholds(); err == nil {
+		thresholds = loaded
+	}
+
 	return &EmbeddingService{
 		router:     airouter.NewRouter(),
 		client:     airouter.NewEmbeddingClient(),
-		thresholds: DefaultThresholds,
+		thresholds: thresholds,
 	}
 }
 
