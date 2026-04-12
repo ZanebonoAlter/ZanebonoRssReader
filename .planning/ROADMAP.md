@@ -33,14 +33,22 @@
 3. 相似度搜索通过 pgvector SQL `<=>` 运算符完成，Go 侧不再循环遍历全表计算余弦距离
 4. embedding 模型名从 provider 配置动态读取，收敛阈值可通过 API 调整无需重启
 
-**Plans:**
-- [ ] 01-01: [待规划]
+**Plans:** 3 plans in 3 waves
+
+Plans:
+- [ ] 01-01-PLAN.md — pgvector 迁移 + embedding 配置表 + API (INFRA-01~03)
+- [ ] 01-02-PLAN.md — TagMatch 集成 findOrCreateTag 三级匹配 (CONV-01, CONV-03)
+- [ ] 01-03-PLAN.md — 标签合并事务 + merged 状态保留 (CONV-02, CONV-04)
 
 **Files affected:**
-- `backend-go/internal/platform/airouter/embedding.go`
+- `backend-go/internal/platform/database/postgres_migrations.go`
+- `backend-go/internal/domain/models/topic_graph.go`
+- `backend-go/internal/domain/models/embedding_config.go`
 - `backend-go/internal/domain/topicanalysis/embedding.go`
-- `backend-go/internal/domain/topicextraction/article_tagger.go`
-- `backend-go/internal/domain/models/topic_tag.go`
+- `backend-go/internal/domain/topicanalysis/config_service.go`
+- `backend-go/internal/domain/topicanalysis/handler.go`
+- `backend-go/internal/domain/topicextraction/tagger.go`
+- `backend-go/internal/app/router.go`
 
 ---
 
