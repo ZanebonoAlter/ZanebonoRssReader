@@ -153,6 +153,8 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 					if err := database.DB.Save(existing).Error; err != nil {
 						return nil, err
 					}
+					// Backfill embedding if missing (tags created before pgvector migration)
+					go ensureTagEmbedding(es, existing.ID)
 					return existing, nil
 				}
 
@@ -166,6 +168,8 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 						existing.Aliases = string(aJSON)
 						database.DB.Save(existing)
 					}
+					// Backfill embedding if missing
+					go ensureTagEmbedding(es, existing.ID)
 					return existing, nil
 				}
 
@@ -201,6 +205,10 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 		if err := database.DB.Save(&dbTag).Error; err != nil {
 			return nil, err
 		}
+		// Backfill embedding if missing (fallback path)
+		if es != nil {
+			go ensureTagEmbedding(es, dbTag.ID)
+		}
 		return &dbTag, nil
 	}
 
@@ -219,7 +227,63 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 		return nil, err
 	}
 
+	// Generate embedding asynchronously for the new tag
+	if es != nil {
+		go generateAndSaveEmbedding(es, &newTag)
+	}
+
 	return &newTag, nil
+}
+
+// generateAndSaveEmbedding generates and stores an embedding for a tag in a goroutine.
+// Uses recover to ensure embedding generation failure never blocks tag creation.
+func generateAndSaveEmbedding(es *topicanalysis.EmbeddingService, tag *models.TopicTag) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf("[WARN] Embedding generation panicked for tag %d: %v\n", tag.ID, r)
+		}
+	}()
+
+	embedding, err := es.GenerateEmbedding(context.Background(), tag)
+	if err != nil {
+		fmt.Printf("[WARN] Failed to generate embedding for tag %d: %v\n", tag.ID, err)
+		return
+	}
+	if err := es.SaveEmbedding(embedding); err != nil {
+		fmt.Printf("[WARN] Failed to save embedding for tag %d: %v\n", tag.ID, err)
+	}
+}
+
+// ensureTagEmbedding checks if a tag already has an embedding and generates one if missing.
+// Used to backfill embeddings for tags created before the pgvector migration.
+func ensureTagEmbedding(es *topicanalysis.EmbeddingService, tagID uint) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf("[WARN] Embedding backfill panicked for tag %d: %v\n", tagID, r)
+		}
+	}()
+
+	// Check if embedding already exists
+	var count int64
+	database.DB.Model(&models.TopicTagEmbedding{}).Where("topic_tag_id = ?", tagID).Count(&count)
+	if count > 0 {
+		return // Already has embedding
+	}
+
+	// Load the tag
+	var tag models.TopicTag
+	if err := database.DB.First(&tag, tagID).Error; err != nil {
+		return
+	}
+
+	embedding, err := es.GenerateEmbedding(context.Background(), &tag)
+	if err != nil {
+		fmt.Printf("[WARN] Failed to backfill embedding for tag %d: %v\n", tagID, err)
+		return
+	}
+	if err := es.SaveEmbedding(embedding); err != nil {
+		fmt.Printf("[WARN] Failed to save backfilled embedding for tag %d: %v\n", tagID, err)
+	}
 }
 
 func NormalizeDisplayCategory(kind string, fallback string) string {
