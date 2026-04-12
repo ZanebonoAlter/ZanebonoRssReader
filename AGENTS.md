@@ -8,6 +8,8 @@ Agent guide for coding assistants working in `D:\project\my-robot`.
 - Checked for Cursor rules: no `.cursorrules` and no `.cursor/rules/` directory found.
 - Checked for Copilot rules: no `.github/copilot-instructions.md` found.
 - If new rule files appear later, merge their guidance here before making broad changes.
+- 完成任务后，请根据`llm-wiki.md`的指导更新维护本地知识库
+- 和用户沟通使用中文
 
 ## Project Snapshot
 - RSS Reader app with a Nuxt 4 frontend and a Go backend.
@@ -162,7 +164,7 @@ pytest test_*.py -v
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **my-robot** (4257 symbols, 10280 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **my-robot** (4940 symbols, 11751 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 

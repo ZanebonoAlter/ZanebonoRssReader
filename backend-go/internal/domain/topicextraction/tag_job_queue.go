@@ -92,6 +92,15 @@ func (q *TagJobQueue) Claim(limit int, lease time.Duration) ([]models.TagJob, er
 			return err
 		}
 
+		if err := tx.Model(&models.TagJob{}).
+			Where("status = ? AND attempt_count >= max_attempts", string(models.JobStatusPending)).
+			Updates(map[string]any{
+				"status":       string(models.JobStatusFailed),
+				"available_at": now,
+			}).Error; err != nil {
+			return err
+		}
+
 		if err := tx.Where("status = ? AND available_at <= ?", string(models.JobStatusPending), now).
 			Order("priority DESC").
 			Order("available_at ASC").

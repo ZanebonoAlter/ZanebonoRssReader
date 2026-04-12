@@ -21,15 +21,7 @@ type ServerConfig struct {
 type DatabaseConfig struct {
 	Driver   string
 	DSN      string
-	SQLite   SQLiteConfig
 	Postgres PostgresConfig
-}
-
-type SQLiteConfig struct {
-	JournalMode   string `mapstructure:"journal_mode"`
-	BusyTimeoutMS int    `mapstructure:"busy_timeout_ms"`
-	MaxIdleConns  int    `mapstructure:"max_idle_conns"`
-	MaxOpenConns  int    `mapstructure:"max_open_conns"`
 }
 
 type PostgresConfig struct {
@@ -57,12 +49,8 @@ func LoadConfig(configPath string) error {
 	// Set defaults
 	viper.SetDefault("server.port", "5000")
 	viper.SetDefault("server.mode", "debug")
-	viper.SetDefault("database.driver", "sqlite")
-	viper.SetDefault("database.dsn", "rss_reader.db")
-	viper.SetDefault("database.sqlite.journal_mode", "WAL")
-	viper.SetDefault("database.sqlite.busy_timeout_ms", 5000)
-	viper.SetDefault("database.sqlite.max_idle_conns", 2)
-	viper.SetDefault("database.sqlite.max_open_conns", 1)
+	viper.SetDefault("database.driver", "postgres")
+	viper.SetDefault("database.dsn", "host=127.0.0.1 user=postgres password=postgres dbname=rss_reader port=5432 sslmode=disable TimeZone=Asia/Shanghai")
 	viper.SetDefault("database.postgres.max_idle_conns", 5)
 	viper.SetDefault("database.postgres.max_open_conns", 25)
 	viper.SetDefault("database.postgres.conn_max_lifetime_minutes", 60)

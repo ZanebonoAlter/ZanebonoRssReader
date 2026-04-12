@@ -139,9 +139,12 @@ my-robot/
 │       └── platform/         # 共享基础设施（config, database, middleware, ws, ai, airouter, aisettings, opennotebook, tracing）
 ├── docs/                     # 项目文档
 │   ├── architecture/         # 架构文档（本文档及子模块架构）
+│   ├── api/                  # API 文档（按领域拆分，见 api/_index.md）
 │   ├── guides/               # 功能指南（content-processing, digest, topic-graph 等）
 │   ├── operations/           # 运维文档（development, database, troubleshooting 等）
-│   └── api/                  # API 文档
+│   ├── database/             # 数据库字段说明
+│   ├── experience/           # 经验沉淀（踩坑记录、编码安全）
+│   └── plans/                # 历史设计/实施计划
 ├── tests/                    # 独立测试
 │   ├── workflow/             # Python 集成测试（scheduler、workflow）
 │   └── firecrawl/            # Firecrawl 集成检查
@@ -218,3 +221,4 @@ my-robot/
 - [内容增强](../guides/content-processing.md)：Firecrawl + AI 内容补全流程
 - [Digest 指南](../guides/digest.md)：日报/周报配置与输出
 - [主题图谱](../guides/topic-graph.md)：图谱构建与分析
+- [API 文档](../api/_index.md)：按领域拆分的 REST API 参考

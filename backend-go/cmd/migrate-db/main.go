@@ -183,7 +183,7 @@ func openTargetPostgres(dsn string) (*gorm.DB, error) {
 }
 
 func prepareTargetSchema(ctx context.Context, db *gorm.DB) error {
-	if err := database.RunMigrations(db, "postgres"); err != nil {
+	if err := database.RunMigrations(db); err != nil {
 		return fmt.Errorf("run postgres migrations: %w", err)
 	}
 

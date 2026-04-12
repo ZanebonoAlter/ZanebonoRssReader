@@ -11,29 +11,25 @@ import (
 
 type Migration struct {
 	Version     string
-	Driver      string
 	Description string
 	Up          func(db *gorm.DB) error
 }
 
-var migrationRegistry = registeredMigrations
-
-func RunMigrations(db *gorm.DB, driver string) error {
+func RunMigrations(db *gorm.DB) error {
 	if db == nil {
 		return fmt.Errorf("database connection is required")
 	}
 
-	normalizedDriver := normalizeDatabaseDriver(driver)
 	if err := ensureSchemaMigrationsTable(db); err != nil {
 		return err
 	}
 
-	appliedVersions, err := loadAppliedMigrationVersions(db, normalizedDriver)
+	appliedVersions, err := loadAppliedMigrationVersions(db)
 	if err != nil {
 		return err
 	}
 
-	for _, migration := range migrationsForDriver(normalizedDriver) {
+	for _, migration := range migrationsSorted() {
 		if appliedVersions[migration.Version] {
 			continue
 		}
@@ -44,9 +40,8 @@ func RunMigrations(db *gorm.DB, driver string) error {
 			}
 
 			if err := tx.Exec(
-				"INSERT INTO schema_migrations (version, driver) VALUES (?, ?)",
+				"INSERT INTO schema_migrations (version) VALUES (?)",
 				migration.Version,
-				normalizedDriver,
 			).Error; err != nil {
 				return fmt.Errorf("record migration %s: %w", migration.Version, err)
 			}
@@ -60,35 +55,19 @@ func RunMigrations(db *gorm.DB, driver string) error {
 	return nil
 }
 
-func registeredMigrations() []Migration {
-	migrations := append([]Migration{}, sqliteLegacyMigrations()...)
-	migrations = append(migrations, postgresMigrations()...)
-	return migrations
-}
-
-func migrationsForDriver(driver string) []Migration {
-	filtered := make([]Migration, 0)
-	for _, migration := range migrationRegistry() {
-		if normalizeDatabaseDriver(migration.Driver) != driver {
-			continue
-		}
-		filtered = append(filtered, migration)
-	}
-
-	sort.Slice(filtered, func(i, j int) bool {
-		return filtered[i].Version < filtered[j].Version
+func migrationsSorted() []Migration {
+	migrations := postgresMigrations()
+	sort.Slice(migrations, func(i, j int) bool {
+		return migrations[i].Version < migrations[j].Version
 	})
-
-	return filtered
+	return migrations
 }
 
 func ensureSchemaMigrationsTable(db *gorm.DB) error {
 	if err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS schema_migrations (
-			version VARCHAR(255) NOT NULL,
-			driver VARCHAR(32) NOT NULL,
-			applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			PRIMARY KEY (driver, version)
+			version VARCHAR(255) NOT NULL PRIMARY KEY,
+			applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)
 	`).Error; err != nil {
 		return fmt.Errorf("ensure schema_migrations table: %w", err)
@@ -97,10 +76,10 @@ func ensureSchemaMigrationsTable(db *gorm.DB) error {
 	return nil
 }
 
-func loadAppliedMigrationVersions(db *gorm.DB, driver string) (map[string]bool, error) {
+func loadAppliedMigrationVersions(db *gorm.DB) (map[string]bool, error) {
 	var versions []string
-	if err := db.Raw("SELECT version FROM schema_migrations WHERE driver = ?", driver).Scan(&versions).Error; err != nil {
-		return nil, fmt.Errorf("load applied migrations for %s: %w", driver, err)
+	if err := db.Raw("SELECT version FROM schema_migrations").Scan(&versions).Error; err != nil {
+		return nil, fmt.Errorf("load applied migrations: %w", err)
 	}
 
 	applied := make(map[string]bool, len(versions))

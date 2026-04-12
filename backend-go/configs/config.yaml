@@ -5,11 +5,6 @@ server:
 database:
   driver: "postgres"
   dsn: "host=127.0.0.1 user=postgres password=postgres dbname=rss_reader port=5432 sslmode=disable TimeZone=Asia/Shanghai"
-  sqlite:
-    journal_mode: "WAL"
-    busy_timeout_ms: 5000
-    max_idle_conns: 2
-    max_open_conns: 1
   postgres:
     max_idle_conns: 5
     max_open_conns: 25

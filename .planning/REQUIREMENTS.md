@@ -28,8 +28,8 @@
 - [ ] **STAT-01**: Feed删除时，其文章的firecrawl_status、summary_status统一标记为"abandoned"或清理
 - [ ] **STAT-02**: CleanupOldArticles在feed不存在时使用默认max_articles=100，不跳过清理
 - [x] **STAT-03**: Article buildArticleFromEntry逻辑修正：只开启ArticleSummaryEnabled不开启Firecrawl时，设置summary_status="pending"而非"complete"
-- [ ] **STAT-04**: Blocked文章（waiting_for_firecrawl）有恢复机制：定期检查feed状态变化，解除block
-- [ ] **STAT-05**: ContentCompletion blocked文章超过阈值（如50篇）时发出警告日志
+- [x] **STAT-04**: Blocked文章（waiting_for_firecrawl）有恢复机制：定期检查feed状态变化，解除block
+- [x] **STAT-05**: ContentCompletion blocked文章超过阈值（如50篇）时发出警告日志
 
 ### API — API交互规范化
 

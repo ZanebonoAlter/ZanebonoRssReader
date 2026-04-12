@@ -2,14 +2,25 @@
 
 ## 当前数据库
 
-- 数据库类型：SQLite
-- 默认文件：`backend-go/rss_reader.db`
+支持两种数据库驱动，通过 `config.yaml` 的 `database.driver` 或环境变量 `DATABASE_DRIVER` 切换：
+
+| 驱动 | 用途 | 默认连接 |
+|------|------|----------|
+| `postgres` | 生产推荐，支持 pgvector 向量检索 | `host=127.0.0.1 port=5432 dbname=rss_reader` |
+| `sqlite` | 本地开发 / 回退 | `backend-go/rss_reader.db` |
+
+当前默认配置为 `postgres`。
 
 ## 初始化方式
 
-后端启动时会自动初始化缺失表。核心逻辑在：
+后端启动时自动执行版本化迁移。核心逻辑在：
 
-- `backend-go/internal/platform/database/db.go`
+- `backend-go/internal/platform/database/db.go` — 入口，按驱动分发连接
+- `backend-go/internal/platform/database/migrator.go` — 版本化迁移框架（`schema_migrations` 追踪表）
+- `backend-go/internal/platform/database/postgres_migrations.go` — PostgreSQL 迁移
+- `backend-go/internal/platform/database/sqlite_legacy_migrations.go` — SQLite 迁移
+
+> 从 SQLite 迁移到 PostgreSQL 的操作步骤见 [PostgreSQL 迁移操作手册](./postgres-migration.md)。
 
 ## 当前核心表
 
