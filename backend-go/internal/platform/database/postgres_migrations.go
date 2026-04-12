@@ -38,5 +38,15 @@ func postgresMigrations() []Migration {
 				return nil
 			},
 		},
+		{
+			Version:     "20260413_0001",
+			Description: "Add HNSW index on topic_tag_embeddings.embedding for fast cosine similarity search.",
+			Up: func(db *gorm.DB) error {
+				if err := db.Exec("CREATE INDEX IF NOT EXISTS idx_topic_tag_embeddings_embedding ON topic_tag_embeddings USING hnsw (embedding vector_cosine_ops)").Error; err != nil {
+					return fmt.Errorf("create hnsw index on topic_tag_embeddings.embedding: %w", err)
+				}
+				return nil
+			},
+		},
 	}
 }

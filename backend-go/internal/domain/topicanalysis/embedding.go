@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/domain/topictypes"
@@ -98,24 +99,28 @@ func (s *EmbeddingService) GenerateEmbedding(ctx context.Context, tag *models.To
 		return nil, ErrEmbeddingFailed
 	}
 
-	// Store embedding as JSON
+	// Store embedding as JSON (legacy) and as pgvector format
 	vectorJSON, err := json.Marshal(result.Embeddings[0])
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal embedding: %w", err)
 	}
 
+	// Build pgvector format string: [0.1,0.2,0.3,...]
+	pgVecStr := floatsToPgVector(result.Embeddings[0])
+
 	embedding := &models.TopicTagEmbedding{
-		TopicTagID: tag.ID,
-		Vector:     string(vectorJSON),
-		Dimension:  result.Dimensions,
-		Model:      result.Model,
-		TextHash:   textHash,
+		TopicTagID:   tag.ID,
+		Vector:       string(vectorJSON),
+		EmbeddingVec: pgVecStr,
+		Dimension:    result.Dimensions,
+		Model:        result.Model,
+		TextHash:     textHash,
 	}
 
 	return embedding, nil
 }
 
-// FindSimilarTags finds existing tags with similar embeddings
+// FindSimilarTags finds existing tags with similar embeddings using pgvector SQL
 func (s *EmbeddingService) FindSimilarTags(ctx context.Context, tag *models.TopicTag, category string, limit int) ([]TagCandidate, error) {
 	// Generate embedding for the new tag
 	tagWithText := &models.TopicTag{
@@ -129,48 +134,62 @@ func (s *EmbeddingService) FindSimilarTags(ctx context.Context, tag *models.Topi
 		return nil, fmt.Errorf("failed to generate embedding: %w", err)
 	}
 
+	// Build pgvector format for the query vector
+	pgVecStr := floatsToPgVector(nil)
 	var vector []float64
 	if err := json.Unmarshal([]byte(embedding.Vector), &vector); err != nil {
 		return nil, fmt.Errorf("failed to parse embedding vector: %w", err)
 	}
+	pgVecStr = floatsToPgVector(vector)
 
-	// Load existing embeddings for the same category
-	var existingEmbeddings []models.TopicTagEmbedding
-	if err := database.DB.
-		Joins("JOIN topic_tags ON topic_tags.id = topic_tag_embeddings.topic_tag_id").
-		Where("topic_tags.category = ?", category).
-		Preload("TopicTag").
-		Find(&existingEmbeddings).Error; err != nil {
-		return nil, fmt.Errorf("failed to load existing embeddings: %w", err)
+	// Use pgvector SQL cosine distance (<=>) for similarity search
+	type simRow struct {
+		TagID    uint    `gorm:"column:tag_id"`
+		Distance float64 `gorm:"column:distance"`
+	}
+	var rows []simRow
+	query := `
+		SELECT t.id AS tag_id, e.embedding <=> ?::vector AS distance
+		FROM topic_tag_embeddings e
+		JOIN topic_tags t ON t.id = e.topic_tag_id
+		WHERE t.category = ?
+		  AND e.embedding IS NOT NULL
+		ORDER BY e.embedding <=> ?::vector
+		LIMIT ?
+	`
+	if err := database.DB.Raw(query, pgVecStr, category, pgVecStr, limit).Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("failed to query similar tags: %w", err)
 	}
 
-	candidates := make([]TagCandidate, 0, len(existingEmbeddings))
-	for _, existing := range existingEmbeddings {
-		if existing.TopicTag == nil {
+	if len(rows) == 0 {
+		return nil, nil
+	}
+
+	// Load tags and compute similarity (1 - distance)
+	tagIDs := make([]uint, len(rows))
+	for i, r := range rows {
+		tagIDs[i] = r.TagID
+	}
+	var tags []models.TopicTag
+	if err := database.DB.Where("id IN ?", tagIDs).Find(&tags).Error; err != nil {
+		return nil, fmt.Errorf("failed to load tags: %w", err)
+	}
+	tagMap := make(map[uint]*models.TopicTag, len(tags))
+	for i := range tags {
+		tagMap[tags[i].ID] = &tags[i]
+	}
+
+	candidates := make([]TagCandidate, 0, len(rows))
+	for _, r := range rows {
+		t, ok := tagMap[r.TagID]
+		if !ok {
 			continue
 		}
-
-		var existingVector []float64
-		if err := json.Unmarshal([]byte(existing.Vector), &existingVector); err != nil {
-			continue
-		}
-
-		similarity, err := airouter.CosineSimilarity(vector, existingVector)
-		if err != nil {
-			continue
-		}
-
+		similarity := 1.0 - r.Distance
 		candidates = append(candidates, TagCandidate{
-			Tag:        existing.TopicTag,
+			Tag:        t,
 			Similarity: similarity,
 		})
-	}
-
-	// Sort by similarity descending
-	sortCandidatesBySimilarity(candidates)
-
-	if limit > 0 && len(candidates) > limit {
-		candidates = candidates[:limit]
 	}
 
 	return candidates, nil
@@ -318,10 +337,21 @@ func hashText(text string) string {
 }
 
 func getEmbeddingModel(provider *models.AIProvider) string {
-	// Check if provider has a specific embedding model configured
-	// For now, default to text-embedding-ada-002
-	// Provider.Model might be a chat model, so we use the default embedding model
+	// Use the model configured in the airouter provider.
+	// If the provider has an embedding model set, use it; otherwise fall back.
+	if provider.Model != "" {
+		return provider.Model
+	}
 	return "text-embedding-ada-002"
+}
+
+// floatsToPgVector converts a float64 slice to pgvector string format: [0.1,0.2,0.3]
+func floatsToPgVector(v []float64) string {
+	parts := make([]string, len(v))
+	for i, f := range v {
+		parts[i] = fmt.Sprintf("%f", f)
+	}
+	return "[" + strings.Join(parts, ",") + "]"
 }
 
 func containsAlias(aliasesJSON, label string) bool {
@@ -381,16 +411,4 @@ func min(a, b int) int {
 		return a
 	}
 	return b
-}
-
-func sortCandidatesBySimilarity(candidates []TagCandidate) {
-	// Simple bubble sort for small slices
-	n := len(candidates)
-	for i := 0; i < n-1; i++ {
-		for j := 0; j < n-i-1; j++ {
-			if candidates[j].Similarity < candidates[j+1].Similarity {
-				candidates[j], candidates[j+1] = candidates[j+1], candidates[j]
-			}
-		}
-	}
 }
