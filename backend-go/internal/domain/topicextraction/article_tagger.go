@@ -75,7 +75,7 @@ func tagArticle(article *models.Article, feedName, categoryName string, options 
 
 	// Process each tag
 	for _, tag := range dedupeTagsWithCategory(tags) {
-		dbTag, err := findOrCreateTag(tag, source)
+		dbTag, err := findOrCreateTag(context.Background(), tag, source)
 		if err != nil {
 			continue // Skip on error, don't fail the whole operation
 		}

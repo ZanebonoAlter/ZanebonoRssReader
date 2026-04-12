@@ -4,15 +4,30 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"my-robot-backend/internal/domain/topicanalysis"
 	"my-robot-backend/internal/domain/topictypes"
 	"sort"
 	"strings"
+	"sync"
 
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/platform/database"
 )
 
 var errTopicAIUnavailable = errors.New("topic AI unavailable")
+
+var (
+	embeddingService     *topicanalysis.EmbeddingService
+	embeddingServiceOnce sync.Once
+)
+
+func getEmbeddingService() *topicanalysis.EmbeddingService {
+	embeddingServiceOnce.Do(func() {
+		embeddingService = topicanalysis.NewEmbeddingService()
+	})
+	return embeddingService
+}
 
 // TagSummary extracts and stores tags for an AI summary
 // This is the main entry point called from the automatic summary scheduler
@@ -59,7 +74,7 @@ func TagSummary(summary *models.AISummary) error {
 
 	// Process each tag
 	for _, tag := range dedupeTagsWithCategory(tags) {
-		dbTag, err := findOrCreateTag(tag, source)
+		dbTag, err := findOrCreateTag(context.Background(), tag, source)
 		if err != nil {
 			continue // Skip on error, don't fail the whole operation
 		}
@@ -98,12 +113,76 @@ func legacyExtractTopics(input topictypes.ExtractionInput) []topictypes.TopicTag
 }
 
 // findOrCreateTag finds an existing tag or creates a new one
-func findOrCreateTag(tag topictypes.TopicTag, source string) (*models.TopicTag, error) {
+// Uses three-level matching: exact/alias → embedding similarity → create new
+func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string) (*models.TopicTag, error) {
 	slug := topictypes.Slugify(tag.Label)
 	category := NormalizeDisplayCategory(tag.Kind, tag.Category)
 	kind := NormalizeTopicKind(tag.Kind, category)
 
-	// Try to find existing tag by slug and category
+	// Build aliases string for TagMatch
+	aliases := tag.Aliases
+	if len(aliases) == 0 {
+		aliases = []string{}
+	}
+	aliasesJSON, _ := json.Marshal(aliases)
+
+	// Try embedding-based three-level matching
+	es := getEmbeddingService()
+	if es != nil {
+		matchResult, err := es.TagMatch(ctx, tag.Label, category, string(aliasesJSON))
+		if err != nil {
+			// Embedding unavailable — fall back to exact match
+			fmt.Printf("[WARN] TagMatch failed, falling back to exact match: %v\n", err)
+		} else {
+			switch matchResult.MatchType {
+			case "exact":
+				// Exact match — update label/aliases/icon and return
+				if matchResult.ExistingTag != nil {
+					existing := matchResult.ExistingTag
+					existing.Label = tag.Label
+					existing.Category = category
+					existing.Source = source
+					if tag.Icon != "" {
+						existing.Icon = tag.Icon
+					}
+					if len(tag.Aliases) > 0 {
+						aJSON, _ := json.Marshal(tag.Aliases)
+						existing.Aliases = string(aJSON)
+					}
+					existing.Kind = kind
+					if err := database.DB.Save(existing).Error; err != nil {
+						return nil, err
+					}
+					return existing, nil
+				}
+
+			case "high_similarity":
+				// High similarity — auto-reuse existing tag (per CONV-01)
+				if matchResult.ExistingTag != nil {
+					existing := matchResult.ExistingTag
+					// Optionally update aliases if new tag has new aliases
+					if len(tag.Aliases) > 0 {
+						aJSON, _ := json.Marshal(tag.Aliases)
+						existing.Aliases = string(aJSON)
+						database.DB.Save(existing)
+					}
+					return existing, nil
+				}
+
+			case "ai_judgment":
+				// Middle band (per CONV-03) — skip AI judgment, create new tag
+				fmt.Printf("[INFO] Middle-band similarity %.2f for tag '%s', creating new tag\n", matchResult.Similarity, tag.Label)
+				// Fall through to creation below
+
+			case "low_similarity", "no_match":
+				// Low similarity or no match — create new tag
+				// Fall through to creation below
+			}
+		}
+	}
+
+	// Fallback: exact slug+category match (when embedding unavailable)
+	// or creation path for low_similarity/no_match/ai_judgment
 	var dbTag models.TopicTag
 	err := database.DB.Where("slug = ? AND category = ?", slug, category).First(&dbTag).Error
 	if err == nil {
@@ -115,8 +194,8 @@ func findOrCreateTag(tag topictypes.TopicTag, source string) (*models.TopicTag, 
 			dbTag.Icon = tag.Icon
 		}
 		if len(tag.Aliases) > 0 {
-			aliasesJSON, _ := json.Marshal(tag.Aliases)
-			dbTag.Aliases = string(aliasesJSON)
+			aJSON, _ := json.Marshal(tag.Aliases)
+			dbTag.Aliases = string(aJSON)
 		}
 		dbTag.Kind = kind
 		if err := database.DB.Save(&dbTag).Error; err != nil {
@@ -126,11 +205,6 @@ func findOrCreateTag(tag topictypes.TopicTag, source string) (*models.TopicTag, 
 	}
 
 	// Create new tag
-	aliases := tag.Aliases
-	if len(aliases) == 0 {
-		aliases = []string{}
-	}
-	aliasesJSON, _ := json.Marshal(aliases)
 	newTag := models.TopicTag{
 		Slug:        slug,
 		Label:       tag.Label,

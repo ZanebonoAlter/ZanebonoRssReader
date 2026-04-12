@@ -280,13 +280,14 @@ func (s *EmbeddingService) TagMatch(ctx context.Context, label, category string,
 		}, nil
 	}
 
-	// Middle band - AI judgment needed
+	// Middle band - per CONV-03, skip AI judgment and create new tag
+	// Candidates are still populated for logging/debugging purposes
 	return &TagMatchResult{
 		MatchType:    "ai_judgment",
 		ExistingTag:  best.Tag,
 		Similarity:   best.Similarity,
 		Candidates:   candidates[:min(3, len(candidates))],
-		ShouldCreate: false, // AI will decide
+		ShouldCreate: true, // Degrades to creating new tag instead of AI judgment
 	}, nil
 }
 
