@@ -1,81 +1,103 @@
-# REQUIREMENTS: Milestone v1.1 业务漏洞修复
+# REQUIREMENTS: Milestone v1.2 标签智能收敛与关注推送
 
-## Milestone
+**Defined:** 2026-04-12
+**Core Value:** 通过智能标签系统帮助用户高效消费信息
 
-**v1.1 业务漏洞修复**
+## v1.2 Requirements
 
-## Requirements
+### INFRA — 基础设施
 
-### CONCURRENCY — 定时任务并发控制
+- [ ] **INFRA-01**: topic_tag_embeddings 向量存储从 JSON text 迁移到 pgvector vector 列，相似度搜索用 SQL `<=>` 运算符替代 Go 侧循环计算
+- [ ] **INFRA-02**: getEmbeddingModel 从 provider 配置动态读取 embedding 模型名，不硬编码 ada-002
+- [ ] **INFRA-03**: 收敛阈值（HighSimilarity/LowSimilarity）做成可配置项，支持通过 API 或数据库配置
 
-- [ ] **CONC-01**: Auto-refresh scheduler在feed刷新完成后正确等待所有goroutine结束再触发auto-summary
-- [ ] **CONC-02**: Firecrawl scheduler的TriggerNow()返回实际执行状态（成功/失败/已运行），前端可感知结果
-- [ ] **CONC-03**: 所有scheduler的TriggerNow()方法在锁定失败时返回一致的错误格式（包含accepted=false, reason, message）
-- [ ] **CONC-04**: Auto-refresh异步刷新feed时，每个goroutine独立的panic recovery，不影响其他feed刷新
-- [ ] **CONC-05**: Digest scheduler reload时不丢失pending定时任务（优雅停止再启动）
+### CONV — 标签自动收敛
 
-### TAGGING — 标签提取流程统一
+- [ ] **CONV-01**: 新文章入库调用 findOrCreateTag 时，集成 EmbeddingService.TagMatch 做三级匹配（exact → alias → embedding），高相似度自动复用已有标签
+- [ ] **CONV-02**: 标签合并时在事务内迁移 article_topic_tags 等关联记录到目标标签，防止引用悬空
+- [ ] **CONV-03**: AI judgment 中间地带（LowSimilarity ~ HighSimilarity）跳过 AI 判定，降级为创建新标签；中间地带阈值可调整
+- [ ] **CONV-04**: 合并后的旧标签标记为 merged 状态（非物理删除），保留合并历史可追溯
 
-- [ ] **TAG-01**: Firecrawl完成后统一通过TagJobQueue异步enqueue标签任务，不直接调用RetagArticle
-- [ ] **TAG-02**: ContentCompletion完成后统一通过TagJobQueue异步enqueue标签任务，不直接调用RetagArticle
-- [ ] **TAG-03**: 手动打标签API `/articles/:id/tags` 改为通过TagJobQueue enqueue，保持流程一致
-- [ ] **TAG-04**: TagQueue启动失败时自动重试，不永久卡在"not started"状态
-- [ ] **TAG-05**: TagArticle增加幂等检查，防止同时多个标签任务重复处理同一文章
-- [ ] **TAG-06**: RetagArticle完成时清理文章现有标签关联，防止残留
+### WATCH — 关注标签
 
-### STATE — 状态一致性
+- [ ] **WATCH-01**: 用户可在标签列表页面勾选/取消关注标签（is_watched 开关）
+- [ ] **WATCH-02**: 后端提供关注标签 CRUD API：列出关注标签、设置关注、取消关注
+- [ ] **WATCH-03**: 关注标签变更时记录 watched_at 时间，用于日报周报的时间范围判断
 
-- [ ] **STAT-01**: Feed删除时，其文章的firecrawl_status、summary_status统一标记为"abandoned"或清理
-- [ ] **STAT-02**: CleanupOldArticles在feed不存在时使用默认max_articles=100，不跳过清理
-- [x] **STAT-03**: Article buildArticleFromEntry逻辑修正：只开启ArticleSummaryEnabled不开启Firecrawl时，设置summary_status="pending"而非"complete"
-- [x] **STAT-04**: Blocked文章（waiting_for_firecrawl）有恢复机制：定期检查feed状态变化，解除block
-- [x] **STAT-05**: ContentCompletion blocked文章超过阈值（如50篇）时发出警告日志
+### FEED — 首页关注文章推送
 
-### API — API交互规范化
+- [ ] **FEED-01**: 首页展示关注标签关联的文章流，按时间倒序排列
+- [ ] **FEED-02**: 支持按单个关注标签筛选文章
+- [ ] **FEED-03**: 文章列表支持按相关度排序（关注标签匹配数量、embedding 距离加权）
 
-- [ ] **API-01**: Scheduler trigger API统一使用apiClient，不直接使用fetch
-- [ ] **API-02**: UpdateArticle成功后刷新相关feed的unreadCount，防止前端计数漂移
-- [ ] **API-03**: MarkAllAsRead的本地状态更新覆盖所有边界情况（未分类、空分类等）
-- [ ] **API-04**: 所有scheduler status API返回格式一致（包含name, status, check_interval, next_run, is_executing）
+### DIGEST — 日报周报重构
 
-### ERROR — 错误处理完善
+- [ ] **DIGEST-01**: 完全替换现有日报/周报逻辑，从按分类聚合改为按关注标签聚合文章
+- [ ] **DIGEST-02**: 日报/周报支持手动触发（不限于定时任务）
+- [ ] **DIGEST-03**: 日报/周报适配所有导出通道：前端展示、飞书、Obsidian、OpenNotebook
+- [ ] **DIGEST-04**: 无关注标签时有合理的降级提示（而非空白或报错）
 
-- [ ] **ERR-01**: Firecrawl scheduler runCrawlCycle添加panic recovery，记录panic原因到lastError
-- [ ] **ERR-02**: Preference_update scheduler runUpdate添加panic recovery
-- [ ] **ERR-03**: Digest scheduler generateDailyDigest/generateWeeklyDigest添加panic recovery
-- [ ] **ERR-04**: 所有scheduler的error持久化到SchedulerTask表（目前firecrawl/preference_update只更新内存）
-- [ ] **ERR-05**: Digest scheduler创建DigestSchedulerTask表记录执行状态
+### TRENDS — 标签历史分析
 
-### RECOVERY — 状态恢复机制
+- [ ] **TRENDS-01**: 用户可指定关注标签或手动选择标签，生成该标签的主题叙事总结（AI 生成）
+- [ ] **TRENDS-02**: 主题叙事包含：事件来龙去脉、人物/实体时间线、综合评价总结
+- [ ] **TRENDS-03**: 支持选择时间范围限定叙事内容范围
 
-- [ ] **REC-01**: Auto-refresh stale feed重置后记录日志，包含feed_id和stale时长
-- [ ] **REC-02**: Firecrawl stale processing job超过阈值时自动重置状态为pending，防止永久卡死
-- [ ] **REC-03**: ContentCompletion stale processing article自动恢复，重新入队处理
-- [ ] **REC-04**: TagQueue worker失败后backoff最大30分钟，超过5次标记failed，不无限重试
+### REC — 相关标签推荐
+
+- [ ] **REC-01**: 基于关注标签推荐相关标签，综合 embedding 相似度和同文章共现频次
+- [ ] **REC-02**: 推荐结果在关注标签管理页面或标签详情页展示
 
 ## Future Requirements
 
-(Deferred for next milestone)
+### Deferred
+
+- **AI judgment 中间地带处理**: 未来可实现 AI 辅助判定 0.78-0.97 相似度的标签是否合并
+- **标签手动合并 UI**: 管理界面支持用户主动选择合并目标
+- **趋势可视化图表**: 文章数量、时间分布的图表化展示
+- **多标签对比分析**: 同时对比多个标签的历史叙事
 
 ## Out of Scope
 
-| Requirement | Reason |
-|-------------|--------|
-| 前端UI优化 | 本次只修复后端逻辑漏洞 |
-| 性能优化（如批处理优化） | 不是发现的漏洞 |
-| 新功能（如标签管理界面） | 本次只修复，不开发 |
+| Feature | Reason |
+|---------|--------|
+| 全量标签聚类展示 | 本次目标是自动合并，不是展示分组 |
+| 多用户/协作系统 | 单用户部署 |
+| 标签自动删除 | 只做合并，不做删除 |
+| 自定义 embedding 模型训练 | 使用现成 API 即可 |
 
 ## Traceability
 
-| Phase | Requirements | Status |
-|-------|--------------|--------|
-| Phase 1 | CONC-01, CONC-02, CONC-03, CONC-04, CONC-05 | planned |
-| Phase 2 | TAG-01, TAG-02, TAG-03, TAG-04, TAG-05, TAG-06 | planned |
-| Phase 3 | STAT-01, STAT-02, STAT-03, STAT-04, STAT-05 | planned |
-| Phase 4 | API-01, API-02, API-03, API-04 | planned |
-| Phase 5 | ERR-01, ERR-02, ERR-03, ERR-04, ERR-05 | planned |
-| Phase 6 | REC-01, REC-02, REC-03, REC-04 | planned |
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| INFRA-01 | — | Pending |
+| INFRA-02 | — | Pending |
+| INFRA-03 | — | Pending |
+| CONV-01 | — | Pending |
+| CONV-02 | — | Pending |
+| CONV-03 | — | Pending |
+| CONV-04 | — | Pending |
+| WATCH-01 | — | Pending |
+| WATCH-02 | — | Pending |
+| WATCH-03 | — | Pending |
+| FEED-01 | — | Pending |
+| FEED-02 | — | Pending |
+| FEED-03 | — | Pending |
+| DIGEST-01 | — | Pending |
+| DIGEST-02 | — | Pending |
+| DIGEST-03 | — | Pending |
+| DIGEST-04 | — | Pending |
+| TRENDS-01 | — | Pending |
+| TRENDS-02 | — | Pending |
+| TRENDS-03 | — | Pending |
+| REC-01 | — | Pending |
+| REC-02 | — | Pending |
+
+**Coverage:**
+- v1.2 requirements: 22 total
+- Mapped to phases: 0 ⚠️
+- Unmapped: 22 ⚠️
 
 ---
-
-*Generated by GSD workflow*
+*Requirements defined: 2026-04-12*
+*Last updated: 2026-04-12 after initial definition*
