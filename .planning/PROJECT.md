@@ -1,54 +1,59 @@
-# PROJECT: RSS Reader 漏洞修复
+# PROJECT: RSS Reader
 
 ## What This Is
 
-RSS Reader 后端业务逻辑漏洞修复项目，目标解决定时任务触发、标签提取流程、状态一致性等核心业务问题。
+RSS Reader 应用，Go 后端 + Nuxt 4 前端，PostgreSQL 存储，单用户部署。核心功能包括 feed 订阅、文章阅读、AI 摘要、Firecrawl 内容增强、日报周报导出。已完成 v1.1 业务漏洞修复。
 
 ## Core Value
 
-**修复已发现的业务漏洞，确保系统稳定可靠运行**
+**通过智能标签系统帮助用户高效消费信息**
 
-用户已运行系统一段时间，发现了多个影响业务正确性的问题。修复这些问题比添加新功能更重要。
+标签不是附属功能，是信息组织的核心。语义收敛减少噪音，关注机制聚焦兴趣，历史趋势辅助反思。
+
+## Current Milestone: v1.2 标签智能收敛与关注推送
+
+**Goal:** 通过 embedding 语义相似度自动合并相近标签，建立关注标签机制，重构日报周报为关注视角，增加首页关注文章推送与标签历史趋势分析
+
+**Target features:**
+- 标签自动收敛：新文章入库时 embedding 匹配，高相似度自动合并
+- Embedding 模型配置：复用已有 airouter provider 框架（CapabilityEmbedding）
+- 关注标签：标签列表勾选关注
+- 日报周报重构：完全替换为基于关注标签的每日/每周总结，支持手动触发
+- 首页关注文章推送：关注标签关联文章，支持按标签筛选
+- 关注标签相关度推送：推荐与关注标签高相关的其他标签（embedding 相似或同文章共现）
+- 标签历史趋势分析：指定关注标签或手动选标签的历史维度分析
 
 ## Key Decisions
 
 | Decision | Reason | Alternatives Considered |
 |----------|--------|-------------------------|
-| 使用GSD管理修复进度 | 可验证、可追踪、原子提交 | 直接在代码中修复（无记录） |
-| 每个漏洞作为独立phase | 可独立验证、降低风险 | 批量修复（难以追踪） |
-| 添加UAT测试 | 确保修复有效且不引入新问题 | 只改代码（无验证） |
+| 复用 airouter provider 框架 | CapabilityEmbedding 路由已存在，EmbeddingClient 已实现 | 自建 embedding 模块（重复造轮子） |
+| 自动合并标签（非聚类展示） | 减少标签碎片，从根本上简化标签空间 | 展示时聚类（不解决数据冗余） |
+| 新文章入库时实时触发收敛 | 及时收敛，避免累积大量重复标签 | 定时批量合并（延迟高） |
+| 完全替换日报周报 | 关注标签视角是核心体验，旧逻辑不保留 | 新增视图（两套逻辑维护成本高） |
 
-## Current Milestone: v1.1 业务漏洞修复
+## Requirements
 
-**Goal:** 修复代码审查发现的6类业务漏洞，确保定时任务、标签提取、状态一致性正确运行
+### Validated
 
-**Target features:**
-- 定时任务并发控制与状态恢复
-- 标签提取流程统一与队列管理
-- 状态一致性检查与自动恢复
-- API交互规范化
-- 错误处理完善
+**v1.1 Phase 03 (状态一致性修复):**
+- ✓ STAT-01: Feed删除时文章级联删除 — v1.1/Phase 3
+- ✓ STAT-02: 文章清理不误删活跃文章 — v1.1/Phase 3
+- ✓ STAT-03: Summary-only feed文章summary_status初始化为pending — v1.1/Phase 3
+- ✓ STAT-04: 阻塞文章自动恢复机制 — v1.1/Phase 3
+- ✓ STAT-05: 阻塞数量超过阈值时WARN告警 — v1.1/Phase 3
 
-## Active Requirements
+### Active
 
-See `.planning/REQUIREMENTS.md` for full list.
+See `.planning/REQUIREMENTS.md` for current milestone requirements.
 
-## Validated Requirements
-
-**Phase 03 (状态一致性修复):**
-- STAT-01: Feed删除时文章级联删除 (CASCADE实现)
-- STAT-02: 文章清理不误删活跃文章
-- STAT-03: Summary-only feed文章summary_status初始化为pending
-- STAT-04: 阻塞文章自动恢复机制
-- STAT-05: 阻塞数量超过阈值时WARN告警
-
-## Out of Scope
+### Out of Scope
 
 | Requirement | Reason |
 |-------------|--------|
-| 新功能开发 | 本次只修复漏洞，不添加功能 |
-| UI界面调整 | 漏洞修复是后端逻辑问题 |
-| 性能优化 | 不是当前发现的漏洞 |
+| 全量标签聚类展示 | 本次目标是自动合并，不是展示分组 |
+| 多用户系统 | 单用户部署，不需要 |
+| 标签手动合并 UI | 本次用自动合并，手动合并可后续迭代 |
 
 ## Evolution
 
@@ -68,21 +73,25 @@ This document evolves at phase transitions and milestone boundaries.
 
 ## Context
 
-**Codebase:** Go + Nuxt 4, SQLite, 单用户部署
+**Codebase:** Go + Nuxt 4, PostgreSQL, 单用户部署
 
-**Key subsystems:**
-- 定时任务: auto_refresh, auto_summary, firecrawl, content_completion, preference_update, digest
-- 标签系统: TagQueue, TagJobQueue, TagArticle, RetagArticle
-- 状态管理: Article states (firecrawl_status, summary_status), Feed states
+**已有的 embedding 基础设施:**
+- `topicanalysis.EmbeddingService` — embedding 生成 + 相似度匹配 + TagMatch 三级逻辑
+- `airouter.EmbeddingClient` — OpenAI 兼容 embedding API 调用
+- `airouter.Store` — provider/route 管理，支持 CapabilityEmbedding
+- `topic_tag_embeddings` 表 — 存储标签向量
+- 三级匹配阈值: HighSimilarity ≥ 0.97 自动复用, LowSimilarity < 0.78 新建, 中间 AI 判定
 
-**Known vulnerabilities:**
-1. 并发控制不完整 → 重复执行风险
-2. 标签提取绕过队列 → 流程混乱
-3. 状态转换遗漏 → 文章卡死
-4. API不一致 → 前端状态漂移
-5. panic覆盖缺失 → 服务崩溃
-6. stale状态无处理 → 任务卡死
+**现有标签系统:**
+- `topic_tags` 表 (slug, label, aliases, category)
+- `topicextraction` 包: TagArticle, RetagArticle, TagQueue, TagJobQueue
+- `topicgraph` 包: BuildTopicGraph
+- v1.1 已修复标签流程统一（全部走 TagJobQueue）
+
+**现有日报周报:**
+- `digest` 包: DigestConfig, scheduler (daily/weekly), Obsidian 导出
+- 前端 `digest.ts` API + 对应页面
 
 ---
 
-*Last updated: 2026-04-11 (Phase 03 complete)*
+*Last updated: 2026-04-12 (Milestone v1.2 started)*

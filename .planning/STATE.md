@@ -1,85 +1,58 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.1
-milestone_name: milestone
-status: executing
-last_updated: "2026-04-11T08:58:36.356Z"
-last_activity: 2026-04-11 -- Phase 04 execution started
+milestone: v1.2
+milestone_name: 标签智能收敛与关注推送
+status: defining_requirements
+last_updated: "2026-04-12T00:00:00.000Z"
+last_activity: 2026-04-12 -- Milestone v1.2 started
 progress:
-  total_phases: 6
-  completed_phases: 3
-  total_plans: 8
-  completed_plans: 6
-  percent: 75
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
-# STATE: Milestone v1.1 业务漏洞修复
+# STATE: Milestone v1.2 标签智能收敛与关注推送
 
 ## Current Position
 
-Phase: 04 (api) — EXECUTING
-Plan: 1 of 2
-Status: Executing Phase 04
-Last activity: 2026-04-11 - Completed quick task 260411-oto: 修复 stale feed recovery
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-04-12 — Milestone v1.2 started
 
 ## Blocked
 
 (None)
 
-### Quick Tasks Completed
-
-| # | Description | Date | Commit | Directory |
-|---|-------------|------|--------|-----------|
-| 260411-oto | 修复 stale feed recovery - Feed刷新卡住超过5分钟被重置 | 2026-04-11 | 08dfd6b | [260411-oto-stale-feed-recovery](./quick/260411-oto-stale-feed-recovery-feed-5-feed-id-stale/) |
-
 ## Accumulated Context
 
-### 代码审查发现
+### v1.1 遗留
 
-**定时任务问题:**
+**已修复:**
+- Phase 03: 状态一致性 (STAT-01~05)
+- Quick task: stale feed recovery
+- Phase 01-04: 并发控制、标签流程统一、API规范化 (plans written)
 
-- auto_refresh.go:190-193 goroutine异步刷新，triggerAutoSummaryAfterRefreshes等待完成
-- firecrawl.go:60-77 TriggerNow()直接调用runCrawlCycle，无结果返回
-- staleRefreshingTimeout=5分钟重置，无后续处理
+**v1.1 Phase 05-06 待确认状态:**
+- Phase 05 (错误处理) 和 Phase 06 (恢复机制) 的 plans 已写但执行状态需确认
 
-**标签流程问题:**
+### 关键基础设施
 
-- firecrawl.go:238-248 异步enqueue，但文档说"直接调用RetagArticle"
-- content_completion_service.go:198-205 同样异步enqueue
-- articles/handler.go:216 手动API直接调用RetagArticle，绕过队列
-- tag_queue.go:67-82 Start失败后无自动恢复
+**Embedding (已有):**
+- `topicanalysis.EmbeddingService` — TagMatch 三级匹配 (exact → high_sim → ai_judgment)
+- `airouter.EmbeddingClient` — OpenAI 兼容 embedding API
+- `airouter.Store` — CapabilityEmbedding 路由
+- `topic_tag_embeddings` 表
 
-**状态一致性:**
+**标签系统 (已有):**
+- `topicextraction` — TagArticle, RetagArticle, TagQueue, TagJobQueue
+- `topicgraph` — BuildTopicGraph
 
-- feeds/service.go:172-193 buildArticleFromEntry状态转换遗漏
-- cleanupOldArticles依赖feed存在，feed删除后失效
-- blocked文章无恢复机制
-
-**API问题:**
-
-- scheduler.ts:6-37 trigger用fetch而非apiClient
-- api.ts:275-289 updateArticle不刷新unreadCount
-
-**错误处理:**
-
-- firecrawl.go缺少panic recovery
-- preference_update.go缺少panic recovery
-- digest/scheduler.go不记录执行状态
-
-### 关键文件
-
-| 文件 | 漏洞类别 |
-|------|----------|
-| auto_refresh.go | 并发、恢复 |
-| firecrawl.go | 并发、错误、恢复、标签 |
-| content_completion.go | 状态、错误、恢复 |
-| content_completion_service.go | 标签、状态 |
-| articles/handler.go | 标签 |
-| tag_queue.go | 标签、恢复 |
-| feeds/service.go | 状态 |
-| scheduler.ts | API |
-| api.ts | API |
+**日报周报 (已有，将被替换):**
+- `digest` 包 — DigestConfig, scheduler, Obsidian export
 
 ---
 
-*Updated: 2026-04-11*
+*Updated: 2026-04-12*
