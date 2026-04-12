@@ -70,34 +70,34 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| INFRA-01 | — | Pending |
-| INFRA-02 | — | Pending |
-| INFRA-03 | — | Pending |
-| CONV-01 | — | Pending |
-| CONV-02 | — | Pending |
-| CONV-03 | — | Pending |
-| CONV-04 | — | Pending |
-| WATCH-01 | — | Pending |
-| WATCH-02 | — | Pending |
-| WATCH-03 | — | Pending |
-| FEED-01 | — | Pending |
-| FEED-02 | — | Pending |
-| FEED-03 | — | Pending |
-| DIGEST-01 | — | Pending |
-| DIGEST-02 | — | Pending |
-| DIGEST-03 | — | Pending |
-| DIGEST-04 | — | Pending |
-| TRENDS-01 | — | Pending |
-| TRENDS-02 | — | Pending |
-| TRENDS-03 | — | Pending |
-| REC-01 | — | Pending |
-| REC-02 | — | Pending |
+| INFRA-01 | Phase 1 | Pending |
+| INFRA-02 | Phase 1 | Pending |
+| INFRA-03 | Phase 1 | Pending |
+| CONV-01 | Phase 1 | Pending |
+| CONV-02 | Phase 1 | Pending |
+| CONV-03 | Phase 1 | Pending |
+| CONV-04 | Phase 1 | Pending |
+| WATCH-01 | Phase 2 | Pending |
+| WATCH-02 | Phase 2 | Pending |
+| WATCH-03 | Phase 2 | Pending |
+| FEED-01 | Phase 2 | Pending |
+| FEED-02 | Phase 2 | Pending |
+| FEED-03 | Phase 2 | Pending |
+| DIGEST-01 | Phase 3 | Pending |
+| DIGEST-02 | Phase 3 | Pending |
+| DIGEST-03 | Phase 3 | Pending |
+| DIGEST-04 | Phase 3 | Pending |
+| TRENDS-01 | Phase 4 | Pending |
+| TRENDS-02 | Phase 4 | Pending |
+| TRENDS-03 | Phase 4 | Pending |
+| REC-01 | Phase 5 | Pending |
+| REC-02 | Phase 5 | Pending |
 
 **Coverage:**
 - v1.2 requirements: 22 total
-- Mapped to phases: 0 ⚠️
-- Unmapped: 22 ⚠️
+- Mapped to phases: 22 ✓
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-04-12*
-*Last updated: 2026-04-12 after initial definition*
+*Last updated: 2026-04-13 after roadmap creation*

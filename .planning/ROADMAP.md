@@ -1,206 +1,168 @@
-# ROADMAP: Milestone v1.1 业务漏洞修复
+# ROADMAP: Milestone v1.2 标签智能收敛与关注推送
 
 ## Overview
 
 | Metric | Value |
 |--------|-------|
-| Milestone | v1.1 业务漏洞修复 |
-| Phases | 6 |
-| Requirements | 23 |
+| Milestone | v1.2 标签智能收敛与关注推送 |
+| Phases | 5 |
+| Requirements | 22 |
 | Coverage | 100% ✓ |
 
 ## Phases
 
 | # | Phase | Goal | Requirements | Success Criteria |
 |---|-------|------|--------------|------------------|
-| 1 | 并发控制修复 | scheduler并发执行不丢失任务、不重复执行 | CONC-01~05 | 4 |
-| 2 | 标签流程统一 | 所有标签提取走统一队列，无绕过 | TAG-01~06 | 5 |
-| 3 | 状态一致性 | 文章状态正确转换，无卡死 | STAT-01~05 | 4 |
-| 4 | API规范化 | 前端API调用一致，状态同步正确 | API-01~04 | 3 |
-| 5 | 错误处理完善 | panic不崩溃，错误可追踪 | ERR-01~05 | 4 |
-| 6 | 恢复机制 | stale状态自动恢复，不永久卡死 | REC-01~04 | 3 |
+| 1 | 基础设施与标签收敛 | pgvector 迁移 + embedding 配置 + 标签自动收敛 | INFRA-01~03, CONV-01~04 | 4 |
+| 2 | 关注标签与首页推送 | 关注标签 CRUD + 首页关注文章推送 | WATCH-01~03, FEED-01~03 | 4 |
+| 3 | 日报周报重构 | 从分类聚合改为关注标签视角，适配所有导出通道 | DIGEST-01~04 | 4 |
+| 4 | 标签历史趋势 | AI 生成标签主题叙事分析 | TRENDS-01~03 | 3 |
+| 5 | 相关标签推荐 | 基于关注标签推荐相关标签 | REC-01~02 | 2 |
 
 ## Phase Details
 
-### Phase 1: 并发控制修复
+### Phase 1: 基础设施与标签收敛
 
-**Goal:** scheduler并发执行不丢失任务、不重复执行
+**Goal**: 标签系统具备 pgvector 向量搜索能力，新文章入库时语义相近标签自动合并，标签空间不再碎片化
 
-**Requirements:** CONC-01, CONC-02, CONC-03, CONC-04, CONC-05
-
-**Plans:** 3 plans in 2 waves
-
-Plans:
-- [x] 01-01-PLAN.md — CONC-03: TriggerNow status_code consistency (Wave 1)
-- [x] 01-02-PLAN.md — CONC-02: Firecrawl batch_id return (Wave 1)
-- [x] 01-03-PLAN.md — CONC-01: Auto-refresh completion WebSocket (Wave 2)
+**Requirements**: INFRA-01, INFRA-02, INFRA-03, CONV-01, CONV-02, CONV-03, CONV-04
 
 **Success Criteria:**
-1. 手动触发auto-refresh，观察日志确认所有feed刷新完成后再触发auto-summary
-2. 手动触发firecrawl，前端收到明确的执行结果（成功/失败/已运行）
-3. 连续点击scheduler trigger按钮，第二次收到"已在执行中"提示而非重复执行
-4. 模拟feed刷新panic，确认其他feed继续刷新且panic被记录
+1. 新文章入库时，如果已存在语义相近标签（相似度 ≥ 阈值），自动复用已有标签而非创建新标签
+2. 标签合并后，关联文章的标签引用正确迁移到目标标签，旧标签标记为 merged 状态保留历史可追溯
+3. 相似度搜索通过 pgvector SQL `<=>` 运算符完成，Go 侧不再循环遍历全表计算余弦距离
+4. embedding 模型名从 provider 配置动态读取，收敛阈值可通过 API 调整无需重启
+
+**Plans:**
+- [ ] 01-01: [待规划]
 
 **Files affected:**
-- `backend-go/internal/jobs/auto_refresh.go`
-- `backend-go/internal/jobs/firecrawl.go`
-- `backend-go/internal/jobs/content_completion.go`
-- `backend-go/internal/jobs/preference_update.go`
-- `backend-go/internal/platform/ws/hub.go`
-
----
-
-### Phase 2: 标签流程统一
-
-**Goal:** 所有标签提取走统一队列，无绕过
-
-**Requirements:** TAG-01, TAG-02, TAG-03, TAG-04, TAG-05, TAG-06
-
-**Plans:** 1 plan in 1 wave
-
-Plans:
-- [x] 02-01-PLAN.md — TAG-03/04: 异步API + 启动重试机制 (Wave 1)
-
-**Success Criteria:**
-1. Firecrawl完成后，文章标签通过TagJobQueue生成（查看tag_jobs表记录）
-2. ContentCompletion完成后，文章标签通过TagJobQueue生成
-3. 手动调用/articles/:id/tags API，tag_jobs表新增一条记录
-4. TagQueue启动失败后自动重试成功（查看日志）
-5. 同一文章同时触发多个标签任务，最终只生成一套标签
-
-**Files affected:**
-- `backend-go/internal/jobs/firecrawl.go`
-- `backend-go/internal/domain/contentprocessing/content_completion_service.go`
-- `backend-go/internal/domain/articles/handler.go`
-- `backend-go/internal/domain/topicextraction/tag_queue.go`
-- `backend-go/internal/domain/topicextraction/tag_job_queue.go`
+- `backend-go/internal/platform/airouter/embedding.go`
+- `backend-go/internal/domain/topicanalysis/embedding.go`
 - `backend-go/internal/domain/topicextraction/article_tagger.go`
+- `backend-go/internal/domain/models/topic_tag.go`
 
 ---
 
-### Phase 3: 状态一致性
+### Phase 2: 关注标签与首页推送
 
-**Goal:** 文章状态正确转换，无卡死
+**Goal**: 用户可以关注特定标签，首页看到关注标签关联的文章推送
 
-**Requirements:** STAT-01, STAT-02, STAT-03, STAT-04, STAT-05
+**Depends on**: Phase 1 (收敛完成后的干净标签空间)
 
-**Plans:** 2 plans in 1 wave
-
-Plans:
-- [x] 03-01-PLAN.md — STAT-03: buildArticleFromEntry状态初始化修正 (Wave 1)
-- [x] 03-02-PLAN.md — STAT-04/05: 阻塞文章恢复调度器 + 告警 (Wave 1)
+**Requirements**: WATCH-01, WATCH-02, WATCH-03, FEED-01, FEED-02, FEED-03
 
 **Success Criteria:**
-1. 删除feed后，其文章firecrawl_status/summary_status显示"abandoned"
-2. 新feed（无max_articles配置）的文章超过100篇时自动清理旧文章
-3. 创建只开ArticleSummaryEnabled的feed，新文章summary_status为"pending"
-4. Feed从FirecrawlEnabled=false改为true后，blocked文章解除waiting_for_firecrawl状态
-5. ContentCompletion overview显示blocked超过50篇时，日志有warning
+1. 用户可以在标签列表页勾选/取消关注标签，关注状态持久化并记录 watched_at 时间
+2. 首页展示关注标签关联的文章流，按时间倒序排列
+3. 用户可按单个关注标签筛选文章，文章列表支持按相关度排序（匹配标签数、embedding 距离加权）
+4. 无关注标签时首页回退到完整时间线，不显示空白
+
+**Plans:**
+- [ ] 02-01: [待规划]
 
 **Files affected:**
-- `backend-go/internal/domain/feeds/service.go`
-- `backend-go/internal/domain/models/article.go`
-- `backend-go/internal/domain/contentprocessing/content_completion_service.go`
-- `backend-go/internal/jobs/content_completion.go`
+- `backend-go/internal/domain/models/topic_tag.go` (新增 watched 字段)
+- `backend-go/internal/domain/topicextraction/handler.go` (关注 API)
+- `front/app/pages/` (首页关注推送)
+- `front/app/api/tags.ts` (前端 API)
+- `front/app/stores/` (关注标签 store)
 
 ---
 
-### Phase 4: API规范化
+### Phase 3: 日报周报重构
 
-**Goal:** 前端API调用一致，状态同步正确
+**Goal**: 日报周报从分类聚合完全替换为关注标签视角，所有导出通道正确输出
 
-**Requirements:** API-01, API-02, API-03, API-04
+**Depends on**: Phase 2 (关注标签数据)
 
-**Plans:** 2 plans in 1 wave
-
-Plans:
-- [x] 04-01-PLAN.md — API-01/02/03: 前端API调用统一 + 状态同步修复 (Wave 1)
-- [x] 04-02-PLAN.md — API-04: 后端scheduler status API格式统一 (Wave 1)
+**Requirements**: DIGEST-01, DIGEST-02, DIGEST-03, DIGEST-04
 
 **Success Criteria:**
-1. 前端调用scheduler trigger使用统一的apiClient（查看scheduler.ts代码）
-2. 标记文章已读后，sidebar feed unread count正确减少
-3. "全部标记已读"后，所有feed（包括未分类）的unread count清零
-4. 所有scheduler status API返回相同字段结构
+1. 日报/周报按关注标签聚合文章，不再按分类聚合
+2. 用户可通过前端手动触发生成日报/周报
+3. 所有导出通道（前端展示、飞书、Obsidian、OpenNotebook）正确输出关注标签视角内容
+4. 无关注标签时显示降级提示信息，不报错或空白
+
+**Plans:**
+- [ ] 03-01: [待规划]
 
 **Files affected:**
-- `front/app/api/scheduler.ts`
-- `front/app/stores/api.ts`
-- `backend-go/internal/jobs/handler.go`
-- `backend-go/internal/jobs/auto_refresh.go`
-- `backend-go/internal/jobs/firecrawl.go`
-- `backend-go/internal/jobs/content_completion.go`
-- `backend-go/internal/jobs/auto_summary.go`
+- `backend-go/internal/domain/digest/` (生成逻辑重写)
+- `front/app/api/digest.ts`
+- `front/app/pages/digest/`
 
 ---
 
-### Phase 5: 错误处理完善
+### Phase 4: 标签历史趋势
 
-**Goal:** panic不崩溃，错误可追踪
+**Goal**: 用户可选择标签查看 AI 生成的主题叙事分析，了解标签下的信息脉络
 
-**Requirements:** ERR-01, ERR-02, ERR-03, ERR-04, ERR-05
+**Depends on**: Phase 2 (关注标签数据)
+
+**Requirements**: TRENDS-01, TRENDS-02, TRENDS-03
 
 **Success Criteria:**
-1. Firecrawl处理过程中发生panic，scheduler继续运行且lastError记录panic原因
-2. Preference update发生panic，scheduler继续运行
-3. Digest生成发生panic，下次定时任务继续触发
-4. Firecrawl/preference_update错误持久化到scheduler_tasks表
-5. Digest执行有数据库记录（新建digest_scheduler_tasks表或复用scheduler_tasks）
+1. 用户可选择关注标签或手动选择任意标签，指定时间范围，生成该标签的主题叙事总结（AI 生成）
+2. 主题叙事包含：事件来龙去脉、人物/实体时间线、综合评价总结
+3. 时间范围限定可控制叙事内容的边界
+
+**Plans:**
+- [ ] 04-01: [待规划]
 
 **Files affected:**
-- `backend-go/internal/jobs/firecrawl.go`
-- `backend-go/internal/jobs/preference_update.go`
-- `backend-go/internal/domain/digest/scheduler.go`
-- `backend-go/internal/domain/models/scheduler_task.go`
+- `backend-go/internal/domain/topicanalysis/` (叙事生成)
+- `backend-go/internal/domain/articles/` (标签关联文章查询)
+- `front/app/pages/` (趋势分析页面)
 
 ---
 
-### Phase 6: 恢复机制
+### Phase 5: 相关标签推荐
 
-**Goal:** stale状态自动恢复，不永久卡死
+**Goal**: 基于关注标签推荐语义相近和共现频率高的相关标签
 
-**Requirements:** REC-01, REC-02, REC-03, REC-04
+**Depends on**: Phase 1 (embedding 基础设施), Phase 2 (关注标签列表)
+
+**Requirements**: REC-01, REC-02
 
 **Success Criteria:**
-1. Feed刷新卡住超过5分钟被重置，日志显示feed_id和stale时长
-2. Firecrawl job processing超过lease时间被重置为pending，重新入队
-3. ContentCompletion article processing超过30分钟被重置，重新处理
-4. TagQueue job失败5次后标记failed，不再无限重试
+1. 关注标签管理页面或标签详情页展示推荐的相关标签，综合 embedding 相似度和同文章共现频次
+2. 推荐结果排除已关注标签，点击推荐标签可查看详情或直接关注
+
+**Plans:**
+- [ ] 05-01: [待规划]
 
 **Files affected:**
-- `backend-go/internal/jobs/auto_refresh.go`
-- `backend-go/internal/jobs/firecrawl.go`
-- `backend-go/internal/jobs/content_completion.go`
-- `backend-go/internal/domain/topicextraction/tag_queue.go`
-- `backend-go/internal/domain/contentprocessing/firecrawl_job_queue.go`
+- `backend-go/internal/domain/topicanalysis/embedding.go` (相似度查询)
+- `backend-go/internal/domain/topicgraph/` (共现计算)
+- `front/app/pages/` (推荐展示)
 
 ---
 
 ## Dependencies
 
 ```
-Phase 1 ──┐
-          │
-Phase 2 ──┤── Phase 5 (错误处理依赖前面phase的panic recovery)
-          │
-Phase 3 ──┤── Phase 6 (恢复机制依赖状态检查逻辑)
-          │
-Phase 4 ──┘
+Phase 1 (INFRA+CONV) ──┬── Phase 2 (WATCH+FEED) ──┬── Phase 3 (DIGEST)
+                       │                          │
+                       │                          ├── Phase 4 (TRENDS)
+                       │                          │
+                       └──────────────────────────┴── Phase 5 (REC)
 ```
 
-建议执行顺序: 1 → 2 → 3 → 4 → 5 → 6
+执行顺序: 1 → 2 → 3 → 4 → 5 (Phases 3/4 可并行，Phase 5 需 1+2)
 
 ---
 
 ## Verification
 
 **After all phases:**
-1. 运行完整integration test suite (`tests/workflow/`)
-2. 手动测试各scheduler trigger行为
-3. 检查scheduler_tasks表有完整执行记录
-4. 检查tag_jobs表有正确任务流转
-5. 无文章卡在blocked/stale状态超过阈值
+1. 新文章入库标签自动收敛，无重复标签
+2. 关注标签推送文章准确、筛选正常
+3. 日报周报按关注标签输出，4 通道正确
+4. 标签叙事分析内容合理、时间范围可控
+5. 相关标签推荐有意义且不重复
 
 ---
 
 *Generated by GSD roadmap workflow*
+*Updated: 2026-04-13*

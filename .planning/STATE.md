@@ -2,11 +2,11 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: 标签智能收敛与关注推送
-status: defining_requirements
-last_updated: "2026-04-12T00:00:00.000Z"
-last_activity: 2026-04-12 -- Milestone v1.2 started
+status: roadmap_created
+last_updated: "2026-04-13T00:00:00.000Z"
+last_activity: 2026-04-13 -- Roadmap created for v1.2 (5 phases, 22 requirements)
 progress:
-  total_phases: 0
+  total_phases: 5
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -15,44 +15,73 @@ progress:
 
 # STATE: Milestone v1.2 标签智能收敛与关注推送
 
+## Project Reference
+
+See: .planning/PROJECT.md (updated 2026-04-12)
+
+**Core value:** 通过智能标签系统帮助用户高效消费信息
+**Current focus:** Phase 1 基础设施与标签收敛
+
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-04-12 — Milestone v1.2 started
+Phase: 1 of 5 (基础设施与标签收敛)
+Plan: — of —
+Status: Roadmap created, ready to plan
+Last activity: 2026-04-13 — Roadmap created for v1.2
 
-## Blocked
+Progress: [░░░░░░░░░░] 0%
 
-(None)
+## Performance Metrics
+
+**Velocity:**
+- Total plans completed: 0 (v1.2)
+- v1.1 plans completed: 10
+
+**By Phase:**
+
+| Phase | Plans | Total | Status |
+|-------|-------|-------|--------|
+| 1. 基础设施与标签收敛 | 0/? | - | Not started |
+| 2. 关注标签与首页推送 | 0/? | - | Not started |
+| 3. 日报周报重构 | 0/? | - | Not started |
+| 4. 标签历史趋势 | 0/? | - | Not started |
+| 5. 相关标签推荐 | 0/? | - | Not started |
+
+*Updated after each plan completion*
 
 ## Accumulated Context
 
-### v1.1 遗留
+### Decisions
 
-**已修复:**
-- Phase 03: 状态一致性 (STAT-01~05)
-- Quick task: stale feed recovery
-- Phase 01-04: 并发控制、标签流程统一、API规范化 (plans written)
+Decisions logged in PROJECT.md Key Decisions table. Recent:
 
-**v1.1 Phase 05-06 待确认状态:**
-- Phase 05 (错误处理) 和 Phase 06 (恢复机制) 的 plans 已写但执行状态需确认
+- v1.2: 复用 airouter provider 框架 (CapabilityEmbedding)
+- v1.2: 自动合并标签（非聚类展示），减少碎片
+- v1.2: 新文章入库时实时触发收敛
+- v1.2: 完全替换日报周报逻辑
 
-### 关键基础设施
+### Pending Todos
 
-**Embedding (已有):**
-- `topicanalysis.EmbeddingService` — TagMatch 三级匹配 (exact → high_sim → ai_judgment)
-- `airouter.EmbeddingClient` — OpenAI 兼容 embedding API
-- `airouter.Store` — CapabilityEmbedding 路由
-- `topic_tag_embeddings` 表
+None yet.
 
-**标签系统 (已有):**
-- `topicextraction` — TagArticle, RetagArticle, TagQueue, TagJobQueue
-- `topicgraph` — BuildTopicGraph
+### Blockers/Concerns
 
-**日报周报 (已有，将被替换):**
-- `digest` 包 — DigestConfig, scheduler, Obsidian export
+- **CONV-02 风险**: 标签合并事务内迁移 article_topic_tags 引用是高风险操作，需事务完整性保障
+- **INFRA-02 影响**: embedding 模型切换会导致现有阈值 (0.97/0.78) 失效，需考虑模型感知阈值
+- **DIGEST-03 复杂度**: 4 个导出通道需同步适配 (前端/飞书/Obsidian/OpenNotebook)
+
+### Research Notes
+
+- Phase 1 (收敛) 需实际标签数据校验阈值，收敛质量取决于真实分布
+- Phase 3 (日报重构) 各导出通道模板结构需在规划时研究
+- Phase 5 (推荐) PMI/TF-IDF 权重需真实数据调参，0.6/0.4 融合权重为初始值
+
+## Session Continuity
+
+Last session: 2026-04-13
+Stopped at: Roadmap created, ready for Phase 1 planning
+Resume file: None
 
 ---
 
-*Updated: 2026-04-12*
+*Updated: 2026-04-13*
