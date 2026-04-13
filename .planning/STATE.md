@@ -3,11 +3,11 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: milestone
 status: executing
-stopped_at: Quick task 260413-r4v complete
-last_updated: "2026-04-13T11:40:00.000Z"
-last_activity: 2026-04-13
+stopped_at: Phase 06 context gathered
+last_updated: "2026-04-13T12:26:00.188Z"
+last_activity: "2026-04-13 - Completed quick task 260413-r4v: 新增一个专门展示后端队列处理情况的 Tab，将现有 embedding 队列与新增的“标签合并后 embedding 重算队列”一起展示"
 progress:
-  total_phases: 5
+  total_phases: 6
   completed_phases: 1
   total_plans: 4
   completed_plans: 4
@@ -48,10 +48,15 @@ Progress: [░░░░░░░░░░] 0%
 | 3. 日报周报重构 | 0/? | - | Not started |
 | 4. 标签历史趋势 | 0/? | - | Not started |
 | 5. 相关标签推荐 | 0/? | - | Not started |
+| 6. 标签合并交互界面 | 0/? | - | Not started |
 
 *Updated after each plan completion*
 
 ## Accumulated Context
+
+### Roadmap Evolution
+
+- Phase 6 added: 标签合并交互界面 - 手动触发全量合并、预览、修改名称、查看差异
 
 ### Decisions
 
@@ -87,9 +92,9 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-13T11:40:00.000Z
-Stopped at: Quick task 260413-r4v complete
-Resume file: .planning/quick/260413-r4v-auto-tag-merge-scheduler/260413-r4v-SUMMARY.md
+Last session: 2026-04-13T12:26:00.185Z
+Stopped at: Phase 06 context gathered
+Resume file: .planning/phases/06-tag-merge-ui/06-CONTEXT.md
 
 ---
 
