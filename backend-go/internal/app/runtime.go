@@ -10,6 +10,7 @@ import (
 	"my-robot-backend/internal/app/runtimeinfo"
 	"my-robot-backend/internal/domain/contentprocessing"
 	"my-robot-backend/internal/domain/digest"
+	"my-robot-backend/internal/domain/topicanalysis"
 	"my-robot-backend/internal/domain/topicextraction"
 	"my-robot-backend/internal/jobs"
 )
@@ -33,6 +34,12 @@ func StartRuntime() *Runtime {
 	} else {
 		log.Println("Tag queue started successfully")
 	}
+
+	// Start the embedding queue worker for async embedding generation
+	topicanalysis.StartEmbeddingQueueWorker()
+	log.Println("Embedding queue worker started successfully")
+	topicanalysis.StartMergeReembeddingQueueWorker()
+	log.Println("Merge re-embedding queue worker started successfully")
 
 	runtime.AutoRefresh = jobs.NewAutoRefreshScheduler(60)
 	if err := runtime.AutoRefresh.Start(); err != nil {
@@ -117,6 +124,12 @@ func SetupGracefulShutdown(runtime *Runtime) {
 		go func() {
 			log.Println("Stopping tag queue...")
 			topicextraction.GetTagQueue().Stop()
+
+			log.Println("Stopping embedding queue worker...")
+			topicanalysis.StopEmbeddingQueueWorker()
+
+			log.Println("Stopping merge re-embedding queue worker...")
+			topicanalysis.StopMergeReembeddingQueueWorker()
 
 			if runtime.AutoRefresh != nil {
 				log.Println("Stopping auto-refresh scheduler...")

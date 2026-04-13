@@ -99,22 +99,50 @@ func postgresMigrations() []Migration {
 			Description: "Create embedding_queue table for tracking embedding generation progress.",
 			Up: func(db *gorm.DB) error {
 				stmts := []string{
-					`CREATE TABLE IF NOT EXISTS embedding_queue (
-						id BIGSERIAL PRIMARY KEY,
-						tag_id BIGINT NOT NULL REFERENCES topic_tags(id) ON DELETE CASCADE,
-						status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
-						error_message TEXT,
-						retry_count INTEGER NOT NULL DEFAULT 0,
-						created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-						started_at TIMESTAMP,
-						completed_at TIMESTAMP
-					)`,
-					"CREATE INDEX IF NOT EXISTS idx_embedding_queue_status ON embedding_queue(status)",
-					"CREATE INDEX IF NOT EXISTS idx_embedding_queue_tag_id ON embedding_queue(tag_id)",
+					`CREATE TABLE IF NOT EXISTS embedding_queues (
+					id BIGSERIAL PRIMARY KEY,
+					tag_id BIGINT NOT NULL REFERENCES topic_tags(id) ON DELETE CASCADE,
+					status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
+					error_message TEXT,
+					retry_count INTEGER NOT NULL DEFAULT 0,
+					created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+					started_at TIMESTAMP,
+					completed_at TIMESTAMP
+				)`,
+					"CREATE INDEX IF NOT EXISTS idx_embedding_queues_status ON embedding_queues(status)",
+					"CREATE INDEX IF NOT EXISTS idx_embedding_queues_tag_id ON embedding_queues(tag_id)",
 				}
 				for _, s := range stmts {
 					if err := db.Exec(s).Error; err != nil {
 						return fmt.Errorf("embedding_queue migration: %w", err)
+					}
+				}
+				return nil
+			},
+		},
+		{
+			Version:     "20260413_0005",
+			Description: "Create merge_reembedding_queues table for merge-triggered embedding regeneration.",
+			Up: func(db *gorm.DB) error {
+				stmts := []string{
+					`CREATE TABLE IF NOT EXISTS merge_reembedding_queues (
+					id BIGSERIAL PRIMARY KEY,
+					source_tag_id BIGINT NOT NULL REFERENCES topic_tags(id) ON DELETE CASCADE,
+					target_tag_id BIGINT NOT NULL REFERENCES topic_tags(id) ON DELETE CASCADE,
+					status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
+					error_message TEXT,
+					retry_count INTEGER NOT NULL DEFAULT 0,
+					created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+					started_at TIMESTAMP,
+					completed_at TIMESTAMP
+				)`,
+					"CREATE INDEX IF NOT EXISTS idx_merge_reembedding_queues_status ON merge_reembedding_queues(status)",
+					"CREATE INDEX IF NOT EXISTS idx_merge_reembedding_queues_source_tag_id ON merge_reembedding_queues(source_tag_id)",
+					"CREATE INDEX IF NOT EXISTS idx_merge_reembedding_queues_target_tag_id ON merge_reembedding_queues(target_tag_id)",
+				}
+				for _, s := range stmts {
+					if err := db.Exec(s).Error; err != nil {
+						return fmt.Errorf("merge_reembedding_queue migration: %w", err)
 					}
 				}
 				return nil
