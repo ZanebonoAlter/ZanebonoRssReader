@@ -185,9 +185,25 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 				}
 
 			case "ai_judgment":
-				// Middle band (per CONV-03) — skip AI judgment, create new tag
-				fmt.Printf("[INFO] Middle-band similarity %.2f for tag '%s', creating new tag\n", matchResult.Similarity, tag.Label)
-				// Fall through to creation below
+				// Middle band (0.78-0.97) — attempt abstract tag extraction (per Phase 07 D-02)
+				fmt.Printf("[INFO] Middle-band similarity %.2f for tag '%s', attempting abstract tag extraction\n", matchResult.Similarity, tag.Label)
+				abstractTag, abstractErr := topicanalysis.ExtractAbstractTag(ctx, matchResult.Candidates, tag.Label, category)
+				if abstractErr != nil || abstractTag == nil {
+					fmt.Printf("[WARN] Abstract tag extraction failed for '%s', falling back to new tag creation: %v\n", tag.Label, abstractErr)
+					// Fall through to creation below
+				} else {
+					// Abstract tag created/reused — return the highest-similarity child tag (per D-03)
+					// Articles should associate with child tags, not abstract tags
+					if len(matchResult.Candidates) > 0 && matchResult.Candidates[0].Tag != nil {
+						childTag := matchResult.Candidates[0].Tag
+						// Backfill embedding if missing
+						go ensureTagEmbedding(es, childTag.ID)
+						return childTag, nil
+					}
+					// No candidate tags available — associate with abstract tag itself
+					go ensureTagEmbedding(es, abstractTag.ID)
+					return abstractTag, nil
+				}
 
 			case "low_similarity", "no_match":
 				// Low similarity or no match — create new tag

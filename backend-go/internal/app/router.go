@@ -166,6 +166,7 @@ func SetupRoutes(r *gin.Engine) {
 		topicanalysisdomain.RegisterMergeReembeddingQueueRoutes(api)
 		topicanalysisdomain.RegisterTagManagementRoutes(api)
 		topicanalysisdomain.RegisterTagMergePreviewRoutes(api)
+		topicanalysisdomain.RegisterAbstractTagRoutes(api)
 
 		digestGroup := api.Group("/digest")
 		{
