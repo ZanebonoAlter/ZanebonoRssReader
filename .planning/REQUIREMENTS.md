@@ -15,7 +15,7 @@
 
 - [ ] **CONV-01**: 新文章入库调用 findOrCreateTag 时，集成 EmbeddingService.TagMatch 做三级匹配（exact → alias → embedding），高相似度自动复用已有标签
 - [x] **CONV-02**: 标签合并时在事务内迁移 article_topic_tags 等关联记录到目标标签，防止引用悬空
-- [ ] **CONV-03**: AI judgment 中间地带（LowSimilarity ~ HighSimilarity）跳过 AI 判定，降级为创建新标签；中间地带阈值可调整
+- [x] **CONV-03**: AI judgment 中间地带（LowSimilarity ~ HighSimilarity）跳过 AI 判定，降级为创建新标签；中间地带阈值可调整
 - [ ] **CONV-04**: 合并后的旧标签标记为 merged 状态（非物理删除），保留合并历史可追溯
 
 ### WATCH — 关注标签
@@ -75,7 +75,7 @@
 | INFRA-03 | Phase 1 | Pending |
 | CONV-01 | Phase 1 | Pending |
 | CONV-02 | Phase 1 | Complete |
-| CONV-03 | Phase 1 | Pending |
+| CONV-03 | Phase 1 | Complete |
 | CONV-04 | Phase 1 | Pending |
 | WATCH-01 | Phase 2 | Pending |
 | WATCH-02 | Phase 2 | Pending |

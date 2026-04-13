@@ -239,8 +239,8 @@ Plans:
 **Plans:** 2 plans in 2 waves
 
 Plans:
-- [ ] 07-01-PLAN.md — Backend: topic_tag_relations 模型 + LLM 抽象标签提取 + handler + tagger 集成 (CONV-03, NEW-01, NEW-02)
-- [ ] 07-02-PLAN.md — Frontend: TagHierarchy.vue 层级树 + TopicGraphPage tab + TagMergePreview 复用 (NEW-01, NEW-02)
+- [x] 07-01-PLAN.md — Backend: topic_tag_relations 模型 + LLM 抽象标签提取 + handler + tagger 集成 (CONV-03, NEW-01, NEW-02)
+- [x] 07-02-PLAN.md — Frontend: TagHierarchy.vue 层级树 + TopicGraphPage tab + TagMergePreview 复用 (NEW-01, NEW-02)
 
 **Files affected:**
 - `backend-go/internal/domain/models/topic_tag_relation.go` (新表模型)
