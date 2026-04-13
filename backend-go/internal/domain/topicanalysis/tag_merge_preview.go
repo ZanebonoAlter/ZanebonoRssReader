@@ -2,6 +2,7 @@ package topicanalysis
 
 import (
 	"fmt"
+	"log"
 
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/platform/database"
@@ -73,12 +74,15 @@ func ScanSimilarTagPairs(limit int) ([]TagMergeCandidate, error) {
 	}
 
 	candidates := make([]TagMergeCandidate, 0, len(pairs))
+	skipped := 0
 	for _, pair := range pairs {
 		var tag1, tag2 models.TopicTag
 		if err := database.DB.First(&tag1, pair.SourceID).Error; err != nil {
+			skipped++
 			continue
 		}
 		if err := database.DB.First(&tag2, pair.TargetID).Error; err != nil {
+			skipped++
 			continue
 		}
 
@@ -146,6 +150,10 @@ func ScanSimilarTagPairs(limit int) ([]TagMergeCandidate, error) {
 			SourceArticles: sourceArticles,
 			TargetArticles: targetArticles,
 		})
+	}
+
+	if skipped > 0 {
+		log.Printf("ScanSimilarTagPairs: skipped %d pairs due to DB lookup errors", skipped)
 	}
 
 	return candidates, nil
