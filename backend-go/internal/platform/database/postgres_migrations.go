@@ -75,5 +75,24 @@ func postgresMigrations() []Migration {
 				return nil
 			},
 		},
+		{
+			Version:     "20260413_0003",
+			Description: "Add status and merged_into_id columns to topic_tags for tag merge support.",
+			Up: func(db *gorm.DB) error {
+				if err := db.Exec("ALTER TABLE topic_tags ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'active'").Error; err != nil {
+					return fmt.Errorf("add topic_tags.status column: %w", err)
+				}
+				if err := db.Exec("ALTER TABLE topic_tags ADD COLUMN IF NOT EXISTS merged_into_id INTEGER REFERENCES topic_tags(id)").Error; err != nil {
+					return fmt.Errorf("add topic_tags.merged_into_id column: %w", err)
+				}
+				if err := db.Exec("CREATE INDEX IF NOT EXISTS idx_topic_tags_status ON topic_tags(status)").Error; err != nil {
+					return fmt.Errorf("create idx_topic_tags_status: %w", err)
+				}
+				if err := db.Exec("CREATE INDEX IF NOT EXISTS idx_topic_tags_merged_into_id ON topic_tags(merged_into_id)").Error; err != nil {
+					return fmt.Errorf("create idx_topic_tags_merged_into_id: %w", err)
+				}
+				return nil
+			},
+		},
 	}
 }
