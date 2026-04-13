@@ -148,5 +148,30 @@ func postgresMigrations() []Migration {
 				return nil
 			},
 		},
+		{
+			Version:     "20260414_0001",
+			Description: "Create topic_tag_relations table for abstract tag hierarchical relationships.",
+			Up: func(db *gorm.DB) error {
+				stmts := []string{
+					`CREATE TABLE IF NOT EXISTS topic_tag_relations (
+					id SERIAL PRIMARY KEY,
+					parent_id INTEGER NOT NULL REFERENCES topic_tags(id) ON DELETE CASCADE,
+					child_id INTEGER NOT NULL REFERENCES topic_tags(id) ON DELETE CASCADE,
+					relation_type VARCHAR(20) NOT NULL DEFAULT 'abstract',
+					similarity_score FLOAT,
+					created_at TIMESTAMP DEFAULT NOW(),
+					UNIQUE(parent_id, child_id)
+				)`,
+					"CREATE INDEX IF NOT EXISTS idx_tag_relations_parent ON topic_tag_relations(parent_id)",
+					"CREATE INDEX IF NOT EXISTS idx_tag_relations_child ON topic_tag_relations(child_id)",
+				}
+				for _, s := range stmts {
+					if err := db.Exec(s).Error; err != nil {
+						return fmt.Errorf("topic_tag_relations migration: %w", err)
+					}
+				}
+				return nil
+			},
+		},
 	}
 }
