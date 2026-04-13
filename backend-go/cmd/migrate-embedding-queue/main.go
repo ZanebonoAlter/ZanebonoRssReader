@@ -25,8 +25,9 @@ func main() {
 		CREATE TABLE IF NOT EXISTS embedding_queue (
 			id BIGSERIAL PRIMARY KEY,
 			tag_id BIGINT NOT NULL REFERENCES topic_tags(id) ON DELETE CASCADE,
-			status VARCHAR(20) NOT NULL DEFAULT 'pending',
+			status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
 			error_message TEXT,
+			retry_count INTEGER NOT NULL DEFAULT 0,
 			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
 			started_at TIMESTAMP,
 			completed_at TIMESTAMP
