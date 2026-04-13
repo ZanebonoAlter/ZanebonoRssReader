@@ -43,9 +43,18 @@ RSS Reader 应用，Go 后端 + Nuxt 4 前端，PostgreSQL 存储，单用户部
 - ✓ STAT-04: 阻塞文章自动恢复机制 — v1.1/Phase 3
 - ✓ STAT-05: 阻塞数量超过阈值时WARN告警 — v1.1/Phase 3
 
-### Active
+### Active (v1.2)
 
 See `.planning/REQUIREMENTS.md` for current milestone requirements.
+
+**Validated in Phase 1 (基础设施与标签收敛):**
+- INFRA-01: pgvector 向量列替代 JSON 文本存储
+- INFRA-02: Embedding 模型名从 provider 动态读取
+- INFRA-03: 相似度阈值可通过 API 配置
+- CONV-01: findOrCreateTag 集成 TagMatch 三级匹配
+- CONV-02: MergeTags 事务安全合并标签
+- CONV-03: 中间地带跳过 AI 判定创建新标签
+- CONV-04: 合并标签标记 merged 状态保留历史
 
 ### Out of Scope
 
@@ -76,11 +85,14 @@ This document evolves at phase transitions and milestone boundaries.
 **Codebase:** Go + Nuxt 4, PostgreSQL, 单用户部署
 
 **已有的 embedding 基础设施:**
+- pgvector `vector(1536)` 列 + HNSW 索引，SQL `<=>` 余弦距离搜索
 - `topicanalysis.EmbeddingService` — embedding 生成 + 相似度匹配 + TagMatch 三级逻辑
+- `topicanalysis.EmbeddingConfigService` — 配置 CRUD，阈值/模型可 API 调整
 - `airouter.EmbeddingClient` — OpenAI 兼容 embedding API 调用
 - `airouter.Store` — provider/route 管理，支持 CapabilityEmbedding
-- `topic_tag_embeddings` 表 — 存储标签向量
-- 三级匹配阈值: HighSimilarity ≥ 0.97 自动复用, LowSimilarity < 0.78 新建, 中间 AI 判定
+- `topic_tag_embeddings` 表 — pgvector 向量列 + 遗留 JSON 字段双写
+- 三级匹配阈值: HighSimilarity ≥ 0.97 自动复用, LowSimilarity < 0.78 新建, 中间地带创建新标签
+- 标签合并: MergeTags 事务迁移 article_topic_tags + ai_summary_topics，merged 状态保留
 
 **现有标签系统:**
 - `topic_tags` 表 (slug, label, aliases, category)
@@ -94,4 +106,4 @@ This document evolves at phase transitions and milestone boundaries.
 
 ---
 
-*Last updated: 2026-04-12 (Milestone v1.2 started)*
+*Last updated: 2026-04-13 (Phase 1 complete)*
