@@ -1,12 +1,14 @@
 package topicanalysis
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/domain/topictypes"
 	"my-robot-backend/internal/platform/database"
@@ -92,41 +94,72 @@ func MergeTagsWithCustomNameHandler(c *gin.Context) {
 		return
 	}
 
-	var source, target models.TopicTag
-	if err := database.DB.First(&source, body.SourceTagID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "source tag not found"})
-		return
-	}
-	if err := database.DB.First(&target, body.TargetTagID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "target tag not found"})
-		return
-	}
+	var resultTarget models.TopicTag
 
-	if source.Status == "merged" {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "source tag is already merged"})
-		return
-	}
-	if target.Status == "merged" {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "target tag is already merged"})
-		return
-	}
-
-	// Rename target if new_name differs from current label
-	if newName != target.Label {
-		newSlug := topictypes.Slugify(newName)
-		if err := database.DB.Model(&target).Updates(map[string]interface{}{
-			"label": newName,
-			"slug":  newSlug,
-		}).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "failed to rename target tag"})
-			return
+	err := database.DB.Transaction(func(tx *gorm.DB) error {
+		// Lock both tags for the duration of the check-rename-merge sequence
+		var source, target models.TopicTag
+		if err := tx.Set("gorm:query_option", "FOR UPDATE").First(&source, body.SourceTagID).Error; err != nil {
+			return fmt.Errorf("source tag not found: %w", err)
 		}
-		target.Label = newName
-		target.Slug = newSlug
-	}
+		if err := tx.Set("gorm:query_option", "FOR UPDATE").First(&target, body.TargetTagID).Error; err != nil {
+			return fmt.Errorf("target tag not found: %w", err)
+		}
 
-	if err := MergeTags(body.SourceTagID, body.TargetTagID); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		if source.Status == "merged" {
+			return fmt.Errorf("source tag is already merged")
+		}
+		if target.Status == "merged" {
+			return fmt.Errorf("target tag is already merged")
+		}
+
+		// Rename target if new_name differs from current label
+		if newName != target.Label {
+			newSlug := topictypes.Slugify(newName)
+
+			// Check for slug collision with other active tags
+			var conflictCount int64
+			if err := tx.Model(&models.TopicTag{}).
+				Where("slug = ? AND id != ? AND (status = 'active' OR status = '' OR status IS NULL)", newSlug, target.ID).
+				Count(&conflictCount).Error; err != nil {
+				return fmt.Errorf("check slug collision: %w", err)
+			}
+			if conflictCount > 0 {
+				return fmt.Errorf("CONFLICT:a tag with this name already exists")
+			}
+
+			if err := tx.Model(&target).Updates(map[string]interface{}{
+				"label": newName,
+				"slug":  newSlug,
+			}).Error; err != nil {
+				return fmt.Errorf("failed to rename target tag: %w", err)
+			}
+			target.Label = newName
+			target.Slug = newSlug
+		}
+
+		// Perform merge within the same transaction scope.
+		// MergeTags opens its own database.DB.Transaction which GORM promotes
+		// to a savepoint when already inside a transaction.
+		if err := MergeTags(body.SourceTagID, body.TargetTagID); err != nil {
+			return fmt.Errorf("merge failed: %w", err)
+		}
+
+		resultTarget = target
+		return nil
+	})
+
+	if err != nil {
+		errMsg := err.Error()
+		status := http.StatusInternalServerError
+		if strings.Contains(errMsg, "not found") {
+			status = http.StatusNotFound
+		} else if strings.Contains(errMsg, "already merged") || strings.Contains(errMsg, "CONFLICT:") {
+			status = http.StatusBadRequest
+		}
+		// Strip CONFLICT: prefix for clean error message
+		cleanMsg := strings.TrimPrefix(errMsg, "CONFLICT:")
+		c.JSON(status, gin.H{"success": false, "error": cleanMsg})
 		return
 	}
 
@@ -135,7 +168,7 @@ func MergeTagsWithCustomNameHandler(c *gin.Context) {
 		"data": gin.H{
 			"source_id": body.SourceTagID,
 			"target_id": body.TargetTagID,
-			"new_label": target.Label,
+			"new_label": resultTarget.Label,
 			"merged_at": time.Now().Format(time.RFC3339),
 		},
 	})
