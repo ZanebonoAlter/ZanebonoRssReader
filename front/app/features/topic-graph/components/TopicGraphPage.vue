@@ -803,10 +803,6 @@ watch([selectedFilterCategoryId, selectedFilterFeedId], () => {
   void loadGraph()
 })
 
-watch([selectedFilterCategoryId, selectedFilterFeedId], () => {
-  void loadGraph()
- })
-
 watch(effectiveTimelineItems, (items) => {
   if (!items.length) {
     selectedDigestId.value = null
