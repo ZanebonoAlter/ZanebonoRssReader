@@ -391,9 +391,8 @@ func MergeTags(sourceTagID, targetTagID uint) error {
 		if err := tx.Model(&models.TopicTag{}).
 			Where("id = ?", targetTagID).
 			Update("feed_count", tx.Model(&models.ArticleTopicTag{}).
-				Select("COUNT(DISTINCT af.feed_id)").
+				Select("COUNT(DISTINCT a.feed_id)").
 				Joins("JOIN articles a ON a.id = article_topic_tags.article_id").
-				Joins("JOIN article_feeds af ON af.article_id = a.id").
 				Where("article_topic_tags.topic_tag_id = ?", targetTagID),
 			).Error; err != nil {
 			return fmt.Errorf("recalculate target feed_count: %w", err)

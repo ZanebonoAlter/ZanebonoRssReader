@@ -13,11 +13,11 @@ export interface EmbeddingConfigItem {
 export function useEmbeddingConfigApi() {
   return {
     async getConfig(): Promise<ApiResponse<EmbeddingConfigItem[]>> {
-      return apiClient.get<EmbeddingConfigItem[]>('/api/embedding/config')
+      return apiClient.get<EmbeddingConfigItem[]>('/embedding/config')
     },
 
     async updateConfig(key: string, value: string): Promise<ApiResponse<void>> {
-      return apiClient.put<void>(`/api/embedding/config/${key}`, { value })
+      return apiClient.put<void>(`/embedding/config/${key}`, { value })
     },
   }
 }

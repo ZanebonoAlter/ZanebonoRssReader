@@ -3,21 +3,23 @@
 
 ## 系统概述
 
-RSS Reader 是一个个人部署的 RSS 阅读器，采用前后端分离的单体架构。Go 后端（Gin + GORM + SQLite）负责 RSS 订阅拉取、文章持久化、AI 内容增强（Firecrawl 全文抓取、AI 整理稿生成）、AI 摘要聚合、主题图谱分析、Digest 日报/周报输出和阅读偏好追踪。Nuxt 4 前端（Vue 3 + Pinia + Tailwind CSS v4）以 FeedBro 风格三栏布局呈现订阅、文章和正文，同时提供 Digest 视图和主题图谱页面。前后端通过 REST API 和 WebSocket 通信，系统面向单用户部署，不含认证体系。
+RSS Reader 是一个个人部署的 RSS 阅读器，采用前后端分离的单体架构。Go 后端（Gin + GORM + PostgreSQL + pgvector）负责 RSS 订阅拉取、文章持久化、AI 内容增强（Firecrawl 全文抓取、AI 整理稿生成）、AI 摘要聚合、主题图谱分析、Digest 日报/周报输出和阅读偏好追踪。Nuxt 4 前端（Vue 3 + Pinia + Tailwind CSS v4）以 FeedBro 风格三栏布局呈现订阅、文章和正文，同时提供 Digest 视图和主题图谱页面。前后端通过 REST API 和 WebSocket 通信，系统面向单用户部署，不含认证体系。
+
+> **注意：SQLite 版本已归档到 `sqlite` 独立分支，主分支不再维护 SQLite 支持。如需使用 SQLite 版本请切换到 `sqlite` 分支。**
 
 ## 技术栈
 
 | 层级 | 技术 | 说明 |
 |------|------|------|
 | 前端 | Nuxt 4 + Vue 3 + TypeScript + Pinia + Tailwind CSS v4 | SSR/SPA 混合，Composition API |
-| 后端 | Go + Gin + GORM + SQLite | 单二进制 HTTP 服务 |
+| 后端 | Go + Gin + GORM + PostgreSQL + pgvector | 单二进制 HTTP 服务 |
 | AI | OpenAI 兼容 API（通过 airouter 多 provider 路由） | 摘要、内容补全、主题分析 |
 | 全文抓取 | Firecrawl | RSS 摘要补全为完整正文 |
 | 实时通信 | Gorilla WebSocket | AI 摘要队列进度推送 |
 | 定时任务 | robfig/cron | feed 刷新、摘要生成、偏好更新、digest 输出 |
-| 可观测性 | OpenTelemetry + SQLite Span Exporter | 链路追踪落库 + 查询 API |
+| 可观测性 | OpenTelemetry + PostgreSQL Span Exporter | 链路追踪落库 + 查询 API |
 | 配置 | Viper + `configs/config.yaml` | 运行时配置加载 |
-| 部署 | Docker Compose | 前后端双容器，SQLite 持久化卷 |
+| 部署 | Docker Compose | 前后端 + PostgreSQL 三容器，pgdata 持久化卷 |
 | 许可证 | GNU General Public License v3 | 见 [LICENSE](../../LICENSE) |
 
 ## 组件关系图
@@ -27,22 +29,7 @@ graph TD
     Browser["浏览器<br/>Nuxt 4 前端 :3000"]
     API["Go 后端 API<br/>Gin :5000"]
     WS["WebSocket Hub<br/>/ws"]
-    SQLite["SQLite<br/>rss_reader.db"]
-    Schedulers["后台调度器<br/>6 类定时任务"]
-    AIRouter["AI Router<br/>多 provider 路由"]
-    Firecrawl["Firecrawl<br/>全文抓取服务"]
-    Digest["Digest 输出<br/>Feishu / Obsidian / Notebook"]
-
-    Browser -->|REST API| API
-    Browser -->|WebSocket| WS
-    API --> SQLite
-    Schedulers --> SQLite
-    Schedulers --> AIRouter
-    Schedulers --> Firecrawl
-    Schedulers --> Digest
-    API --> AIRouter
-    API --> Firecrawl
-    WS --> Browser
+    PostgreSQL["PostgreSQL + pgvector<br/>rss_reader"]
 ```
 
 ## 核心子系统
@@ -161,7 +148,7 @@ my-robot/
 ## 关键设计决策
 
 - **单用户部署**：不含认证体系，前后端直连，适合个人使用场景
-- **SQLite 持久化**：简化部署，单文件数据库，通过 Docker volume 持久化
+- **PostgreSQL + pgvector 持久化**：支持向量检索、关系查询，通过 Docker volume 持久化
 - **状态位驱动的内容增强**：文章入库时按 feed 配置设置 `firecrawl_status` 和 `summary_status`，后续调度器按状态位流转处理
 - **Feature-based 前端组织**：业务逻辑按 feature 目录组织（`features/*`），不再堆积在通用 `components/` 目录
 - **snake_case → camelCase 边界映射**：后端 snake_case 在 API/store 边界统一转 camelCase，组件层不处理字段映射
@@ -204,8 +191,8 @@ my-robot/
 
 系统通过 Docker Compose 部署：
 
-- **SQLite 模式**（`docker-compose.sqlite.yml`）：默认方式，前后端双容器，数据库文件落在 `data/rss_reader.db`，通过 Docker volume 持久化
-- **PostgreSQL 模式**：`docker-compose.yml` 提供 pgvector 容器（`pgvector/pgvector:pg18-trixie`），可替代 SQLite 用于支持向量搜索
+- **PostgreSQL 模式**（`docker-compose.yml`，默认）：前后端 + PostgreSQL + pgvector 三容器，数据库通过 `pgdata` volume 持久化，支持向量检索
+- **SQLite 模式**：已归档到 `sqlite` 分支，使用 `docker-compose.sqlite.yml` 部署，主分支不再维护
 
 默认端口：前端 `http://localhost:3000`，后端 `http://localhost:5000`。开发模式下前端默认运行在 `http://localhost:3001`。
 

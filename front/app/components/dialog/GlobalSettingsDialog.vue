@@ -557,13 +557,6 @@ function formatNextRun(nextRun: string | null | undefined): string {
         </button>
         <button
           class="px-6 py-3 text-sm font-medium transition-colors"
-          :class="activeTab === 'categories' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:text-gray-700'"
-          @click="activeTab = 'categories'"
-        >
-          分类管理
-        </button>
-        <button
-          class="px-6 py-3 text-sm font-medium transition-colors"
           :class="activeTab === 'general' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:text-gray-700'"
           @click="activeTab = 'general'"
         >
@@ -754,11 +747,6 @@ function formatNextRun(nextRun: string | null | undefined): string {
               </div>
             </div>
           </div>
-        </div>
-
-        <!-- Categories Management Tab -->
-        <div v-if="activeTab === 'categories'" class="space-y-4">
-          <p class="text-sm text-gray-500">分类管理功能开发中...</p>
         </div>
 
         <!-- Reading Preferences Tab -->

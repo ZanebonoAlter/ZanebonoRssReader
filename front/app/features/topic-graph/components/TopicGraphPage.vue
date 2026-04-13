@@ -1145,6 +1145,8 @@ await loadGraph()
 
     <TagMergePreview
       :visible="showMergePreview"
+      :scope-category-id="selectedFilterCategoryId"
+      :scope-feed-id="selectedFilterFeedId"
       @close="showMergePreview = false"
       @merged="handleMergeComplete"
     />

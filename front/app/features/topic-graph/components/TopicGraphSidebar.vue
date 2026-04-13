@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { Icon } from '@iconify/vue'
-import type { TopicCategory, TopicGraphDetailPayload } from '~/api/topicGraph'
+import { useTopicGraphApi, type TopicCategory, type TopicGraphDetailPayload } from '~/api/topicGraph'
 import type { PendingArticle, TimelineDigestSelection } from '~/types/timeline'
 import { normalizeTopicCategory } from '~/features/topic-graph/utils/normalizeTopicCategory'
 import KeywordCloud, { type Keyword } from './KeywordCloud.vue'
@@ -32,6 +32,7 @@ const props = withDefaults(defineProps<Props>(), {
 const emit = defineEmits<{
   openArticle: [articleId: number]
   highlightKeyword: [keywordSlug: string | null]
+  tagMerged: []
 }>()
 
 // Internal selected keyword state (for toggle behavior)
@@ -124,6 +125,73 @@ watch(() => props.selectedKeyword, (value) => {
     internalSelectedKeyword.value = null
   }
 })
+
+const topicGraphApi = useTopicGraphApi()
+const showMergeDialog = ref(false)
+const mergeSearchQuery = ref('')
+const mergeSearchResults = ref<Array<{ id: number; label: string; slug: string; category: string; feed_count: number }>>([])
+const mergeSearching = ref(false)
+const mergeMerging = ref(false)
+const mergeError = ref<string | null>(null)
+const mergeSuccess = ref<string | null>(null)
+let mergeSearchTimer: ReturnType<typeof setTimeout> | null = null
+
+function openMergeDialog() {
+  showMergeDialog.value = true
+  mergeSearchQuery.value = ''
+  mergeSearchResults.value = []
+  mergeError.value = null
+  mergeSuccess.value = null
+}
+
+function closeMergeDialog() {
+  showMergeDialog.value = false
+}
+
+function onMergeSearchInput() {
+  if (mergeSearchTimer) clearTimeout(mergeSearchTimer)
+  mergeError.value = null
+  if (!mergeSearchQuery.value.trim()) {
+    mergeSearchResults.value = []
+    return
+  }
+  mergeSearchTimer = setTimeout(async () => {
+    mergeSearching.value = true
+    try {
+      const res = await topicGraphApi.searchTags(mergeSearchQuery.value, displayTopicCategory.value, 10)
+      if (res.success && res.data) {
+        const currentId = props.detail?.topic?.id
+        mergeSearchResults.value = (res.data as any[]).filter(t => t.id !== currentId)
+      }
+    } catch {
+      mergeError.value = '搜索失败'
+    } finally {
+      mergeSearching.value = false
+    }
+  }, 300)
+}
+
+async function doMerge(targetTagId: number, targetLabel: string) {
+  if (!props.detail?.topic?.id) return
+  mergeMerging.value = true
+  mergeError.value = null
+  try {
+    const res = await topicGraphApi.mergeTags(props.detail.topic.id, targetTagId)
+    if (res.success) {
+      mergeSuccess.value = `已合并到「${targetLabel}」`
+      setTimeout(() => {
+        closeMergeDialog()
+        emit('tagMerged')
+      }, 800)
+    } else {
+      mergeError.value = res.error || '合并失败'
+    }
+  } catch (e: any) {
+    mergeError.value = e?.message || '合并失败'
+  } finally {
+    mergeMerging.value = false
+  }
+}
 </script>
 
 <template>
@@ -144,6 +212,14 @@ watch(() => props.selectedKeyword, (value) => {
           <span class="topic-pill" :class="`topic-pill--${displayTopicCategory}`">
             {{ topicCategoryLabels[displayTopicCategory] }}
           </span>
+          <button
+            class="topic-merge-btn"
+            type="button"
+            title="合并到其他标签"
+            @click="openMergeDialog"
+          >
+            <Icon icon="mdi:merge" class="text-base" />
+          </button>
         </div>
         <p class="text-sm text-[var(--topic-ink-medium)]">
           {{ props.selectedPendingNode ? '待整理文章列表' : (props.selectedDigest ? '当前日报来源文章' : '先从下方选择一条日报') }}
@@ -235,6 +311,49 @@ watch(() => props.selectedKeyword, (value) => {
         </div>
       </section>
     </div>
+
+    <!-- Merge Dialog -->
+    <Teleport to="body">
+      <div v-if="showMergeDialog" class="merge-overlay" @click.self="closeMergeDialog">
+        <div class="merge-dialog">
+          <div class="flex items-center justify-between gap-3 mb-4">
+            <h3 class="text-lg font-semibold text-gray-100">
+              合并「{{ props.detail?.topic?.label }}」
+            </h3>
+            <button type="button" class="merge-close-btn" @click="closeMergeDialog">
+              <Icon icon="mdi:close" />
+            </button>
+          </div>
+          <p class="text-sm text-gray-400 mb-3">
+            搜索要合并到的目标标签。合并后当前标签的所有文章将迁移到目标标签。
+          </p>
+          <input
+            v-model="mergeSearchQuery"
+            type="text"
+            class="merge-input"
+            placeholder="搜索标签..."
+            @input="onMergeSearchInput"
+          />
+          <div v-if="mergeSearching" class="merge-status">搜索中...</div>
+          <div v-else-if="mergeError" class="merge-status merge-status--error">{{ mergeError }}</div>
+          <div v-else-if="mergeSuccess" class="merge-status merge-status--success">{{ mergeSuccess }}</div>
+          <div v-else-if="mergeSearchResults.length" class="merge-results">
+            <button
+              v-for="tag in mergeSearchResults"
+              :key="tag.id"
+              type="button"
+              class="merge-result-item"
+              :disabled="mergeMerging"
+              @click="doMerge(tag.id, tag.label)"
+            >
+              <span class="merge-result-label">{{ tag.label }}</span>
+              <span class="merge-result-meta">{{ tag.category }} · {{ tag.feed_count }} feeds</span>
+            </button>
+          </div>
+          <div v-else-if="mergeSearchQuery.trim()" class="merge-status">无匹配结果</div>
+        </div>
+      </div>
+    </Teleport>
   </aside>
 </template>
 
@@ -503,5 +622,145 @@ watch(() => props.selectedKeyword, (value) => {
   color: rgba(255, 255, 255, 0.4);
   text-align: center;
   margin-top: 0.75rem;
+}
+
+.topic-merge-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+  border: 1px solid rgba(141, 173, 214, 0.2);
+  background: rgba(14, 21, 30, 0.7);
+  color: rgba(241, 246, 250, 0.7);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.topic-merge-btn:hover {
+  border-color: rgba(240, 138, 75, 0.4);
+  color: rgba(240, 138, 75, 0.9);
+  background: rgba(240, 138, 75, 0.1);
+}
+</style>
+
+<style>
+.merge-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(2, 6, 12, 0.75);
+  backdrop-filter: blur(8px);
+}
+
+.merge-dialog {
+  width: 420px;
+  max-width: 92vw;
+  max-height: 80vh;
+  border-radius: 1.5rem;
+  border: 1px solid rgba(200, 210, 225, 0.2);
+  background: linear-gradient(180deg, #1a2536, #0e1520);
+  box-shadow: 0 32px 80px rgba(2, 6, 12, 0.6);
+  padding: 1.5rem;
+  overflow-y: auto;
+}
+
+.merge-close-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+  border: 1px solid rgba(200, 210, 225, 0.15);
+  background: transparent;
+  color: #9ca3af;
+  cursor: pointer;
+  font-size: 1.1rem;
+}
+
+.merge-close-btn:hover {
+  color: #e5e7eb;
+  border-color: rgba(200, 210, 225, 0.3);
+}
+
+.merge-input {
+  width: 100%;
+  padding: 0.6rem 1rem;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(200, 210, 225, 0.2);
+  background: rgba(10, 16, 23, 0.8);
+  color: #f1f5f9;
+  font-size: 0.9rem;
+  outline: none;
+  transition: border-color 0.2s ease;
+}
+
+.merge-input:focus {
+  border-color: rgba(240, 138, 75, 0.5);
+}
+
+.merge-input::placeholder {
+  color: rgba(173, 193, 214, 0.4);
+}
+
+.merge-status {
+  margin-top: 0.75rem;
+  font-size: 0.82rem;
+  color: #9ca3af;
+}
+
+.merge-status--error {
+  color: #f87171;
+}
+
+.merge-status--success {
+  color: #4ade80;
+}
+
+.merge-results {
+  margin-top: 0.75rem;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.merge-result-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  padding: 0.6rem 0.9rem;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(200, 210, 225, 0.12);
+  background: rgba(14, 21, 30, 0.6);
+  color: #f1f5f9;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.merge-result-item:hover:not(:disabled) {
+  border-color: rgba(240, 138, 75, 0.4);
+  background: rgba(240, 138, 75, 0.1);
+}
+
+.merge-result-item:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+.merge-result-label {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: #e2e8f0;
+}
+
+.merge-result-meta {
+  font-size: 0.75rem;
+  color: #94a3b8;
 }
 </style>

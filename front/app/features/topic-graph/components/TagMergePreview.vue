@@ -6,6 +6,8 @@ import type { TagMergeCandidate, MergeSummary } from '~/types/tagMerge'
 
 interface Props {
   visible: boolean
+  scopeCategoryId?: string | null
+  scopeFeedId?: string | null
 }
 
 const props = defineProps<Props>()
@@ -24,6 +26,7 @@ const expandedIds = ref<number[]>([])
 const editingId = ref<number | null>(null)
 const editedName = ref('')
 const customNames = ref<Map<number, string>>(new Map())
+const swappedIds = ref<Set<number>>(new Set())
 const mergedIds = ref<number[]>([])
 const skippedIds = ref<number[]>([])
 const failedIds = ref<number[]>([])
@@ -43,7 +46,12 @@ async function startScan() {
   error.value = null
 
   try {
-    const response = await api.scanMergePreview({ limit: 50, includeArticles: true })
+    const response = await api.scanMergePreview({
+      limit: 50,
+      includeArticles: true,
+      categoryId: props.scopeCategoryId ?? undefined,
+      feedId: props.scopeFeedId ?? undefined,
+    })
     if (response.success && response.data) {
       candidates.value = response.data.candidates
       state.value = 'preview'
@@ -77,7 +85,7 @@ function toggleExpand(id: number) {
 
 function startEdit(candidate: TagMergeCandidate) {
   editingId.value = candidate.sourceTagId
-  editedName.value = customNames.value.get(candidate.sourceTagId) || candidate.targetLabel
+  editedName.value = customNames.value.get(candidate.sourceTagId) || getDisplayName(candidate)
 }
 
 function saveEdit(candidate: TagMergeCandidate) {
@@ -95,15 +103,27 @@ function skipCandidate(id: number) {
   skippedIds.value.push(id)
 }
 
+function toggleSwap(sourceTagId: number) {
+  if (swappedIds.value.has(sourceTagId)) {
+    swappedIds.value.delete(sourceTagId)
+  } else {
+    swappedIds.value.add(sourceTagId)
+  }
+}
+
 async function mergeSingle(candidate: TagMergeCandidate) {
   mergingIds.value.push(candidate.sourceTagId)
 
-  const newName = customNames.value.get(candidate.sourceTagId) || candidate.targetLabel
+  const isSwapped = swappedIds.value.has(candidate.sourceTagId)
+  const actualSourceId = isSwapped ? candidate.targetTagId : candidate.sourceTagId
+  const actualTargetId = isSwapped ? candidate.sourceTagId : candidate.targetTagId
+  const newName = customNames.value.get(candidate.sourceTagId)
+    || (isSwapped ? candidate.sourceLabel : candidate.targetLabel)
 
   try {
     const response = await api.mergeTagsWithCustomName({
-      sourceTagId: candidate.sourceTagId,
-      targetTagId: candidate.targetTagId,
+      sourceTagId: actualSourceId,
+      targetTagId: actualTargetId,
       newName,
     })
 
@@ -141,12 +161,15 @@ function buildSummary() {
     mergedCount: mergedIds.value.length,
     skippedCount: skippedIds.value.length,
     failedCount: failedIds.value.length,
-    mergedDetails: mergedCandidates.map(c => ({
-      sourceId: c.sourceTagId,
-      sourceLabel: c.sourceLabel,
-      targetId: c.targetTagId,
-      newLabel: customNames.value.get(c.sourceTagId) || c.targetLabel,
-    })),
+    mergedDetails: mergedCandidates.map(c => {
+      const isSwapped = swappedIds.value.has(c.sourceTagId)
+      return {
+        sourceId: isSwapped ? c.targetTagId : c.sourceTagId,
+        sourceLabel: isSwapped ? c.targetLabel : c.sourceLabel,
+        targetId: isSwapped ? c.sourceTagId : c.targetTagId,
+        newLabel: customNames.value.get(c.sourceTagId) || (isSwapped ? c.sourceLabel : c.targetLabel),
+      }
+    }),
   }
 }
 
@@ -163,6 +186,7 @@ function handleClose() {
   editingId.value = null
   editedName.value = ''
   customNames.value = new Map()
+  swappedIds.value = new Set()
   mergedIds.value = []
   skippedIds.value = []
   failedIds.value = []
@@ -173,7 +197,15 @@ function handleClose() {
 }
 
 function getDisplayName(candidate: TagMergeCandidate) {
-  return customNames.value.get(candidate.sourceTagId) || candidate.targetLabel
+  const isSwapped = swappedIds.value.has(candidate.sourceTagId)
+  const custom = customNames.value.get(candidate.sourceTagId)
+  if (custom) return custom
+  return isSwapped ? candidate.sourceLabel : candidate.targetLabel
+}
+
+function getDisplaySource(candidate: TagMergeCandidate) {
+  const isSwapped = swappedIds.value.has(candidate.sourceTagId)
+  return isSwapped ? candidate.targetLabel : candidate.sourceLabel
 }
 
 function formatSimilarity(similarity: number) {
@@ -243,8 +275,16 @@ function formatSimilarity(similarity: number) {
               <!-- Card header: source → target -->
               <div class="tag-merge-card__header">
                 <div class="tag-merge-card__tags">
-                  <span class="tag-merge-card__source">{{ candidate.sourceLabel }}</span>
-                  <Icon icon="mdi:arrow-right" width="16" class="text-[rgba(255,255,255,0.35)]" />
+                  <span class="tag-merge-card__source">{{ getDisplaySource(candidate) }}</span>
+                  <button
+                    type="button"
+                    class="tag-merge-swap-btn"
+                    :class="{ 'tag-merge-swap-btn--active': swappedIds.has(candidate.sourceTagId) }"
+                    title="交换合并方向"
+                    @click="toggleSwap(candidate.sourceTagId)"
+                  >
+                    <Icon icon="mdi:swap-horizontal" width="16" />
+                  </button>
                   <span class="tag-merge-card__target">{{ getDisplayName(candidate) }}</span>
                 </div>
                 <button
@@ -302,9 +342,9 @@ function formatSimilarity(similarity: number) {
               <!-- Article titles -->
               <div v-if="expandedIds.includes(candidate.sourceTagId)" class="tag-merge-articles">
                 <div class="tag-merge-articles__col">
-                  <p class="tag-merge-articles__label">{{ candidate.sourceLabel }}</p>
-                  <ul v-if="candidate.sourceArticleTitles?.length" class="tag-merge-articles__list">
-                    <li v-for="article in candidate.sourceArticleTitles" :key="article.articleId">
+                  <p class="tag-merge-articles__label">{{ getDisplaySource(candidate) }}</p>
+                  <ul v-if="(swappedIds.has(candidate.sourceTagId) ? candidate.targetArticleTitles : candidate.sourceArticleTitles)?.length" class="tag-merge-articles__list">
+                    <li v-for="article in (swappedIds.has(candidate.sourceTagId) ? candidate.targetArticleTitles : candidate.sourceArticleTitles)" :key="article.articleId">
                       {{ article.title }}
                     </li>
                   </ul>
@@ -312,8 +352,8 @@ function formatSimilarity(similarity: number) {
                 </div>
                 <div class="tag-merge-articles__col">
                   <p class="tag-merge-articles__label">{{ getDisplayName(candidate) }}</p>
-                  <ul v-if="candidate.targetArticleTitles?.length" class="tag-merge-articles__list">
-                    <li v-for="article in candidate.targetArticleTitles" :key="article.articleId">
+                  <ul v-if="(swappedIds.has(candidate.sourceTagId) ? candidate.sourceArticleTitles : candidate.targetArticleTitles)?.length" class="tag-merge-articles__list">
+                    <li v-for="article in (swappedIds.has(candidate.sourceTagId) ? candidate.sourceArticleTitles : candidate.targetArticleTitles)" :key="article.articleId">
                       {{ article.title }}
                     </li>
                   </ul>
@@ -516,6 +556,32 @@ function formatSimilarity(similarity: number) {
   min-width: 0;
 }
 
+.tag-merge-swap-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.25);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+
+.tag-merge-swap-btn:hover {
+  border-color: rgba(240, 138, 75, 0.4);
+  color: rgba(240, 138, 75, 0.8);
+}
+
+.tag-merge-swap-btn--active {
+  border-color: rgba(240, 138, 75, 0.5);
+  color: rgba(240, 138, 75, 0.9);
+  background: rgba(240, 138, 75, 0.1);
+}
+
 .tag-merge-card__source {
   color: rgba(255, 255, 255, 0.55);
   overflow: hidden;
@@ -637,6 +703,12 @@ function formatSimilarity(similarity: number) {
   margin-top: 0.6rem;
   border-top: 1px solid rgba(255, 255, 255, 0.06);
   padding-top: 0.6rem;
+}
+
+.tag-merge-articles__col {
+  min-width: 0;
+  max-height: 10rem;
+  overflow-y: auto;
 }
 
 .tag-merge-articles__label {

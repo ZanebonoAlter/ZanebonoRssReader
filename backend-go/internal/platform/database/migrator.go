@@ -40,7 +40,7 @@ func RunMigrations(db *gorm.DB) error {
 			}
 
 			if err := tx.Exec(
-				"INSERT INTO schema_migrations (version) VALUES (?)",
+				"INSERT INTO schema_migrations (version, driver) VALUES (?, 'postgres')",
 				migration.Version,
 			).Error; err != nil {
 				return fmt.Errorf("record migration %s: %w", migration.Version, err)
@@ -66,8 +66,10 @@ func migrationsSorted() []Migration {
 func ensureSchemaMigrationsTable(db *gorm.DB) error {
 	if err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS schema_migrations (
-			version VARCHAR(255) NOT NULL PRIMARY KEY,
-			applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+			version VARCHAR(255) NOT NULL,
+			driver VARCHAR(32) NOT NULL DEFAULT 'postgres',
+			applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (driver, version)
 		)
 	`).Error; err != nil {
 		return fmt.Errorf("ensure schema_migrations table: %w", err)

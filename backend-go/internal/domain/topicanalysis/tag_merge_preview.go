@@ -32,7 +32,7 @@ type CandidateArticle struct {
 // ScanSimilarTagPairs finds tag pairs with high embedding similarity without merging.
 // It reuses the same pgvector cross-join logic from auto_tag_merge.go but returns
 // candidates sorted by similarity descending instead of auto-executing merges.
-func ScanSimilarTagPairs(limit int) ([]TagMergeCandidate, error) {
+func ScanSimilarTagPairs(limit int, scopeFeedID uint, scopeCategoryID uint) ([]TagMergeCandidate, error) {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -51,6 +51,31 @@ func ScanSimilarTagPairs(limit int) ([]TagMergeCandidate, error) {
 		Distance    float64 `gorm:"column:distance"`
 	}
 
+	args := []interface{}{distanceThreshold}
+	scopeJoin := ""
+
+	if scopeFeedID > 0 {
+		scopeJoin = `
+			JOIN article_topic_tags at1 ON at1.topic_tag_id = e1.topic_tag_id
+			JOIN articles a1 ON a1.id = at1.article_id
+			JOIN article_topic_tags at2 ON at2.topic_tag_id = e2.topic_tag_id
+			JOIN articles a2 ON a2.id = at2.article_id`
+		args = append(args, scopeFeedID, scopeFeedID)
+	} else if scopeCategoryID > 0 {
+		scopeJoin = `
+			JOIN article_topic_tags at1 ON at1.topic_tag_id = e1.topic_tag_id
+			JOIN articles a1 ON a1.id = at1.article_id
+			JOIN feeds f1 ON f1.id = a1.feed_id
+			JOIN feed_categories fc1 ON fc1.id = f1.category_id
+			JOIN article_topic_tags at2 ON at2.topic_tag_id = e2.topic_tag_id
+			JOIN articles a2 ON a2.id = at2.article_id
+			JOIN feeds f2 ON f2.id = a2.feed_id
+			JOIN feed_categories fc2 ON fc2.id = f2.category_id`
+		args = append(args, scopeCategoryID, scopeCategoryID)
+	}
+
+	args = append(args, limit)
+
 	var pairs []similarPair
 	query := `
 		SELECT
@@ -62,14 +87,27 @@ func ScanSimilarTagPairs(limit int) ([]TagMergeCandidate, error) {
 		JOIN topic_tags t1 ON t1.id = e1.topic_tag_id
 		JOIN topic_tag_embeddings e2 ON e2.topic_tag_id > e1.topic_tag_id
 		JOIN topic_tags t2 ON t2.id = e2.topic_tag_id
+		` + scopeJoin + `
 		WHERE (t1.status = 'active' OR t1.status = '' OR t1.status IS NULL)
 		  AND (t2.status = 'active' OR t2.status = '' OR t2.status IS NULL)
 		  AND t1.category = t2.category
-		  AND e1.embedding <=> e2.embedding < ?
+		  AND e1.embedding <=> e2.embedding < ?`
+
+	if scopeFeedID > 0 {
+		query += `
+		  AND a1.feed_id = ?
+		  AND a2.feed_id = ?`
+	} else if scopeCategoryID > 0 {
+		query += `
+		  AND fc1.id = ?
+		  AND fc2.id = ?`
+	}
+
+	query += `
 		ORDER BY e1.embedding <=> e2.embedding ASC
-		LIMIT ?
-	`
-	if err := database.DB.Raw(query, distanceThreshold, limit).Scan(&pairs).Error; err != nil {
+		LIMIT ?`
+
+	if err := database.DB.Raw(query, args...).Scan(&pairs).Error; err != nil {
 		return nil, fmt.Errorf("query similar tag pairs: %w", err)
 	}
 

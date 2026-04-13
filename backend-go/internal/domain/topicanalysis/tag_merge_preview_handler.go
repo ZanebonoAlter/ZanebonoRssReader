@@ -22,7 +22,7 @@ type mergePreviewCandidate struct {
 }
 
 // ScanMergePreviewHandler returns candidate tag pairs for manual review.
-// GET /api/topic-tags/merge-preview?limit=50&include_articles=false
+// GET /api/topic-tags/merge-preview?limit=50&include_articles=false&feed_id=&category_id=
 func ScanMergePreviewHandler(c *gin.Context) {
 	limitStr := c.DefaultQuery("limit", "50")
 	limit, err := strconv.Atoi(limitStr)
@@ -35,7 +35,20 @@ func ScanMergePreviewHandler(c *gin.Context) {
 
 	includeArticles := c.DefaultQuery("include_articles", "false") == "true"
 
-	candidates, err := ScanSimilarTagPairs(limit)
+	var scopeFeedID uint
+	var scopeCategoryID uint
+	if fid := c.Query("feed_id"); fid != "" {
+		if v, e := strconv.ParseUint(fid, 10, 32); e == nil {
+			scopeFeedID = uint(v)
+		}
+	}
+	if cid := c.Query("category_id"); cid != "" {
+		if v, e := strconv.ParseUint(cid, 10, 32); e == nil {
+			scopeCategoryID = uint(v)
+		}
+	}
+
+	candidates, err := ScanSimilarTagPairs(limit, scopeFeedID, scopeCategoryID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 		return

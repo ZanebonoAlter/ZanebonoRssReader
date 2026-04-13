@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -17,7 +16,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
-	"gorm.io/gorm"
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/domain/preferences"
 	"my-robot-backend/internal/domain/topicextraction"
@@ -540,16 +538,16 @@ func findQueueSummaryBatch(feedID *uint, articleIDsJSON string) (*models.AISumma
 		return nil, nil
 	}
 
-	var summary models.AISummary
-	err := database.DB.Where("feed_id = ? AND articles = ?", *feedID, articleIDsJSON).Order("id DESC").First(&summary).Error
+	var summaries []models.AISummary
+	err := database.DB.Where("feed_id = ? AND articles = ?", *feedID, articleIDsJSON).Order("id DESC").Limit(1).Find(&summaries).Error
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil
-		}
 		return nil, err
 	}
+	if len(summaries) == 0 {
+		return nil, nil
+	}
 
-	return &summary, nil
+	return &summaries[0], nil
 }
 
 type SummaryError struct {

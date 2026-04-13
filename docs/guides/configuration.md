@@ -14,8 +14,8 @@ These environment variables override values from `backend-go/configs/config.yaml
 |---|---|---|---|
 | `SERVER_PORT` | No | `"5000"` | HTTP port the backend listens on |
 | `SERVER_MODE` | No | `"debug"` | Gin mode: `"debug"`, `"release"`, or `"test"` |
-| `DATABASE_DRIVER` | No | `"sqlite"` | Database driver: `"sqlite"` or `"postgres"` |
-| `DATABASE_DSN` | No | `"rss_reader.db"` | Data source name. For SQLite: file path. For Postgres: connection string |
+| `DATABASE_DRIVER` | No | `"postgres"` | Database driver: `"sqlite"` (only in `sqlite` branch) or `"postgres"` |
+| `DATABASE_DSN` | No | `"host=postgres user=postgres password=postgres dbname=rss_reader port=5432 sslmode=disable TimeZone=Asia/Shanghai"` | Data source name. For SQLite: file path. For Postgres: connection string |
 | `CORS_ORIGINS` | No | `"http://localhost:3001,http://localhost:3000"` | Comma-separated list of allowed CORS origins |
 | `CRAWL_SERVICE_URL` | No | `"http://localhost:11235"` | URL for the crawl/content-completion service |
 | `REDIS_URL` | No | *(empty)* | Redis URL for the topic analysis job queue. When set, the queue uses Redis as a persistent backend; otherwise falls back to in-memory |
@@ -61,7 +61,9 @@ These variables are used by the Docker Compose files and have no effect outside 
 
 ## Config File Format
 
-The backend reads a YAML config file from `backend-go/configs/config.yaml`. This file is loaded via [Viper](https://github.com/spf13/viper) on startup. The shipped `config.yaml` contains a PostgreSQL example, but the code defaults are SQLite — the app works without the file at all.
+The backend reads a YAML config file from `backend-go/configs/config.yaml`. This file is loaded via [Viper](https://github.com/spf13/viper) on startup. The shipped `config.yaml` contains a PostgreSQL example, and the code defaults are PostgreSQL — the app works without the file at all.
+
+> **注意：SQLite 配置仅在 `sqlite` 分支可用，主分支不再支持 SQLite 驱动。**
 
 ```yaml
 server:
@@ -69,8 +71,8 @@ server:
   mode: "debug"           # debug | release | test
 
 database:
-  driver: "sqlite"        # sqlite | postgres
-  dsn: "rss_reader.db"    # SQLite path or Postgres connection string
+  driver: "postgres"        # sqlite (only in sqlite branch) | postgres
+  dsn: "host=postgres user=postgres password=postgres dbname=rss_reader port=5432 sslmode=disable TimeZone=Asia/Shanghai"    # SQLite path or Postgres connection string
   sqlite:
     journal_mode: "WAL"
     busy_timeout_ms: 5000
@@ -81,20 +83,6 @@ database:
     max_open_conns: 25
     conn_max_lifetime_minutes: 60
     conn_max_idle_time_minutes: 10
-
-cors:
-  origins:
-    - "http://localhost:3001"
-    - "http://localhost:3000"
-  methods:
-    - "GET"
-    - "POST"
-    - "PUT"
-    - "DELETE"
-    - "OPTIONS"
-  allow_headers:
-    - "Content-Type"
-    - "Authorization"
 ```
 
 ### Key Sections

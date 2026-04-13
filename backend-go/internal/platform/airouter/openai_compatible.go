@@ -18,12 +18,29 @@ type Message struct {
 	Content string `json:"content"`
 }
 
+type JSONSchema struct {
+	Type       string                    `json:"type"`
+	Items      *JSONSchema               `json:"items,omitempty"`
+	Properties map[string]SchemaProperty `json:"properties,omitempty"`
+	Required   []string                  `json:"required,omitempty"`
+}
+
+type SchemaProperty struct {
+	Type        string                    `json:"type"`
+	Items       *SchemaProperty           `json:"items,omitempty"`
+	Properties  map[string]SchemaProperty `json:"properties,omitempty"`
+	Required    []string                  `json:"required,omitempty"`
+	Description string                    `json:"description,omitempty"`
+}
+
 type ChatRequest struct {
 	Capability  Capability
 	Messages    []Message
 	Temperature *float64
 	MaxTokens   *int
 	Metadata    map[string]any
+	JSONMode    bool
+	JSONSchema  *JSONSchema
 }
 
 type ChatResult struct {
@@ -37,6 +54,7 @@ type ChatResult struct {
 
 type ProviderClient interface {
 	Chat(ctx context.Context, provider models.AIProvider, req ChatRequest) (string, error)
+	Embed(ctx context.Context, provider models.AIProvider, req EmbeddingRequest) (*EmbeddingResult, error)
 }
 
 type ProviderError struct {
@@ -81,6 +99,24 @@ func (c *openAICompatibleClient) Chat(ctx context.Context, provider models.AIPro
 	}
 	if provider.ProviderType == ProviderTypeOllama {
 		payload["reasoning_effort"] = "none"
+		if req.JSONMode && req.JSONSchema != nil {
+			payload["format"] = req.JSONSchema
+		} else if req.JSONMode {
+			payload["format"] = "json"
+		}
+	} else if req.JSONMode {
+		if req.JSONSchema != nil {
+			payload["response_format"] = map[string]any{
+				"type": "json_schema",
+				"json_schema": map[string]any{
+					"name":   "response",
+					"strict": true,
+					"schema": req.JSONSchema,
+				},
+			}
+		} else {
+			payload["response_format"] = map[string]any{"type": "json_object"}
+		}
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -149,4 +185,105 @@ func (c *openAICompatibleClient) Chat(ctx context.Context, provider models.AIPro
 	}
 
 	return strings.TrimSpace(parsed.Choices[0].Message.Content), nil
+}
+
+func (c *openAICompatibleClient) Embed(ctx context.Context, provider models.AIProvider, req EmbeddingRequest) (*EmbeddingResult, error) {
+	if len(req.Input) == 0 {
+		return nil, fmt.Errorf("no texts to embed")
+	}
+
+	model := req.Model
+	if model == "" {
+		model = provider.Model
+	}
+
+	body := EmbeddingRequest{
+		Input:          req.Input,
+		Model:          model,
+		EncodingFormat: req.EncodingFormat,
+		Dimensions:     req.Dimensions,
+	}
+
+	bodyBytes, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal embedding request: %w", err)
+	}
+
+	endpoint := strings.TrimRight(provider.BaseURL, "/") + "/embeddings"
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	if provider.APIKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+provider.APIKey)
+	}
+
+	timeout := time.Duration(provider.TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 60 * time.Second
+	}
+
+	resp, err := (&http.Client{Timeout: timeout}).Do(httpReq)
+	if err != nil {
+		return nil, &ProviderError{Message: err.Error(), Code: "network_error", Retryable: true}
+	}
+	defer resp.Body.Close()
+
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, &ProviderError{Message: err.Error(), Code: "read_error", Retryable: true}
+	}
+
+	if resp.StatusCode >= 400 {
+		var errResp struct {
+			Error *struct {
+				Message string `json:"message"`
+				Type    string `json:"type"`
+				Code    string `json:"code"`
+			} `json:"error"`
+		}
+		_ = json.Unmarshal(responseBody, &errResp)
+		msg := string(responseBody)
+		if errResp.Error != nil && errResp.Error.Message != "" {
+			msg = errResp.Error.Message
+		}
+		retryable := resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500
+		return nil, &ProviderError{Message: msg, Code: fmt.Sprintf("http_%d", resp.StatusCode), Retryable: retryable}
+	}
+
+	var parsed struct {
+		Data []struct {
+			Embedding []float64 `json:"embedding"`
+			Index     int       `json:"index"`
+		} `json:"data"`
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(responseBody, &parsed); err != nil {
+		return nil, fmt.Errorf("failed to parse embedding response: %w", err)
+	}
+
+	if len(parsed.Data) == 0 {
+		return nil, &ProviderError{Message: "no embeddings in response", Code: "no_response", Retryable: false}
+	}
+
+	embeddings := make([][]float64, len(parsed.Data))
+	for _, item := range parsed.Data {
+		if item.Index >= 0 && item.Index < len(embeddings) {
+			embeddings[item.Index] = item.Embedding
+		}
+	}
+
+	dimensions := 0
+	if len(embeddings) > 0 && len(embeddings[0]) > 0 {
+		dimensions = len(embeddings[0])
+	}
+
+	return &EmbeddingResult{
+		Embeddings: embeddings,
+		Model:      parsed.Model,
+		Dimensions: dimensions,
+		Provider:   provider.Name,
+	}, nil
 }

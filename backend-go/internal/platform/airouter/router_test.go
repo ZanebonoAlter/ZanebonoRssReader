@@ -20,6 +20,14 @@ func (f *fakeProviderClient) Chat(_ context.Context, provider models.AIProvider,
 	return res.content, res.err
 }
 
+func (f *fakeProviderClient) Embed(_ context.Context, provider models.AIProvider, _ EmbeddingRequest) (*EmbeddingResult, error) {
+	res := f.responses[provider.Name]
+	if res.err != nil {
+		return nil, res.err
+	}
+	return &EmbeddingResult{Embeddings: [][]float64{{0.1, 0.2}}, Model: "test", Dimensions: 2, Provider: provider.Name}, nil
+}
+
 func TestRouterFallsBackOnRetryableProviderError(t *testing.T) {
 	db := setupAIRouterTestDB(t)
 	store := NewStore(db)

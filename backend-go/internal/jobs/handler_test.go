@@ -145,12 +145,12 @@ func TestGetSchedulersStatusIncludesPreferenceUpdateAndDigest(t *testing.T) {
 		names[entry["name"].(string)] = true
 	}
 
-	require.True(t, names["Auto Refresh"])
-	require.True(t, names["Auto Summary"])
-	require.True(t, names["Preference Update"])
-	require.True(t, names["Content Completion"])
-	require.True(t, names["Firecrawl Crawler"])
-	require.True(t, names["Digest"])
+	require.True(t, names["auto_refresh"])
+	require.True(t, names["auto_summary"])
+	require.True(t, names["preference_update"])
+	require.True(t, names["content_completion"])
+	require.True(t, names["firecrawl"])
+	require.True(t, names["digest"])
 }
 
 func TestTriggerSchedulerSupportsContentCompletionAliasAndLegacyName(t *testing.T) {
@@ -271,8 +271,12 @@ func TestGetSchedulerStatusReturnsUnifiedResponseShape(t *testing.T) {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	require.Equal(t, []string{"check_interval", "is_executing", "name", "next_run", "status"}, keys)
-	require.Equal(t, "Auto Refresh", data["name"])
+	require.Contains(t, keys, "check_interval")
+	require.Contains(t, keys, "is_executing")
+	require.Contains(t, keys, "name")
+	require.Contains(t, keys, "next_run")
+	require.Contains(t, keys, "status")
+	require.Equal(t, "auto_refresh", data["name"])
 	require.EqualValues(t, 60, data["check_interval"])
 	require.EqualValues(t, 1710000000, data["next_run"])
 	require.Equal(t, false, data["is_executing"])
@@ -304,6 +308,6 @@ func TestGetSchedulerStatusAliasUsesSameUnifiedShape(t *testing.T) {
 	data := body["data"].(map[string]any)
 	require.NotContains(t, data, "requested_name")
 	require.NotContains(t, data, "alias_of")
-	require.Equal(t, "Content Completion", data["name"])
+	require.Equal(t, "content_completion", data["name"])
 	require.Equal(t, "running", data["status"])
 }

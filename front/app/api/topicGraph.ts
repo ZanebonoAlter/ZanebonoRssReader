@@ -342,5 +342,20 @@ export function useTopicGraphApi() {
         date,
       }))
     },
+
+    async searchTags(query: string, category?: string, limit?: number) {
+      return apiClient.get<{ id: number; label: string; slug: string; category: string; feed_count: number }[]>(withQuery('/topic-tags/search', {
+        q: query,
+        category,
+        limit: limit ? String(limit) : undefined,
+      }))
+    },
+
+    async mergeTags(sourceTagId: number, targetTagId: number) {
+      return apiClient.post<{ source_id: number; target_id: number; target_label: string }>('/topic-tags/merge', {
+        source_tag_id: sourceTagId,
+        target_tag_id: targetTagId,
+      })
+    },
   }
 }

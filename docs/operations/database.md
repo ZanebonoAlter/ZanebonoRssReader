@@ -2,14 +2,12 @@
 
 ## 当前数据库
 
-支持两种数据库驱动，通过 `config.yaml` 的 `database.driver` 或环境变量 `DATABASE_DRIVER` 切换：
+主分支仅支持 PostgreSQL 数据库驱动，默认配置为 `postgres`。SQLite 驱动已归档到 `sqlite` 独立分支，主分支不再维护。
 
 | 驱动 | 用途 | 默认连接 |
 |------|------|----------|
-| `postgres` | 生产推荐，支持 pgvector 向量检索 | `host=127.0.0.1 port=5432 dbname=rss_reader` |
-| `sqlite` | 本地开发 / 回退 | `backend-go/rss_reader.db` |
-
-当前默认配置为 `postgres`。
+| `postgres` | 生产/开发使用，支持 pgvector 向量检索 | `host=postgres user=postgres password=postgres dbname=rss_reader port=5432 sslmode=disable TimeZone=Asia/Shanghai` |
+| `sqlite` | 已归档（仅 `sqlite` 分支可用） | `backend-go/rss_reader.db` |
 
 ## 初始化方式
 

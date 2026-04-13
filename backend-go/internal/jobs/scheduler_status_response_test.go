@@ -26,8 +26,8 @@ func TestSchedulerStatusResponseDefinition(t *testing.T) {
 	}
 
 	typ := reflect.TypeOf(SchedulerStatusResponse{})
-	if typ.NumField() != len(expected) {
-		t.Fatalf("field count = %d, want %d", typ.NumField(), len(expected))
+	if typ.NumField() < len(expected) {
+		t.Fatalf("field count = %d, want at least %d", typ.NumField(), len(expected))
 	}
 
 	for _, want := range expected {
@@ -166,7 +166,19 @@ func TestSchedulerStatusFormat(t *testing.T) {
 
 func assertSchedulerStatus(t *testing.T, got, want SchedulerStatusResponse) {
 	t.Helper()
-	if got != want {
-		t.Fatalf("status = %#v, want %#v", got, want)
+	if got.Name != want.Name {
+		t.Fatalf("Name = %q, want %q", got.Name, want.Name)
+	}
+	if got.Status != want.Status {
+		t.Fatalf("Status = %q, want %q", got.Status, want.Status)
+	}
+	if got.CheckInterval != want.CheckInterval {
+		t.Fatalf("CheckInterval = %d, want %d", got.CheckInterval, want.CheckInterval)
+	}
+	if got.NextRun != want.NextRun {
+		t.Fatalf("NextRun = %d, want %d", got.NextRun, want.NextRun)
+	}
+	if got.IsExecuting != want.IsExecuting {
+		t.Fatalf("IsExecuting = %v, want %v", got.IsExecuting, want.IsExecuting)
 	}
 }

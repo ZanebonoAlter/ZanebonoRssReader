@@ -8,9 +8,10 @@ const routeLabels: Record<string, string> = {
   article_completion: '正文补全',
   topic_tagging: '主题提取',
   digest_polish: '日报润色',
+  embedding: '向量嵌入',
 }
 
-const capabilityOrder = ['summary', 'article_completion', 'topic_tagging', 'digest_polish']
+const capabilityOrder = ['summary', 'article_completion', 'topic_tagging', 'digest_polish', 'embedding']
 
 const loading = ref(false)
 const saving = ref(false)
@@ -111,13 +112,10 @@ function hydrateRouteSelections() {
       continue
     }
 
-    const providerIds = route.route_providers
+    nextSelections[capability] = route.route_providers
       .slice()
       .sort((a, b) => a.priority - b.priority)
       .map(link => link.provider_id)
-
-    const filtered = providerIds.filter(providerId => providerId !== primaryProviderId.value)
-    nextSelections[capability] = filtered
   }
   routeSelections.value = nextSelections
 }
@@ -178,6 +176,22 @@ function addProviderToRoute(capability: string, providerId: number) {
 
 function removeProviderFromRoute(capability: string, providerId: number) {
   routeSelections.value[capability] = routeSummary(capability).filter(id => id !== providerId)
+}
+
+function isPrimaryInRoute(capability: string): boolean {
+  return routeSummary(capability).includes(primaryProviderId.value ?? -1)
+}
+
+function removePrimaryFromRoute(capability: string) {
+  if (primaryProviderId.value) {
+    removeProviderFromRoute(capability, primaryProviderId.value)
+  }
+}
+
+function addPrimaryToRoute(capability: string) {
+  if (primaryProviderId.value) {
+    addProviderToRoute(capability, primaryProviderId.value)
+  }
 }
 
 function moveProvider(capability: string, providerId: number, direction: -1 | 1) {
@@ -279,7 +293,10 @@ async function savePrimaryProvider() {
     if (providerId) {
       for (const capability of capabilityOrder) {
         const existingRoute = routes.value.find(route => route.capability === capability)
-        const providerIds = [providerId, ...routeSummary(capability)]
+        let providerIds = routeSummary(capability)
+        if (!providerIds.includes(providerId)) {
+          providerIds = [providerId, ...providerIds]
+        }
         const response = await aiAdminApi.updateRoute(capability, {
           name: existingRoute?.name || 'default',
           enabled: existingRoute?.enabled ?? true,
@@ -429,8 +446,9 @@ async function deleteBackupProvider(provider: AIProvider) {
 }
 
 async function saveRoutes() {
-  if (!primaryProviderId.value) {
-    pushMessage('error', '请先保存主模型，再配置路由')
+  const hasProviders = capabilityOrder.some(cap => routeSummary(cap).length > 0)
+  if (!hasProviders) {
+    pushMessage('error', '至少为一条能力路由配置一个 provider')
     return
   }
 
@@ -438,7 +456,8 @@ async function saveRoutes() {
   try {
     const aiAdminApi = useAIAdminApi()
     for (const capability of capabilityOrder) {
-      const providerIds = [primaryProviderId.value, ...routeSummary(capability)]
+      const providerIds = routeSummary(capability)
+      if (providerIds.length === 0) continue
       const response = await aiAdminApi.updateRoute(capability, {
         name: 'default',
         enabled: true,
@@ -497,272 +516,368 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="space-y-6">
-    <div class="bg-gradient-to-br from-ink-50 to-paper-cream rounded-xl p-6 border border-ink-100">
-      <div class="flex items-start justify-between gap-4 mb-4">
-        <div class="flex items-center gap-3">
-          <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-ink-500 to-ink-700 flex items-center justify-center">
-            <Icon icon="mdi:brain" width="20" height="20" class="text-white" />
-          </div>
-          <div>
-            <h3 class="font-semibold text-gray-900">AI Router</h3>
-            <p class="text-xs text-gray-500">主模型 + 备用模型 + 各能力路由顺序</p>
-          </div>
-        </div>
-        <button
-          class="px-4 py-2 text-sm font-medium text-white bg-ink-700 rounded-lg hover:bg-ink-800 transition-colors disabled:opacity-50"
-          :disabled="saving"
-          @click="savePrimaryProvider"
-        >
-          保存主模型
-        </button>
-      </div>
-
-      <div v-if="loading" class="py-8 flex justify-center">
-        <Icon icon="mdi:loading" width="28" height="28" class="animate-spin text-ink-600" />
-      </div>
-
-      <div v-else class="space-y-4">
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1.5">Primary Name</label>
-            <input v-model="primaryProviderForm.name" type="text" class="input w-full" placeholder="default-primary">
-          </div>
-          <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1.5">Provider Type</label>
-            <select v-model="primaryProviderForm.provider_type" class="input w-full">
-              <option value="openai_compatible">OpenAI Compatible</option>
-              <option value="ollama">Ollama (本地)</option>
-            </select>
-          </div>
-          <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1.5">Model</label>
-            <input v-model="primaryProviderForm.model" type="text" class="input w-full" placeholder="gpt-4o-mini">
-          </div>
-        </div>
-
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1.5">Base URL</label>
-          <input
-            v-model="primaryProviderForm.base_url"
-            type="text"
-            class="input w-full"
-            :placeholder="primaryProviderForm.provider_type === 'ollama' ? 'http://localhost:11434/v1' : 'https://api.openai.com/v1'"
-          >
-        </div>
-
-        <div v-if="primaryProviderForm.provider_type !== 'ollama'">
-          <label class="block text-sm font-medium text-gray-700 mb-1.5">API Key</label>
-          <div class="relative">
-            <input
-              v-model="primaryProviderForm.api_key"
-              :type="showPrimaryApiKey ? 'text' : 'password'"
-              class="input w-full pr-12"
-              placeholder="留空表示沿用已保存密钥"
-            >
-            <button class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" @click="showPrimaryApiKey = !showPrimaryApiKey">
-              <Icon :icon="showPrimaryApiKey ? 'mdi:eye-off' : 'mdi:eye'" width="16" height="16" />
-            </button>
-          </div>
-        </div>
-        <div v-else class="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-700">
-          Ollama 模式无需 API Key，请确保 Ollama 服务已启动并可访问。
-        </div>
-
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1.5">Timeout</label>
-            <input v-model.number="primaryProviderForm.timeout_seconds" type="number" min="30" class="input w-full">
-          </div>
-          <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1.5">自动总结时间范围（分钟）</label>
-            <input v-model.number="primaryProviderForm.time_range" type="number" min="60" step="60" class="input w-full">
-          </div>
-        </div>
-
-        <div class="flex gap-2 pt-1">
-          <button class="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50" :disabled="testing" @click="testPrimaryProvider">
-            <Icon v-if="testing" icon="mdi:loading" width="14" height="14" class="animate-spin inline-block mr-1" />
-            测试主模型
-          </button>
-        </div>
-      </div>
+  <div class="space-y-5">
+    <div v-if="loading" class="py-12 flex justify-center">
+      <Icon icon="mdi:loading" width="32" height="32" class="animate-spin text-ink-500" />
     </div>
 
-    <div class="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
-      <div class="flex items-center justify-between gap-4">
-        <div>
-          <h3 class="font-semibold text-gray-900">备用模型池</h3>
-          <p class="text-xs text-gray-500">这里的模型可被不同能力挂成备用链</p>
-        </div>
-        <button class="px-3 py-1.5 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors" @click="showNewProviderForm = !showNewProviderForm">
-          {{ showNewProviderForm ? '收起' : '新增 provider' }}
-        </button>
-      </div>
-
-      <div v-if="showNewProviderForm" class="grid grid-cols-1 md:grid-cols-2 gap-4 rounded-xl border border-dashed border-gray-300 p-4 bg-gray-50">
-        <input v-model="newProviderForm.name" type="text" class="input w-full" placeholder="provider 名称">
-        <input v-model="newProviderForm.model" type="text" class="input w-full" placeholder="模型名">
-        <select v-model="newProviderForm.provider_type" class="input w-full">
-          <option value="openai_compatible">OpenAI Compatible</option>
-          <option value="ollama">Ollama (本地)</option>
-        </select>
-        <input
-          v-model="newProviderForm.base_url"
-          type="text"
-          class="input w-full"
-          :placeholder="newProviderForm.provider_type === 'ollama' ? 'http://localhost:11434/v1' : 'https://api.example.com/v1'"
-        >
-        <div v-if="newProviderForm.provider_type !== 'ollama'" class="relative md:col-span-2">
-          <input v-model="newProviderForm.api_key" :type="showNewProviderApiKey ? 'text' : 'password'" class="input w-full pr-12" placeholder="API Key">
-          <button class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" @click="showNewProviderApiKey = !showNewProviderApiKey">
-            <Icon :icon="showNewProviderApiKey ? 'mdi:eye-off' : 'mdi:eye'" width="16" height="16" />
-          </button>
-        </div>
-        <div v-else class="md:col-span-2 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-700">
-          Ollama 模式无需 API Key
-        </div>
-        <div class="md:col-span-2 flex justify-end">
-          <button class="px-4 py-2 text-sm font-medium text-white bg-ink-700 rounded-lg hover:bg-ink-800 transition-colors disabled:opacity-50" :disabled="saving" @click="saveNewProvider">
-            添加备用模型
-          </button>
-        </div>
-      </div>
-
-      <div v-if="backupProviders.length === 0" class="text-sm text-gray-500 rounded-lg bg-gray-50 p-4">
-        还没有备用模型，先加一个，失败切换才有地方去。
-      </div>
-
-      <div v-else class="grid grid-cols-1 md:grid-cols-2 gap-3">
-        <div v-for="provider in backupProviders" :key="provider.id" class="rounded-xl border border-gray-200 p-4 bg-gray-50/70">
-          <div class="flex items-center justify-between gap-3">
+    <template v-else>
+      <!-- Section 1: Primary Provider -->
+      <div class="rounded-xl border border-ink-100 bg-gradient-to-br from-ink-50/80 via-white to-paper-cream/60 overflow-hidden">
+        <div class="px-5 py-3.5 border-b border-ink-100/60 flex items-center justify-between bg-ink-50/40">
+          <div class="flex items-center gap-2.5">
+            <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-ink-600 to-ink-800 flex items-center justify-center shadow-sm">
+              <Icon icon="mdi:star-four-points" width="16" height="16" class="text-white" />
+            </div>
             <div>
-              <div class="font-medium text-gray-900">{{ provider.name }}</div>
-              <div class="text-xs text-gray-500 mt-1">{{ provider.model }} · {{ provider.base_url }}</div>
-            </div>
-            <div class="flex items-center gap-2">
-              <span class="text-xs px-2 py-1 rounded-full" :class="provider.enabled ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-500'">
-                {{ provider.enabled ? '已启用' : '已停用' }}
-              </span>
-              <button class="text-xs px-2 py-1 rounded-lg bg-white border border-gray-200 text-gray-700 hover:bg-gray-50" @click="startEditingProvider(provider)">
-                编辑
-              </button>
-              <button class="text-xs px-2 py-1 rounded-lg bg-red-50 border border-red-200 text-red-700 hover:bg-red-100 disabled:opacity-50 disabled:cursor-not-allowed" :disabled="isProviderLinked(provider.id)" @click="deleteBackupProvider(provider)">
-                删除
-              </button>
+              <h3 class="text-sm font-semibold text-gray-900">主模型</h3>
+              <p class="text-[11px] text-gray-500">默认 AI 提供者，保存后自动挂载到所有能力路由</p>
             </div>
           </div>
-          <p v-if="isProviderLinked(provider.id)" class="mt-3 text-xs text-amber-700">
-            这个 provider 还挂在某条能力路由上，先从路由里移除再删除。
-          </p>
-
-          <div v-if="editingProviderId === provider.id" class="mt-4 grid grid-cols-1 gap-3 rounded-lg border border-dashed border-gray-300 bg-white p-3">
-            <input v-model="editProviderForm.name" type="text" class="input w-full" placeholder="provider 名称">
-            <input v-model="editProviderForm.model" type="text" class="input w-full" placeholder="模型名">
-            <select v-model="editProviderForm.provider_type" class="input w-full">
-              <option value="openai_compatible">OpenAI Compatible</option>
-              <option value="ollama">Ollama (本地)</option>
-            </select>
-            <input
-              v-model="editProviderForm.base_url"
-              type="text"
-              class="input w-full"
-              :placeholder="editProviderForm.provider_type === 'ollama' ? 'http://localhost:11434/v1' : 'https://api.example.com/v1'"
+          <div class="flex items-center gap-2">
+            <button
+              class="px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 transition-colors disabled:opacity-50"
+              :disabled="testing"
+              @click="testPrimaryProvider"
             >
-            <div v-if="editProviderForm.provider_type !== 'ollama'" class="relative">
-              <input v-model="editProviderForm.api_key" :type="showEditProviderApiKey ? 'text' : 'password'" class="input w-full pr-12" placeholder="留空表示沿用已保存密钥">
-              <button class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" @click="showEditProviderApiKey = !showEditProviderApiKey">
-                <Icon :icon="showEditProviderApiKey ? 'mdi:eye-off' : 'mdi:eye'" width="16" height="16" />
-              </button>
-            </div>
-            <div v-else class="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-700">
-              Ollama 模式无需 API Key
-            </div>
-            <div class="grid grid-cols-2 gap-3">
-              <input v-model.number="editProviderForm.timeout_seconds" type="number" min="30" class="input w-full" placeholder="Timeout">
-              <label class="flex items-center gap-2 text-sm text-gray-700">
-                <input v-model="editProviderForm.enabled" type="checkbox">
-                启用该 provider
-              </label>
-            </div>
-            <div class="flex justify-end gap-2">
-              <button class="px-3 py-1.5 text-sm rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50" @click="cancelEditingProvider">
-                取消
-              </button>
-              <button class="px-3 py-1.5 text-sm rounded-lg bg-ink-700 text-white hover:bg-ink-800 disabled:opacity-50" :disabled="saving" @click="saveEditedProvider">
-                保存修改
-              </button>
-            </div>
+              <Icon v-if="testing" icon="mdi:loading" width="12" height="12" class="animate-spin inline-block mr-1" />
+              测试连接
+            </button>
+            <button
+              class="px-3 py-1.5 text-xs font-medium text-white bg-ink-700 rounded-lg hover:bg-ink-800 transition-colors disabled:opacity-50"
+              :disabled="saving"
+              @click="savePrimaryProvider"
+            >
+              保存
+            </button>
           </div>
         </div>
-      </div>
-    </div>
 
-    <div class="bg-white rounded-xl border border-gray-200 p-6 space-y-5">
-      <div class="flex items-center justify-between gap-4">
-        <div>
-          <h3 class="font-semibold text-gray-900">能力路由</h3>
-          <p class="text-xs text-gray-500">每个能力默认都会先走主模型，再按下面顺序尝试备用模型</p>
-        </div>
-        <button class="px-4 py-2 text-sm font-medium text-white bg-ink-700 rounded-lg hover:bg-ink-800 transition-colors disabled:opacity-50" :disabled="saving" @click="saveRoutes">
-          保存路由顺序
-        </button>
-      </div>
+        <div class="p-5 space-y-4">
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div>
+              <label class="block text-[11px] font-medium text-gray-500 uppercase tracking-wider mb-1">名称</label>
+              <input v-model="primaryProviderForm.name" type="text" class="input w-full text-sm" placeholder="default-primary">
+            </div>
+            <div>
+              <label class="block text-[11px] font-medium text-gray-500 uppercase tracking-wider mb-1">类型</label>
+              <select v-model="primaryProviderForm.provider_type" class="input w-full text-sm">
+                <option value="openai_compatible">OpenAI Compatible</option>
+                <option value="ollama">Ollama (本地)</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-[11px] font-medium text-gray-500 uppercase tracking-wider mb-1">模型</label>
+              <input v-model="primaryProviderForm.model" type="text" class="input w-full text-sm" placeholder="gpt-4o-mini">
+            </div>
+          </div>
 
-      <div v-for="capability in capabilityOrder" :key="capability" class="rounded-xl border border-gray-200 p-4">
-        <div class="flex items-center justify-between gap-3 mb-3">
           <div>
-            <div class="font-medium text-gray-900">{{ routeLabels[capability] }}</div>
-            <div class="text-xs text-gray-500">主模型固定排第一，下面可以拖成备用链的顺序</div>
+            <label class="block text-[11px] font-medium text-gray-500 uppercase tracking-wider mb-1">Base URL</label>
+            <input
+              v-model="primaryProviderForm.base_url"
+              type="text"
+              class="input w-full text-sm"
+              :placeholder="primaryProviderForm.provider_type === 'ollama' ? 'http://localhost:11434/v1' : 'https://api.openai.com/v1'"
+            >
+          </div>
+
+          <div v-if="primaryProviderForm.provider_type !== 'ollama'">
+            <label class="block text-[11px] font-medium text-gray-500 uppercase tracking-wider mb-1">API Key</label>
+            <div class="relative">
+              <input
+                v-model="primaryProviderForm.api_key"
+                :type="showPrimaryApiKey ? 'text' : 'password'"
+                class="input w-full text-sm pr-10"
+                placeholder="留空表示沿用已保存密钥"
+              >
+              <button class="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600" @click="showPrimaryApiKey = !showPrimaryApiKey">
+                <Icon :icon="showPrimaryApiKey ? 'mdi:eye-off' : 'mdi:eye'" width="15" height="15" />
+              </button>
+            </div>
+          </div>
+          <div v-else class="rounded-lg bg-amber-50 border border-amber-200/80 px-3 py-2 text-xs text-amber-700 flex items-center gap-2">
+            <Icon icon="mdi:information-outline" width="14" height="14" class="shrink-0" />
+            <span>Ollama 无需 API Key，确保服务已启动</span>
+          </div>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-[11px] font-medium text-gray-500 uppercase tracking-wider mb-1">超时 (秒)</label>
+              <input v-model.number="primaryProviderForm.timeout_seconds" type="number" min="30" class="input w-full text-sm">
+            </div>
+            <div>
+              <label class="block text-[11px] font-medium text-gray-500 uppercase tracking-wider mb-1">总结时间范围 (分钟)</label>
+              <input v-model.number="primaryProviderForm.time_range" type="number" min="60" step="60" class="input w-full text-sm">
+            </div>
           </div>
         </div>
+      </div>
 
-        <div class="flex flex-wrap gap-2 mb-3">
-          <span class="px-3 py-1 rounded-full text-xs font-medium bg-ink-100 text-ink-700">
-            主: {{ primaryProviderForm.name || '未配置' }}
-          </span>
-          <span
-            v-for="providerId in routeSummary(capability)"
-            :key="providerId"
-            draggable="true"
-            class="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium bg-teal-50 text-teal-700 cursor-move"
-            @dragstart="handleDragStart(capability, providerId)"
-            @dragend="handleDragEnd"
-            @dragover.prevent
-            @drop.prevent="handleDropOnProvider(capability, providerId)"
-          >
-            <Icon icon="mdi:drag" width="12" height="12" />
-            备: {{ providerName(providerId) }}
-            <button @click="moveProvider(capability, providerId, -1)">
-              <Icon icon="mdi:arrow-left" width="12" height="12" />
-            </button>
-            <button @click="moveProvider(capability, providerId, 1)">
-              <Icon icon="mdi:arrow-right" width="12" height="12" />
-            </button>
-            <button @click="removeProviderFromRoute(capability, providerId)">
-              <Icon icon="mdi:close" width="12" height="12" />
-            </button>
-          </span>
-        </div>
-
-        <div class="flex flex-wrap gap-2">
+      <!-- Section 2: Backup Providers -->
+      <div class="rounded-xl border border-gray-200 bg-white overflow-hidden">
+        <div class="px-5 py-3.5 border-b border-gray-100 flex items-center justify-between">
+          <div class="flex items-center gap-2.5">
+            <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-teal-500 to-teal-700 flex items-center justify-center shadow-sm">
+              <Icon icon="mdi:server-network" width="16" height="16" class="text-white" />
+            </div>
+            <div>
+              <h3 class="text-sm font-semibold text-gray-900">备用模型池</h3>
+              <p class="text-[11px] text-gray-500">挂到能力路由做 failover，主模型挂了自动切</p>
+            </div>
+          </div>
           <button
-            v-for="provider in backupProviders"
-            :key="provider.id"
-            class="px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors"
-            :class="routeSummary(capability).includes(provider.id) ? 'border-teal-200 bg-teal-50 text-teal-700' : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50'"
-            @click="routeSummary(capability).includes(provider.id) ? removeProviderFromRoute(capability, provider.id) : addProviderToRoute(capability, provider.id)"
+            class="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 transition-colors flex items-center gap-1"
+            @click="showNewProviderForm = !showNewProviderForm"
           >
-            {{ routeSummary(capability).includes(provider.id) ? '移除' : '加入' }} {{ provider.name }}
+            <Icon :icon="showNewProviderForm ? 'mdi:chevron-up' : 'mdi:plus'" width="14" height="14" />
+            {{ showNewProviderForm ? '收起' : '新增' }}
           </button>
         </div>
-      </div>
-    </div>
 
-    <div v-if="success" class="rounded-lg bg-emerald-50 border border-emerald-200 px-4 py-3 text-sm text-emerald-700">
+        <div class="p-5 space-y-4">
+          <div v-if="showNewProviderForm" class="rounded-lg border border-dashed border-gray-300 p-4 bg-gray-50/60 space-y-3">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <input v-model="newProviderForm.name" type="text" class="input w-full text-sm" placeholder="名称">
+              <input v-model="newProviderForm.model" type="text" class="input w-full text-sm" placeholder="模型名">
+              <select v-model="newProviderForm.provider_type" class="input w-full text-sm">
+                <option value="openai_compatible">OpenAI Compatible</option>
+                <option value="ollama">Ollama (本地)</option>
+              </select>
+              <input
+                v-model="newProviderForm.base_url"
+                type="text"
+                class="input w-full text-sm"
+                :placeholder="newProviderForm.provider_type === 'ollama' ? 'http://localhost:11434/v1' : 'https://api.example.com/v1'"
+              >
+              <div v-if="newProviderForm.provider_type !== 'ollama'" class="relative md:col-span-2">
+                <input v-model="newProviderForm.api_key" :type="showNewProviderApiKey ? 'text' : 'password'" class="input w-full text-sm pr-10" placeholder="API Key">
+                <button class="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600" @click="showNewProviderApiKey = !showNewProviderApiKey">
+                  <Icon :icon="showNewProviderApiKey ? 'mdi:eye-off' : 'mdi:eye'" width="15" height="15" />
+                </button>
+              </div>
+              <div v-else class="md:col-span-2 rounded-lg bg-amber-50 border border-amber-200/80 px-3 py-2 text-xs text-amber-700">
+                Ollama 模式无需 API Key
+              </div>
+            </div>
+            <div class="flex justify-end">
+              <button class="px-3 py-1.5 text-xs font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 transition-colors disabled:opacity-50" :disabled="saving" @click="saveNewProvider">
+                添加
+              </button>
+            </div>
+          </div>
+
+          <div v-if="backupProviders.length === 0" class="text-center py-6 text-xs text-gray-400">
+            还没有备用模型，先加一个
+          </div>
+
+          <div v-else class="space-y-2">
+            <div
+              v-for="provider in backupProviders"
+              :key="provider.id"
+              class="rounded-lg border border-gray-150 bg-gray-50/40 px-4 py-3"
+            >
+              <div class="flex items-center justify-between gap-3">
+                <div class="flex items-center gap-3 min-w-0">
+                  <div class="w-7 h-7 rounded-md bg-gradient-to-br from-gray-200 to-gray-300 flex items-center justify-center shrink-0">
+                    <Icon icon="mdi:cube-outline" width="14" height="14" class="text-gray-600" />
+                  </div>
+                  <div class="min-w-0">
+                    <div class="text-sm font-medium text-gray-900 truncate">{{ provider.name }}</div>
+                    <div class="text-[11px] text-gray-500 truncate">{{ provider.model }} · {{ provider.base_url }}</div>
+                  </div>
+                </div>
+                <div class="flex items-center gap-1.5 shrink-0">
+                  <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium" :class="provider.enabled ? 'bg-emerald-50 text-emerald-600' : 'bg-gray-100 text-gray-400'">
+                    {{ provider.enabled ? '启用' : '停用' }}
+                  </span>
+                  <button class="p-1 rounded hover:bg-gray-200 text-gray-400 hover:text-gray-600 transition-colors" @click="startEditingProvider(provider)">
+                    <Icon icon="mdi:pencil-outline" width="14" height="14" />
+                  </button>
+                  <button
+                    class="p-1 rounded hover:bg-red-100 text-gray-400 hover:text-red-600 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                    :disabled="isProviderLinked(provider.id)"
+                    @click="deleteBackupProvider(provider)"
+                  >
+                    <Icon icon="mdi:trash-can-outline" width="14" height="14" />
+                  </button>
+                </div>
+              </div>
+              <p v-if="isProviderLinked(provider.id)" class="mt-2 text-[11px] text-amber-600 pl-10">
+                还挂在某条路由上，先移除再删
+              </p>
+
+              <div v-if="editingProviderId === provider.id" class="mt-3 pt-3 border-t border-gray-200 space-y-3">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <input v-model="editProviderForm.name" type="text" class="input w-full text-sm" placeholder="名称">
+                  <input v-model="editProviderForm.model" type="text" class="input w-full text-sm" placeholder="模型名">
+                  <select v-model="editProviderForm.provider_type" class="input w-full text-sm">
+                    <option value="openai_compatible">OpenAI Compatible</option>
+                    <option value="ollama">Ollama (本地)</option>
+                  </select>
+                  <input
+                    v-model="editProviderForm.base_url"
+                    type="text"
+                    class="input w-full text-sm"
+                    :placeholder="editProviderForm.provider_type === 'ollama' ? 'http://localhost:11434/v1' : 'https://api.example.com/v1'"
+                  >
+                  <div v-if="editProviderForm.provider_type !== 'ollama'" class="relative md:col-span-2">
+                    <input v-model="editProviderForm.api_key" :type="showEditProviderApiKey ? 'text' : 'password'" class="input w-full text-sm pr-10" placeholder="留空表示沿用已保存密钥">
+                    <button class="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600" @click="showEditProviderApiKey = !showEditProviderApiKey">
+                      <Icon :icon="showEditProviderApiKey ? 'mdi:eye-off' : 'mdi:eye'" width="15" height="15" />
+                    </button>
+                  </div>
+                  <div v-else class="md:col-span-2 rounded-lg bg-amber-50 border border-amber-200/80 px-3 py-2 text-xs text-amber-700">
+                    Ollama 模式无需 API Key
+                  </div>
+                  <input v-model.number="editProviderForm.timeout_seconds" type="number" min="30" class="input w-full text-sm" placeholder="Timeout (秒)">
+                  <label class="flex items-center gap-2 text-sm text-gray-700 self-center">
+                    <input v-model="editProviderForm.enabled" type="checkbox" class="rounded">
+                    启用
+                  </label>
+                </div>
+                <div class="flex justify-end gap-2">
+                  <button class="px-3 py-1.5 text-xs rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50" @click="cancelEditingProvider">取消</button>
+                  <button class="px-3 py-1.5 text-xs rounded-lg bg-ink-700 text-white hover:bg-ink-800 disabled:opacity-50" :disabled="saving" @click="saveEditedProvider">保存</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Section 3: Capability Routes -->
+      <div class="rounded-xl border border-gray-200 bg-white overflow-hidden">
+        <div class="px-5 py-3.5 border-b border-gray-100 flex items-center justify-between">
+          <div class="flex items-center gap-2.5">
+            <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-slate-600 to-slate-800 flex items-center justify-center shadow-sm">
+              <Icon icon="mdi:transit-connection-variant" width="16" height="16" class="text-white" />
+            </div>
+            <div>
+              <h3 class="text-sm font-semibold text-gray-900">能力路由</h3>
+              <p class="text-[11px] text-gray-500">按顺序依次尝试，失败自动降级到下一个</p>
+            </div>
+          </div>
+          <button
+            class="px-3 py-1.5 text-xs font-medium text-white bg-slate-700 rounded-lg hover:bg-slate-800 transition-colors disabled:opacity-50"
+            :disabled="saving"
+            @click="saveRoutes"
+          >
+            <Icon v-if="saving" icon="mdi:loading" width="12" height="12" class="animate-spin inline-block mr-1" />
+            保存路由
+          </button>
+        </div>
+
+        <div class="divide-y divide-gray-100">
+          <div v-for="capability in capabilityOrder" :key="capability" class="px-5 py-4">
+            <div class="flex items-center gap-2 mb-3">
+              <div
+                class="w-6 h-6 rounded flex items-center justify-center text-[10px] font-bold shrink-0"
+                :class="routeSummary(capability).length > 0 ? 'bg-slate-700 text-white' : 'bg-gray-200 text-gray-500'"
+              >
+                {{ routeLabels[capability]?.charAt(0) }}
+              </div>
+              <span class="text-sm font-medium text-gray-800">{{ routeLabels[capability] }}</span>
+              <span class="text-[11px] text-gray-400">{{ routeSummary(capability).length }} provider</span>
+            </div>
+
+            <div v-if="routeSummary(capability).length === 0" class="text-center py-3 text-[11px] text-gray-400 rounded-lg border border-dashed border-gray-200 mb-3">
+              点击下方按钮添加 provider
+            </div>
+
+            <div v-else class="space-y-1.5 mb-3">
+              <div
+                v-for="(providerId, index) in routeSummary(capability)"
+                :key="providerId"
+                draggable="true"
+                class="flex items-center gap-2 px-3 py-2 rounded-lg border transition-all cursor-move select-none"
+                :class="[
+                  providerId === primaryProviderId
+                    ? 'border-ink-200/80 bg-ink-50/50'
+                    : 'border-gray-200 bg-gray-50/50 hover:bg-gray-100/60',
+                  draggingCapability === capability && draggingProviderId === providerId ? 'opacity-40 ring-2 ring-blue-300' : ''
+                ]"
+                @dragstart="handleDragStart(capability, providerId)"
+                @dragend="handleDragEnd"
+                @dragover.prevent
+                @drop.prevent="handleDropOnProvider(capability, providerId)"
+              >
+                <span
+                  class="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0"
+                  :class="index === 0 ? 'bg-ink-700 text-white' : 'bg-gray-300 text-gray-600'"
+                >
+                  {{ index + 1 }}
+                </span>
+                <Icon icon="mdi:drag" width="12" height="12" class="text-gray-300 shrink-0" />
+                <div class="flex-1 min-w-0">
+                  <span class="text-sm truncate" :class="providerId === primaryProviderId ? 'font-medium text-ink-900' : 'text-gray-700'">
+                    {{ providerName(providerId) }}
+                  </span>
+                </div>
+                <span
+                  v-if="providerId === primaryProviderId"
+                  class="px-1.5 py-0.5 rounded text-[10px] font-medium bg-ink-100 text-ink-600 shrink-0"
+                >
+                  主
+                </span>
+                <span v-else class="px-1.5 py-0.5 rounded text-[10px] font-medium bg-teal-50 text-teal-600 shrink-0">备</span>
+                <div class="flex items-center gap-0.5 shrink-0">
+                  <button
+                    class="p-0.5 rounded hover:bg-gray-200 text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-30"
+                    :disabled="index === 0"
+                    @click="moveProvider(capability, providerId, -1)"
+                  >
+                    <Icon icon="mdi:chevron-up" width="14" height="14" />
+                  </button>
+                  <button
+                    class="p-0.5 rounded hover:bg-gray-200 text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-30"
+                    :disabled="index === routeSummary(capability).length - 1"
+                    @click="moveProvider(capability, providerId, 1)"
+                  >
+                    <Icon icon="mdi:chevron-down" width="14" height="14" />
+                  </button>
+                  <button
+                    class="p-0.5 rounded hover:bg-red-100 text-gray-400 hover:text-red-500 transition-colors"
+                    @click="removeProviderFromRoute(capability, providerId)"
+                  >
+                    <Icon icon="mdi:close" width="13" height="13" />
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div class="flex flex-wrap gap-1.5">
+              <button
+                v-if="primaryProviderId && !routeSummary(capability).includes(primaryProviderId)"
+                class="px-2 py-0.5 text-[11px] font-medium rounded border border-ink-200 bg-ink-50 text-ink-700 hover:bg-ink-100 transition-colors"
+                @click="addPrimaryToRoute(capability)"
+              >
+                + {{ primaryProviderForm.name || '主模型' }}
+              </button>
+              <button
+                v-for="provider in backupProviders"
+                :key="provider.id"
+                class="px-2 py-0.5 text-[11px] font-medium rounded border transition-colors"
+                :class="routeSummary(capability).includes(provider.id) ? 'border-teal-200 bg-teal-50 text-teal-700' : 'border-gray-200 bg-white text-gray-500 hover:bg-gray-50'"
+                @click="routeSummary(capability).includes(provider.id) ? removeProviderFromRoute(capability, provider.id) : addProviderToRoute(capability, provider.id)"
+              >
+                {{ routeSummary(capability).includes(provider.id) ? '✓' : '+' }} {{ provider.name }}
+              </button>
+              <span v-if="!primaryProviderId && backupProviders.length === 0" class="text-[11px] text-gray-400 self-center">
+                先在上方创建 provider
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </template>
+
+    <div v-if="success" class="rounded-lg bg-emerald-50 border border-emerald-200 px-4 py-2.5 text-xs text-emerald-700 flex items-center gap-2">
+      <Icon icon="mdi:check-circle" width="14" height="14" />
       {{ success }}
     </div>
-    <div v-if="error" class="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
+    <div v-if="error" class="rounded-lg bg-red-50 border border-red-200 px-4 py-2.5 text-xs text-red-700 flex items-center gap-2">
+      <Icon icon="mdi:alert-circle" width="14" height="14" />
       {{ error }}
     </div>
   </div>

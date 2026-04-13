@@ -123,6 +123,58 @@ func (r *Router) ResolvePrimaryProvider(capability Capability) (*models.AIProvid
 	return r.store.ResolvePrimaryProvider(capability)
 }
 
+func (r *Router) Embed(ctx context.Context, req EmbeddingRequest, capability Capability) (result *EmbeddingResult, err error) {
+	route, providers, err := r.store.LoadRouteWithProviders(capability)
+	if err != nil {
+		return nil, err
+	}
+
+	var attemptErrors []error
+	for idx, provider := range providers {
+		client := r.clients[provider.ProviderType]
+		if client == nil {
+			attemptErrors = append(attemptErrors, fmt.Errorf("provider type %s unsupported", provider.ProviderType))
+			continue
+		}
+
+		start := time.Now()
+		res, callErr := client.Embed(ctx, provider, req)
+		latencyMs := int(time.Since(start).Milliseconds())
+		if callErr == nil {
+			r.store.LogCall(&models.AICallLog{
+				Capability:   string(capability),
+				RouteName:    route.Name,
+				ProviderName: provider.Name,
+				Success:      true,
+				IsFallback:   idx > 0,
+				LatencyMs:    latencyMs,
+			})
+			return res, nil
+		}
+
+		providerErr := &ProviderError{}
+		code := "provider_error"
+		if errors.As(callErr, &providerErr) {
+			if providerErr.Code != "" {
+				code = providerErr.Code
+			}
+		}
+		r.store.LogCall(&models.AICallLog{
+			Capability:   string(capability),
+			RouteName:    route.Name,
+			ProviderName: provider.Name,
+			Success:      false,
+			IsFallback:   idx > 0,
+			LatencyMs:    latencyMs,
+			ErrorCode:    code,
+			ErrorMessage: callErr.Error(),
+		})
+		attemptErrors = append(attemptErrors, fmt.Errorf("%s: %w", provider.Name, callErr))
+	}
+
+	return nil, errors.Join(attemptErrors...)
+}
+
 func concatPrompt(parts []string) string {
 	var result string
 	for i, p := range parts {

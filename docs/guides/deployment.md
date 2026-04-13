@@ -8,10 +8,12 @@ RSS Reader is designed for single-user, self-hosted deployment. The primary depl
 
 | Target | Config File | Notes |
 |--------|-------------|-------|
-| Docker Compose (SQLite) | `docker-compose.sqlite.yml` | Recommended for personal use. Backend + frontend, SQLite persistence via volume mount. |
-| Docker Compose (PostgreSQL + pgvector) | `docker-compose.yml` | PostgreSQL with pgvector extension for vector search. Adds a `postgres` service. |
+| Docker Compose (PostgreSQL + pgvector) | `docker-compose.yml` | **默认/推荐方式**，PostgreSQL 内置 pgvector 扩展支持向量检索，包含前后端 + 数据库三个服务。 |
+| Docker Compose (SQLite) | `docker-compose.sqlite.yml` | 仅在 `sqlite` 分支可用，主分支不再维护。 |
 
 No PaaS-specific config files (Vercel, Netlify, Fly.io, etc.) are present. The application is intended to run on a single host via Docker Compose.
+
+> **注意：SQLite 版本已归档到独立的 `sqlite` 分支，如需使用请切换到该分支后部署。主分支仅支持 PostgreSQL 数据库。**
 
 ## Build Pipeline
 
@@ -29,8 +31,25 @@ Both Dockerfiles use multi-stage builds:
 1. Stage `build`: `node:22-alpine` — installs pnpm via corepack, runs `pnpm install --frozen-lockfile`, then `pnpm build`.
 2. Final: `node:22-alpine` — copies `.output/` from the build stage, runs `node .output/server/index.mjs`.
 
-### Docker Compose (SQLite) — Quick Deploy
+### Docker Compose (PostgreSQL + pgvector) — Quick Deploy (Default)
 
+```bash
+cp .env.example .env
+docker compose up --build -d
+```
+
+This starts three services:
+
+- **postgres**: PostgreSQL 17 with pgvector extension on port 5432, data persisted via `pgdata` volume.
+- **backend**: Go API server on port 5000, connects to postgres service internally.
+- **front**: Nuxt SSR server on internal port 3000, mapped to a host port via `${FRONT_PORT:-3000}` (the `.env.example` sets `FRONT_PORT=3001`). Proxies API calls to the backend container internally via `http://backend:5000/api`.
+
+After startup (with default `.env.example`):
+- Frontend: `http://localhost:3001`
+- Backend API: `http://localhost:5000/api`
+
+### Docker Compose (SQLite)
+> 仅在 `sqlite` 分支可用
 ```bash
 cp .env.example .env
 docker compose -f docker-compose.sqlite.yml up --build -d
@@ -44,8 +63,6 @@ This starts two services:
 After startup (with default `.env.example`):
 - Frontend: `http://localhost:3001`
 - Backend API: `http://localhost:5000/api`
-
-### Docker Compose (PostgreSQL + pgvector)
 
 ```bash
 cp .env.example .env

@@ -2,7 +2,6 @@ package topicanalysis
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"time"
 
@@ -187,21 +186,22 @@ func (s *MergeReembeddingQueueService) worker() {
 }
 
 func (s *MergeReembeddingQueueService) processNext() {
-	var task models.MergeReembeddingQueue
+	var tasks []models.MergeReembeddingQueue
 
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("status = ?", models.MergeReembeddingQueueStatusPending).
 			Order("created_at ASC").
-			First(&task).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return nil
-			}
+			Limit(1).
+			Find(&tasks).Error; err != nil {
 			return err
+		}
+		if len(tasks) == 0 {
+			return nil
 		}
 
 		now := time.Now()
 		result := tx.Model(&models.MergeReembeddingQueue{}).
-			Where("id = ? AND status = ?", task.ID, models.MergeReembeddingQueueStatusPending).
+			Where("id = ? AND status = ?", tasks[0].ID, models.MergeReembeddingQueueStatusPending).
 			Updates(map[string]interface{}{
 				"status":     models.MergeReembeddingQueueStatusProcessing,
 				"started_at": now,
@@ -210,7 +210,7 @@ func (s *MergeReembeddingQueueService) processNext() {
 			return result.Error
 		}
 		if result.RowsAffected == 0 {
-			task.ID = 0
+			tasks[0].ID = 0
 		}
 		return nil
 	})
@@ -219,9 +219,11 @@ func (s *MergeReembeddingQueueService) processNext() {
 		return
 	}
 
-	if task.ID == 0 {
+	if len(tasks) == 0 || tasks[0].ID == 0 {
 		return
 	}
+
+	task := tasks[0]
 
 	var target models.TopicTag
 	if err := s.db.First(&target, task.TargetTagID).Error; err != nil {

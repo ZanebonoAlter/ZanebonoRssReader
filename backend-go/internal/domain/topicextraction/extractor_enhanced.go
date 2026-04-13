@@ -110,6 +110,8 @@ func (te *TagExtractor) extractCandidates(ctx context.Context, input topictypes.
 		Temperature: &temperature,
 		MaxTokens:   &maxTokens,
 		Metadata:    metadata,
+		JSONMode:    true,
+		JSONSchema:  tagExtractionSchema(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("AI extraction failed: %w", err)
@@ -309,6 +311,8 @@ func (te *TagExtractor) aiJudgment(ctx context.Context, candidate topictypes.Ext
 		Temperature: &temperature,
 		MaxTokens:   &maxTokens,
 		Metadata:    metadata,
+		JSONMode:    true,
+		JSONSchema:  tagResolutionSchema(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("AI judgment failed: %w", err)
@@ -592,4 +596,35 @@ func dedupeTags(tags []topictypes.TopicTag) []topictypes.TopicTag {
 	})
 
 	return result
+}
+
+func tagExtractionSchema() *airouter.JSONSchema {
+	return &airouter.JSONSchema{
+		Type: "array",
+		Items: &airouter.JSONSchema{
+			Type: "object",
+			Properties: map[string]airouter.SchemaProperty{
+				"label":      {Type: "string", Description: "标签名称"},
+				"category":   {Type: "string", Description: "event, person 或 keyword"},
+				"confidence": {Type: "number", Description: "置信度 0.0-1.0"},
+				"aliases":    {Type: "array", Items: &airouter.SchemaProperty{Type: "string"}},
+				"evidence":   {Type: "string", Description: "提取依据"},
+			},
+			Required: []string{"label", "category"},
+		},
+	}
+}
+
+func tagResolutionSchema() *airouter.JSONSchema {
+	return &airouter.JSONSchema{
+		Type: "object",
+		Properties: map[string]airouter.SchemaProperty{
+			"decision":     {Type: "string", Description: "reuse 或 create_new"},
+			"reuse_tag_id": {Type: "integer", Description: "复用的标签ID"},
+			"reason":       {Type: "string", Description: "决策理由"},
+			"new_label":    {Type: "string", Description: "调整后的标签名"},
+			"new_category": {Type: "string", Description: "event, person 或 keyword"},
+		},
+		Required: []string{"decision", "reason"},
+	}
 }

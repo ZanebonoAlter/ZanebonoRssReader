@@ -23,3 +23,7 @@
 ## [2026-04-11] ingest | Phase 04 Plan 02 统一后端 scheduler status API 返回格式
 - 新增 `phases/04-02-scheduler-status-format.md`
 - 记录统一的五字段 status 契约、Unix `next_run` 以及 task details 补充接口
+
+## [2026-04-13] ingest | Quick task 260413-p2t 后端队列 Tab 与标签合并重算队列
+- 新增 `phases/260413-p2t-backend-queues-and-merge-reembedding.md`
+- 记录 MergeTags 提交后 target-tag 重算入队、独立 merge re-embedding worker/API，以及设置页“后端队列”Tab 的双队列可视化

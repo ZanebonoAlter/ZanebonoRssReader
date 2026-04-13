@@ -16,7 +16,14 @@ go mod tidy
 go run cmd/server/main.go
 ```
 
-后端默认运行在 `http://localhost:5000`，首次启动会自动创建 SQLite 数据库文件。
+后端默认运行在 `http://localhost:5000`，首次启动会自动连接 PostgreSQL 数据库并执行迁移。
+
+> 本地开发需要先启动 PostgreSQL 服务，推荐使用 Docker 启动：
+> ```bash
+> docker run -d --name rss-postgres -p 5432:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=rss_reader pgvector/pgvector:pg18-trixie
+> ```
+> 
+> SQLite 版本已归档到 `sqlite` 分支，主分支不再支持。
 
 2. **再启动前端**（新终端）：
 

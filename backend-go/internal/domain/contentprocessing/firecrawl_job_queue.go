@@ -22,15 +22,16 @@ func (q *FirecrawlJobQueue) Enqueue(article models.Article) error {
 	now := time.Now()
 
 	return q.db.Transaction(func(tx *gorm.DB) error {
-		var existing models.FirecrawlJob
+		var existing []models.FirecrawlJob
 		err := tx.Where("article_id = ? AND status IN ?", article.ID, []string{string(models.JobStatusPending), string(models.JobStatusLeased)}).
 			Order("id DESC").
-			First(&existing).Error
-		if err == nil {
-			return nil
-		}
-		if err != nil && err != gorm.ErrRecordNotFound {
+			Limit(1).
+			Find(&existing).Error
+		if err != nil {
 			return err
+		}
+		if len(existing) > 0 {
+			return nil
 		}
 
 		job := models.FirecrawlJob{

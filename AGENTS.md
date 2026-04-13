@@ -13,10 +13,14 @@ Agent guide for coding assistants working in `D:\project\my-robot`.
 
 ## Project Snapshot
 - RSS Reader app with a Nuxt 4 frontend and a Go backend.
-- Main features: feed subscriptions, article reading, AI summaries, Firecrawl enrichment, digest export, schedulers.
+- Main features: feed subscriptions, article reading, AI summaries, Firecrawl enrichment, digest export, schedulers, topic graph analysis with vector search.
 - Personal/single-user deployment only; there is no auth system.
 - Frontend API: `http://localhost:5000/api`; WebSocket: `ws://localhost:5000/ws`.
-- Backend persistence is SQLite.
+- **Main branch**: Backend persistence uses PostgreSQL with pgvector extension for vector search.
+- **SQLite support**: Only available in the `sqlite` archive branch, no longer supported in main.
+- Optional Redis for persistent job queues (defaults to in-memory if not configured).
+- Crawl service (default: `http://localhost:11235`) for content completion and full-text scraping.
+- AI configuration (LLM, Firecrawl, Digest) is stored in the database and managed via web UI, no config files needed.
 
 ## Repo Layout
 - `front/`: Nuxt 4, Vue 3, TypeScript, Pinia, Tailwind CSS v4.
@@ -46,10 +50,12 @@ pnpm generate
 pnpm preview
 pnpm exec nuxi typecheck
 pnpm test:unit
+pnpm test:e2e
 ```
 - Single test file: `pnpm test:unit -- app/utils/articleContentSource.test.ts`
 - Single test by name: `pnpm test:unit -- app/utils/articleContentSource.test.ts -t "prefers firecrawl"`
-- No dedicated lint script is configured in `front/package.json`.
+- E2E tests (Playwright): `pnpm test:e2e` (runs all E2E tests), `pnpm test:e2e:ui` for interactive UI mode
+- No dedicated lint/formatting script is configured in `front/package.json`. Match existing code style (no semicolons, UTF-8 encoding).
 - Main quality gates: `pnpm exec nuxi typecheck` and `pnpm build`.
 
 ### Backend Go
@@ -61,10 +67,16 @@ go build ./...
 go test ./...
 go run cmd/migrate-digest/main.go
 go run cmd/test-digest/main.go
+go run cmd/migrate-tags/main.go
+go run cmd/migrate-db/main.go
 ```
 - Single package: `go test ./internal/domain/feeds -v`
 - Single test: `go test ./internal/domain/feeds -run TestBuildArticleFromEntryTracksOnlyRunnableStates -v`
 - Prefer targeted package tests first, then `go test ./...` for broader coverage.
+- Local development requires PostgreSQL with pgvector extension, run via Docker:
+  ```bash
+  docker run -d --name rss-postgres -p 5432:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=rss_reader pgvector/pgvector:pg18-trixie
+  ```
 
 ### Python Integration Tests
 Run from `tests/workflow/`:
@@ -86,12 +98,13 @@ pytest test_*.py -v
 ## Frontend Conventions
 - Use Vue 3 Composition API with `<script setup lang="ts">` for new Vue files.
 - Use TypeScript across frontend code.
-- Keep route pages thin; move business logic into `front/app/features/` or composables.
+- Keep route pages thin in `front/app/pages/` (only for component mounting, no business logic).
+- Move business logic into `front/app/features/` or composables.
 - Put network calls in `front/app/api/`, not directly in components.
 - `useApiStore` is the primary data source; other stores should be derived UI state.
 - Keep shared types in `front/app/types/`.
 - Convert backend numeric IDs to frontend strings at the API/store boundary.
-- Keep `snake_case -> camelCase` mapping in API/store code, never in templates.
+- Keep `snake_case → camelCase` mapping in API/store code, never in templates.
 - Reuse `ApiResponse<T>` for request results.
 
 ### Frontend Imports, Formatting, Naming
@@ -114,7 +127,7 @@ pytest test_*.py -v
 
 ## Backend Go Conventions
 - Keep HTTP routes in `internal/app/router.go`; keep business logic in `internal/domain/*`.
-- Use focused domain packages such as `feeds`, `digest`, `summaries`, and `contentprocessing`.
+- Use focused domain packages such as `feeds`, `digest`, `summaries`, `contentprocessing`, `topicanalysis`, `topicgraph`, and `preferences`.
 - Use PascalCase for exported symbols and lowerCamelCase for private helpers.
 - Keep JSON fields snake_case via struct tags.
 - Use `fmt.Errorf(... %w ...)` when wrapping lower-level errors.
@@ -122,6 +135,7 @@ pytest test_*.py -v
 - Handlers should return `gin.H{"success": bool, "data"|"error"|"message": ...}`.
 - Validate params and request bodies before touching the database.
 - Keep GORM models in `internal/domain/models` and shared infrastructure in `internal/platform/*`.
+- Business logic belongs in domain packages, not in HTTP handlers or job processors.
 
 ### Backend Imports, Formatting, Tests
 - Let `gofmt` format Go files.
@@ -160,11 +174,16 @@ pytest test_*.py -v
 - Frontend-only edits: prefer `pnpm exec nuxi typecheck`, `pnpm test:unit`, or `pnpm build`.
 - Backend-only edits: prefer targeted `go test` first, then `go test ./...` or `go build ./...`.
 - Docs-only edits usually only need consistency checks unless the docs describe changed behavior.
+- Recommended pre-push verification sequence:
+  ```bash
+  cd backend-go && go test ./... && go build ./...
+  cd front && pnpm exec nuxi typecheck && pnpm test:unit && pnpm build
+  ```
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **my-robot** (4940 symbols, 11751 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **my-robot** (5409 symbols, 12731 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
@@ -262,3 +281,80 @@ To check whether embeddings exist, inspect `.gitnexus/meta.json` — the `stats.
 | Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
 
 <!-- gitnexus:end -->
+
+## Browser Automation
+
+Use `agent-browser` for web automation. Run `agent-browser --help` for all commands.
+
+Core workflow:
+
+1. `agent-browser open <url>` - Navigate to page
+2. `agent-browser snapshot -i` - Get interactive elements with refs (@e1, @e2)
+3. `agent-browser click @e1` / `fill @e2 "text"` - Interact using refs
+4. Re-snapshot after page changes
+
+# CLAUDE.md
+
+Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
+
+**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
+
+## 1. Think Before Coding
+
+**Don't assume. Don't hide confusion. Surface tradeoffs.**
+
+Before implementing:
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them - don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
+
+## 2. Simplicity First
+
+**Minimum code that solves the problem. Nothing speculative.**
+
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
+
+Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+
+## 3. Surgical Changes
+
+**Touch only what you must. Clean up only your own mess.**
+
+When editing existing code:
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- If you notice unrelated dead code, mention it - don't delete it.
+
+When your changes create orphans:
+- Remove imports/variables/functions that YOUR changes made unused.
+- Don't remove pre-existing dead code unless asked.
+
+The test: Every changed line should trace directly to the user's request.
+
+## 4. Goal-Driven Execution
+
+**Define success criteria. Loop until verified.**
+
+Transform tasks into verifiable goals:
+- "Add validation" → "Write tests for invalid inputs, then make them pass"
+- "Fix the bug" → "Write a test that reproduces it, then make it pass"
+- "Refactor X" → "Ensure tests pass before and after"
+
+For multi-step tasks, state a brief plan:
+```
+1. [Step] → verify: [check]
+2. [Step] → verify: [check]
+3. [Step] → verify: [check]
+```
+
+Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+
+---
+
+**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
