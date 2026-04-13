@@ -21,9 +21,8 @@ fixed: "migrator.go — added driver column to INSERT and CREATE TABLE DDL"
 
 ### 2. Embedding 配置 API 可读写
 expected: GET /api/embedding/config 返回 4 条默认配置项（thresholds、model、dimension 等）。PUT /api/embedding/config/:key 可更新某个配置值（如收敛阈值），再次 GET 确认值已更新。PUT 非法值（如阈值 >1.0）返回验证错误。
-result: issue
-reported: "后端 API 已实现但缺少前端配置界面，用户无法通过 Web UI 查看和修改 embedding 配置"
-severity: major
+result: pass
+note: "前端配置界面已新增，数据已确认入库"
 
 ### 3. 新文章入库时语义相近标签自动复用
 expected: 添加一篇新文章触发标签提取时，如果已存在语义高度相近的标签（相似度 ≥ 阈值），系统复用已有标签而不创建新标签。检查标签列表确认没有产生语义重复标签。
@@ -53,14 +52,14 @@ result: pass
 ## Summary
 
 total: 7
-passed: 3
-issues: 3
+passed: 4
+issues: 2
 pending: 0
 skipped: 0
 
 ## Gaps
 
-- truth: "从零启动 Go 后端，服务器启动无错误，数据库 migration 自动完成"
+  - truth: "从零启动 Go 后端，服务器启动无错误，数据库 migration 自动完成"
   status: fixed
   reason: "User reported: ERROR: null value in column \"driver\" of relation \"schema_migrations\" violates not-null constraint (SQLSTATE 23502) — migration 20260413_0001 INSERT INTO schema_migrations (version) VALUES ('20260413_0001') failed, server exit status 1"
   severity: blocker
@@ -85,7 +84,7 @@ skipped: 0
   missing:
     - "Frontend settings page section for embedding config (threshold, model, dimension)"
 
-- truth: "标签合并操作可通过 UI 触发（自动或手动按钮）"
+  - truth: "标签合并操作可通过 UI 触发（自动或手动按钮）"
   status: failed
   reason: "User reported: 标签合并应该是自动的，或者有个按钮，现在啥都没有"
   severity: major

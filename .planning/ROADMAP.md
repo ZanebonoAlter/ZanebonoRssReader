@@ -5,8 +5,8 @@
 | Metric | Value |
 |--------|-------|
 | Milestone | v1.2 标签智能收敛与关注推送 |
-| Phases | 6 |
-| Requirements | 22+ |
+| Phases | 7 |
+| Requirements | 24+ |
 | Coverage | 100% ✓ |
 
 ## Phases
@@ -19,6 +19,7 @@
 | 4 | 标签历史趋势 | AI 生成标签主题叙事分析 | TRENDS-01~03 | 3 |
 | 5 | 相关标签推荐 | 基于关注标签推荐相关标签 | REC-01~02 | 2 |
 | 6 | 标签合并交互界面 | 手动触发全量标签合并、预览结果、修改合并名称、查看合并前后差异 | CONV-02 | TBD |
+| 7 | Middle-band 抽象标签提取 | 在相似度中间地带(0.78-0.97)提取共同抽象标签，减少标签碎片 | CONV-03, NEW-01~02 | 3 |
 
 ## Phase Details
 
@@ -159,6 +160,7 @@ Phase 1 (INFRA+CONV) ──┬── Phase 2 (WATCH+FEED) ──┬── Phase 
                        └──────────────────────────┴── Phase 5 (REC)
 
 Phase 1 ── Phase 6 (标签合并交互界面)
+Phase 1 ── Phase 7 (抽象标签提取)
 ```
 
 执行顺序: 1 → 2 → 3 → 4 → 5 (Phases 3/4 可并行，Phase 5 需 1+2)
@@ -196,6 +198,58 @@ Plans:
 - `front/app/types/tagMerge.ts` (type definitions)
 - `front/app/features/topic-graph/components/TagMergePreview.vue` (UI component)
 - `front/app/pages/topics.vue` (entry point)
+
+---
+
+### Phase 7: Middle-band 抽象标签提取
+
+**Goal**: 在 embedding 相似度中间地带 (0.78-0.97) 提取共同抽象标签，避免无意义的新标签创建，减少标签碎片
+
+**Depends on**: Phase 1 (embedding 基础设施 + TagMatch)
+
+**Requirements**: CONV-03, NEW-01, NEW-02
+
+**Problem Statement:**
+当前 middle-band (0.78-0.97) 直接创建新标签，导致：
+- 标签数量持续增长，碎片化严重
+- 语义相近的标签分散，难以形成有意义的主题聚合
+- 用户需要手动管理标签，增加维护成本
+
+**Solution:**
+引入"抽象标签"概念：
+1. 当新标签与现有标签相似度在 0.78-0.97 范围时，不直接创建
+2. 使用 AI 从候选标签中提取共同概念，创建新的"抽象标签"
+3. 将候选标签关联到抽象标签（通过新建关联表）
+4. 抽象标签作为更高级别的主题聚合点
+
+**Success Criteria:**
+1. 新文章入库时，middle-band 相似度的标签触发抽象标签提取流程
+2. AI 能从候选标签中提取有意义的共同概念作为抽象标签
+3. 抽象标签与子标签的层级关系正确存储和查询
+4. 前端能展示标签层级结构，用户可展开/折叠抽象标签
+
+**Data Model Changes:**
+- 新建 `topic_tag_relations` 表：存储标签层级关系
+  - `parent_id` (抽象标签)
+  - `child_id` (子标签)
+  - `relation_type` (abstract, synonym, related)
+  - `similarity_score`
+  - `created_at`
+
+**Plans:** 2 plans in 2 waves
+
+Plans:
+- [ ] 07-01-PLAN.md — Backend: 数据模型 + 抽象标签提取逻辑 (NEW-01, NEW-02, CONV-03)
+- [ ] 07-02-PLAN.md — Frontend: 标签层级展示 + 抽象标签管理 UI
+
+**Files affected:**
+- `backend-go/internal/domain/models/topic_tag_relation.go` (新表模型)
+- `backend-go/internal/platform/database/postgres_migrations.go` (migration)
+- `backend-go/internal/domain/topicanalysis/abstract_tag_service.go` (抽象标签提取逻辑)
+- `backend-go/internal/domain/topicanalysis/embedding.go` (TagMatch 中间地带逻辑修改)
+- `backend-go/internal/domain/topicextraction/tagger.go` (处理抽象标签创建)
+- `front/app/types/topicTag.ts` (层级类型定义)
+- `front/app/features/topic-graph/components/TagHierarchy.vue` (层级展示组件)
 
 ---
 

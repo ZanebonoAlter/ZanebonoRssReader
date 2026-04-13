@@ -7,11 +7,11 @@ stopped_at: Completed 06-02-PLAN.md
 last_updated: "2026-04-13T13:52:04.229Z"
 last_activity: 2026-04-13
 progress:
-  total_phases: 6
+  total_phases: 7
   completed_phases: 1
-  total_plans: 7
+  total_plans: 9
   completed_plans: 6
-  percent: 86
+  percent: 67
 ---
 
 # STATE: Milestone v1.2 标签智能收敛与关注推送
@@ -25,9 +25,9 @@ See: .planning/PROJECT.md (updated 2026-04-12)
 
 ## Current Position
 
-Phase: 06 (tag-merge-ui) — EXECUTING
-Plan: 2 of 3
-Status: Ready to execute
+Phase: 07 (middle-band) — PLANNING
+Plan: 0 of 2
+Status: Context gathered, ready for planning
 Last activity: 2026-04-13
 
 Progress: [░░░░░░░░░░] 0%
@@ -43,12 +43,13 @@ Progress: [░░░░░░░░░░] 0%
 
 | Phase | Plans | Total | Status |
 |-------|-------|-------|--------|
-| 1. 基础设施与标签收敛 | 4/? | - | Executing |
-| 2. 关注标签与首页推送 | 0/? | - | Not started |
-| 3. 日报周报重构 | 0/? | - | Not started |
-| 4. 标签历史趋势 | 0/? | - | Not started |
-| 5. 相关标签推荐 | 0/? | - | Not started |
-| 6. 标签合并交互界面 | 0/? | - | Not started |
+| 1. 基础设施与标签收敛 | 4/4 | 4 | Completed |
+| 2. 关注标签与首页推送 | 0/1 | 1 | Not started |
+| 3. 日报周报重构 | 0/1 | 1 | Not started |
+| 4. 标签历史趋势 | 0/1 | 1 | Not started |
+| 5. 相关标签推荐 | 0/1 | 1 | Not started |
+| 6. 标签合并交互界面 | 2/3 | 3 | Executing |
+| 7. Middle-band 抽象标签提取 | 0/2 | 2 | Planning |
 
 *Updated after each plan completion*
 | Phase 06 P02 | 4min | 2 tasks | 2 files |
