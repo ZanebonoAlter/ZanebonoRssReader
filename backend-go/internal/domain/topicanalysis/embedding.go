@@ -13,6 +13,8 @@ import (
 	"my-robot-backend/internal/domain/topictypes"
 	"my-robot-backend/internal/platform/airouter"
 	"my-robot-backend/internal/platform/database"
+
+	"gorm.io/gorm"
 )
 
 var (
@@ -149,6 +151,7 @@ func (s *EmbeddingService) FindSimilarTags(ctx context.Context, tag *models.Topi
 	pgVecStr = floatsToPgVector(vector)
 
 	// Use pgvector SQL cosine distance (<=>) for similarity search
+	// Filter out merged tags (only match active tags)
 	type simRow struct {
 		TagID    uint    `gorm:"column:tag_id"`
 		Distance float64 `gorm:"column:distance"`
@@ -159,6 +162,7 @@ func (s *EmbeddingService) FindSimilarTags(ctx context.Context, tag *models.Topi
 		FROM topic_tag_embeddings e
 		JOIN topic_tags t ON t.id = e.topic_tag_id
 		WHERE t.category = ?
+		  AND (t.status = 'active' OR t.status = '' OR t.status IS NULL)
 		  AND e.embedding IS NOT NULL
 		ORDER BY e.embedding <=> ?::vector
 		LIMIT ?
@@ -203,10 +207,10 @@ func (s *EmbeddingService) FindSimilarTags(ctx context.Context, tag *models.Topi
 
 // TagMatch decides how to handle a candidate tag
 func (s *EmbeddingService) TagMatch(ctx context.Context, label, category string, aliases string) (*TagMatchResult, error) {
-	// Step 1: Check for exact match by slug in the same category
+	// Step 1: Check for exact match by slug in the same category (active tags only)
 	slug := topictypes.Slugify(label)
 	var existingTag models.TopicTag
-	err := database.DB.Where("slug = ? AND category = ?", slug, category).First(&existingTag).Error
+	err := database.DB.Scopes(activeTagFilter).Where("slug = ? AND category = ?", slug, category).First(&existingTag).Error
 	if err == nil {
 		// Exact slug match
 		return &TagMatchResult{
@@ -217,10 +221,10 @@ func (s *EmbeddingService) TagMatch(ctx context.Context, label, category string,
 		}, nil
 	}
 
-	// Step 2: Check for alias match
+	// Step 2: Check for alias match (active tags only)
 	if aliases != "" {
 		var aliasTags []models.TopicTag
-		if err := database.DB.Where("category = ?", category).Find(&aliasTags).Error; err == nil {
+		if err := database.DB.Scopes(activeTagFilter).Where("category = ?", category).Find(&aliasTags).Error; err == nil {
 			for _, t := range aliasTags {
 				if containsAlias(t.Aliases, label) {
 					return &TagMatchResult{
@@ -289,6 +293,106 @@ func (s *EmbeddingService) TagMatch(ctx context.Context, label, category string,
 		Candidates:   candidates[:min(3, len(candidates))],
 		ShouldCreate: true, // Degrades to creating new tag instead of AI judgment
 	}, nil
+}
+
+// activeTagFilter returns a GORM scope that filters to only active (non-merged) tags.
+// Used by query functions to exclude merged tags from match candidates.
+// Includes empty-string status check for rows created before the migration ran.
+func activeTagFilter(db *gorm.DB) *gorm.DB {
+	return db.Where("status = ? OR status = ?", "active", "")
+}
+
+// MergeTags merges sourceTag into targetTag within a database transaction.
+// 1. Update all article_topic_tags from source to target (dedup conflicts)
+// 2. Update all ai_summary_topics from source to target (dedup conflicts)
+// 3. Set source tag status='merged', merged_into_id=target.ID
+// 4. Delete source tag's embedding (stale after merge)
+// 5. Recalculate target tag's feed_count
+func MergeTags(sourceTagID, targetTagID uint) error {
+	if sourceTagID == targetTagID {
+		return fmt.Errorf("cannot merge tag into itself (id=%d)", sourceTagID)
+	}
+
+	return database.DB.Transaction(func(tx *gorm.DB) error {
+		// Step 1: Migrate article_topic_tags references
+		// Find all source links first
+		var sourceLinks []models.ArticleTopicTag
+		if err := tx.Where("topic_tag_id = ?", sourceTagID).Find(&sourceLinks).Error; err != nil {
+			return fmt.Errorf("find source article_topic_tags: %w", err)
+		}
+
+		for _, link := range sourceLinks {
+			// Check if target already has a link for this article
+			var existingCount int64
+			tx.Model(&models.ArticleTopicTag{}).
+				Where("article_id = ? AND topic_tag_id = ?", link.ArticleID, targetTagID).
+				Count(&existingCount)
+
+			if existingCount > 0 {
+				// Target already covers this article — delete the source link
+				if err := tx.Delete(&link).Error; err != nil {
+					return fmt.Errorf("delete duplicate article_topic_tag %d: %w", link.ID, err)
+				}
+			} else {
+				// No conflict — update the source link to point to target
+				if err := tx.Model(&link).Update("topic_tag_id", targetTagID).Error; err != nil {
+					return fmt.Errorf("update article_topic_tag %d to target: %w", link.ID, err)
+				}
+			}
+		}
+
+		// Step 2: Migrate ai_summary_topics references (same dedup logic)
+		var sourceSummaryLinks []models.AISummaryTopic
+		if err := tx.Where("topic_tag_id = ?", sourceTagID).Find(&sourceSummaryLinks).Error; err != nil {
+			return fmt.Errorf("find source ai_summary_topics: %w", err)
+		}
+
+		for _, link := range sourceSummaryLinks {
+			var existingCount int64
+			tx.Model(&models.AISummaryTopic{}).
+				Where("summary_id = ? AND topic_tag_id = ?", link.SummaryID, targetTagID).
+				Count(&existingCount)
+
+			if existingCount > 0 {
+				if err := tx.Delete(&link).Error; err != nil {
+					return fmt.Errorf("delete duplicate ai_summary_topic %d: %w", link.ID, err)
+				}
+			} else {
+				if err := tx.Model(&link).Update("topic_tag_id", targetTagID).Error; err != nil {
+					return fmt.Errorf("update ai_summary_topic %d to target: %w", link.ID, err)
+				}
+			}
+		}
+
+		// Step 3: Mark source tag as merged
+		if err := tx.Model(&models.TopicTag{}).
+			Where("id = ?", sourceTagID).
+			Updates(map[string]interface{}{
+				"status":         "merged",
+				"merged_into_id": targetTagID,
+			}).Error; err != nil {
+			return fmt.Errorf("mark source tag as merged: %w", err)
+		}
+
+		// Step 4: Delete source tag's embedding (stale after merge)
+		if err := tx.Where("topic_tag_id = ?", sourceTagID).Delete(&models.TopicTagEmbedding{}).Error; err != nil {
+			return fmt.Errorf("delete source tag embedding: %w", err)
+		}
+
+		// Step 5: Recalculate target tag's feed_count
+		if err := tx.Model(&models.TopicTag{}).
+			Where("id = ?", targetTagID).
+			Update("feed_count", tx.Model(&models.ArticleTopicTag{}).
+				Select("COUNT(DISTINCT af.feed_id)").
+				Joins("JOIN articles a ON a.id = article_topic_tags.article_id").
+				Joins("JOIN article_feeds af ON af.article_id = a.id").
+				Where("article_topic_tags.topic_tag_id = ?", targetTagID),
+			).Error; err != nil {
+			return fmt.Errorf("recalculate target feed_count: %w", err)
+		}
+
+		return nil
+	})
 }
 
 // SaveEmbedding saves or updates a tag's embedding in the database
