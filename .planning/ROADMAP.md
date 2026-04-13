@@ -36,9 +36,9 @@
 **Plans:** 3 plans in 3 waves
 
 Plans:
-- [ ] 01-01-PLAN.md — pgvector 迁移 + embedding 配置表 + API (INFRA-01~03)
-- [ ] 01-02-PLAN.md — TagMatch 集成 findOrCreateTag 三级匹配 (CONV-01, CONV-03)
-- [ ] 01-03-PLAN.md — 标签合并事务 + merged 状态保留 (CONV-02, CONV-04)
+- [x] 01-01-PLAN.md — pgvector 迁移 + embedding 配置表 + API (INFRA-01~03)
+- [x] 01-02-PLAN.md — TagMatch 集成 findOrCreateTag 三级匹配 (CONV-01, CONV-03)
+- [x] 01-03-PLAN.md — 标签合并事务 + merged 状态保留 (CONV-02, CONV-04)
 
 **Files affected:**
 - `backend-go/internal/platform/database/postgres_migrations.go`
