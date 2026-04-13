@@ -14,6 +14,8 @@ import (
 	"my-robot-backend/internal/platform/airouter"
 	"my-robot-backend/internal/platform/database"
 
+	"log"
+
 	"gorm.io/gorm"
 )
 
@@ -56,7 +58,6 @@ type TagCandidate struct {
 // EmbeddingService handles embedding generation and similarity matching
 type EmbeddingService struct {
 	router     *airouter.Router
-	client     *airouter.EmbeddingClient
 	thresholds EmbeddingMatchThresholds
 }
 
@@ -70,7 +71,6 @@ func NewEmbeddingService() *EmbeddingService {
 
 	return &EmbeddingService{
 		router:     airouter.NewRouter(),
-		client:     airouter.NewEmbeddingClient(),
 		thresholds: thresholds,
 	}
 }
@@ -79,26 +79,21 @@ func NewEmbeddingService() *EmbeddingService {
 func NewEmbeddingServiceWithThresholds(thresholds EmbeddingMatchThresholds) *EmbeddingService {
 	return &EmbeddingService{
 		router:     airouter.NewRouter(),
-		client:     airouter.NewEmbeddingClient(),
 		thresholds: thresholds,
 	}
 }
 
 // GenerateEmbedding generates an embedding for a tag's text representation
 func (s *EmbeddingService) GenerateEmbedding(ctx context.Context, tag *models.TopicTag) (*models.TopicTagEmbedding, error) {
-	provider, _, err := s.router.ResolvePrimaryProvider(airouter.CapabilityEmbedding)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrNoEmbeddingProvider, err)
-	}
-
 	// Build text for embedding: label + aliases + category
 	text := buildTagEmbeddingText(tag)
 	textHash := hashText(text)
 
-	// Use the provider's model or default
-	model := getEmbeddingModel(provider)
-
-	result, err := s.client.Embed(ctx, *provider, []string{text}, model)
+	// Use router with failover to generate embedding
+	req := airouter.EmbeddingRequest{
+		Input: []string{text},
+	}
+	result, err := s.router.Embed(ctx, req, airouter.CapabilityEmbedding)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrEmbeddingFailed, err)
 	}
@@ -301,6 +296,16 @@ func activeTagFilter(db *gorm.DB) *gorm.DB {
 	return db.Where("status = ? OR status = ?", "active", "")
 }
 
+type mergeReembeddingEnqueuer interface {
+	Enqueue(sourceTagID, targetTagID uint) error
+}
+
+var defaultMergeReembeddingQueueFactory = func() mergeReembeddingEnqueuer {
+	return NewMergeReembeddingQueueService(nil)
+}
+
+var mergeReembeddingQueueFactory = defaultMergeReembeddingQueueFactory
+
 // MergeTags merges sourceTag into targetTag within a database transaction.
 // 1. Update all article_topic_tags from source to target (dedup conflicts)
 // 2. Update all ai_summary_topics from source to target (dedup conflicts)
@@ -312,7 +317,7 @@ func MergeTags(sourceTagID, targetTagID uint) error {
 		return fmt.Errorf("cannot merge tag into itself (id=%d)", sourceTagID)
 	}
 
-	return database.DB.Transaction(func(tx *gorm.DB) error {
+	err := database.DB.Transaction(func(tx *gorm.DB) error {
 		// Step 1: Migrate article_topic_tags references
 		// Find all source links first
 		var sourceLinks []models.ArticleTopicTag
@@ -396,22 +401,79 @@ func MergeTags(sourceTagID, targetTagID uint) error {
 
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+
+	if err := mergeReembeddingQueueFactory().Enqueue(sourceTagID, targetTagID); err != nil {
+		return fmt.Errorf("enqueue merge re-embedding task: %w", err)
+	}
+
+	return nil
 }
 
-// SaveEmbedding saves or updates a tag's embedding in the database
+// SaveEmbedding saves or updates a tag's embedding in the database.
+// If the actual vector dimension differs from the column definition, it alters the column type.
 func (s *EmbeddingService) SaveEmbedding(embedding *models.TopicTagEmbedding) error {
-	// Check if embedding exists for this tag
+	if embedding.Dimension > 0 && embedding.EmbeddingVec != "" {
+		if err := ensureVectorDimension(embedding.Dimension); err != nil {
+			return fmt.Errorf("ensure vector dimension %d: %w", embedding.Dimension, err)
+		}
+	}
+
 	var existing models.TopicTagEmbedding
 	err := database.DB.Where("topic_tag_id = ?", embedding.TopicTagID).First(&existing).Error
 
 	if err == nil {
-		// Update existing
 		embedding.ID = existing.ID
 		return database.DB.Save(embedding).Error
 	}
 
-	// Create new
 	return database.DB.Create(embedding).Error
+}
+
+// ensureVectorDimension checks if the embedding column matches the required dimension
+// and alters it (plus the index) if not. Drops index before ALTER, recreates after.
+// For dimensions > 2000, uses IVFFlat instead of HNSW (HNSW limit is 2000).
+func ensureVectorDimension(dim int) error {
+	var typeStr string
+	if err := database.DB.Raw(`
+		SELECT format_type(a.atttypid, a.atttypmod)
+		FROM pg_attribute a
+		JOIN pg_class c ON c.oid = a.attrelid
+		WHERE c.relname = 'topic_tag_embeddings' AND a.attname = 'embedding'
+	`).Row().Scan(&typeStr); err != nil {
+		return nil
+	}
+
+	expected := fmt.Sprintf("vector(%d)", dim)
+	if typeStr == expected {
+		return nil
+	}
+
+	log.Printf("[INFO] Altering embedding column from %s to %s", typeStr, expected)
+
+	// Drop index first — it depends on the column type
+	_ = database.DB.Exec("DROP INDEX IF EXISTS idx_topic_tag_embeddings_embedding").Error
+
+	if err := database.DB.Exec(fmt.Sprintf(
+		"ALTER TABLE topic_tag_embeddings ALTER COLUMN embedding TYPE %s", expected,
+	)).Error; err != nil {
+		return fmt.Errorf("alter embedding column to %s: %w", expected, err)
+	}
+
+	// Recreate index — HNSW supports max 2000 dimensions
+	if dim <= 2000 {
+		if err := database.DB.Exec(
+			"CREATE INDEX idx_topic_tag_embeddings_embedding ON topic_tag_embeddings USING hnsw (embedding vector_cosine_ops)",
+		).Error; err != nil {
+			log.Printf("[WARN] Failed to recreate HNSW index: %v", err)
+		}
+	} else {
+		log.Printf("[INFO] Dimension %d exceeds HNSW limit (2000), skipping vector index", dim)
+	}
+
+	return nil
 }
 
 // GetEmbedding retrieves the embedding for a tag
@@ -448,15 +510,6 @@ func buildTagEmbeddingText(tag *models.TopicTag) string {
 func hashText(text string) string {
 	h := sha256.Sum256([]byte(text))
 	return hex.EncodeToString(h[:])
-}
-
-func getEmbeddingModel(provider *models.AIProvider) string {
-	// Use the model configured in the airouter provider.
-	// If the provider has an embedding model set, use it; otherwise fall back.
-	if provider.Model != "" {
-		return provider.Model
-	}
-	return "text-embedding-ada-002"
 }
 
 // floatsToPgVector converts a float64 slice to pgvector string format: [0.1,0.2,0.3]
