@@ -2,6 +2,8 @@
 import { Icon } from "@iconify/vue";
 import AIRouterSettingsPanel from '~/features/ai/components/AIRouterSettingsPanel.vue'
 import EmbeddingConfigPanel from '~/features/ai/components/EmbeddingConfigPanel.vue'
+import EmbeddingQueuePanel from '~/features/ai/components/EmbeddingQueuePanel.vue'
+import MergeReembeddingQueuePanel from '~/features/ai/components/MergeReembeddingQueuePanel.vue'
 import type { RssFeed } from '~/types'
 import type { ReadingStats, UserPreference } from '~/types/reading_behavior'
 import type { SchedulerStatus, SchedulerTriggerResult } from '~/types/scheduler'
@@ -32,7 +34,7 @@ const apiStore = useApiStore()
 const feedsStore = useFeedsStore()
 const preferencesStore = usePreferencesStore()
 
-const activeTab = ref<'feeds' | 'categories' | 'general' | 'preferences' | 'firecrawl' | 'schedulers'>('feeds')
+const activeTab = ref<'feeds' | 'categories' | 'general' | 'backend-queues' | 'preferences' | 'firecrawl' | 'schedulers'>('feeds')
 const loading = ref(false)
 const error = ref<string | null>(null)
 const success = ref<string | null>(null)
@@ -569,6 +571,13 @@ function formatNextRun(nextRun: string | null | undefined): string {
         </button>
         <button
           class="px-6 py-3 text-sm font-medium transition-colors"
+          :class="activeTab === 'backend-queues' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:text-gray-700'"
+          @click="activeTab = 'backend-queues'"
+        >
+          后端队列
+        </button>
+        <button
+          class="px-6 py-3 text-sm font-medium transition-colors"
           :class="activeTab === 'preferences' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:text-gray-700'"
           @click="activeTab = 'preferences'"
         >
@@ -923,7 +932,7 @@ function formatNextRun(nextRun: string | null | undefined): string {
           <EmbeddingConfigPanel />
 
           <!-- AI Podcast Settings -->
-          <div class="bg-gradient-to-br from-green-50 to-teal-50 rounded-xl p-6 border border-green-100">
+          <!-- <div class="bg-gradient-to-br from-green-50 to-teal-50 rounded-xl p-6 border border-green-100">
             <div class="flex items-start justify-between mb-4">
               <div class="flex items-center gap-3">
                 <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-green-500 to-teal-600 flex items-center justify-center">
@@ -950,7 +959,12 @@ function formatNextRun(nextRun: string | null | undefined): string {
               <Icon icon="mdi:information" width="16" height="16" class="text-green-600" />
               <span>AI 播客功能正在开发中，敬请期待...</span>
             </div>
-          </div>
+          </div> -->
+        </div>
+
+        <div v-if="activeTab === 'backend-queues'" class="space-y-6">
+          <EmbeddingQueuePanel />
+          <MergeReembeddingQueuePanel />
         </div>
 
         <!-- Firecrawl Settings Tab -->

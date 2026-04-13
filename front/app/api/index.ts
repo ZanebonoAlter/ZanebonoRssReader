@@ -12,3 +12,11 @@ export { useTopicGraphApi } from './topicGraph'
 export { useAIAdminApi } from './aiAdmin'
 export { useEmbeddingConfigApi } from './embeddingConfig'
 export type { EmbeddingConfigItem } from './embeddingConfig'
+export { useEmbeddingQueueApi } from './embeddingQueue'
+export type { EmbeddingQueueStatus, EmbeddingQueueTask, EmbeddingQueueTasksResponse } from './embeddingQueue'
+export { useMergeReembeddingQueueApi } from './mergeReembeddingQueue'
+export type {
+  MergeReembeddingQueueStatus,
+  MergeReembeddingQueueTask,
+  MergeReembeddingQueueTasksResponse,
+} from './mergeReembeddingQueue'
