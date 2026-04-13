@@ -5,8 +5,8 @@
 | Metric | Value |
 |--------|-------|
 | Milestone | v1.2 标签智能收敛与关注推送 |
-| Phases | 5 |
-| Requirements | 22 |
+| Phases | 6 |
+| Requirements | 22+ |
 | Coverage | 100% ✓ |
 
 ## Phases
@@ -18,6 +18,7 @@
 | 3 | 日报周报重构 | 从分类聚合改为关注标签视角，适配所有导出通道 | DIGEST-01~04 | 4 |
 | 4 | 标签历史趋势 | AI 生成标签主题叙事分析 | TRENDS-01~03 | 3 |
 | 5 | 相关标签推荐 | 基于关注标签推荐相关标签 | REC-01~02 | 2 |
+| 6 | 标签合并交互界面 | 手动触发全量标签合并、预览结果、修改合并名称、查看合并前后差异 | CONV-02 | TBD |
 
 ## Phase Details
 
@@ -156,9 +157,45 @@ Phase 1 (INFRA+CONV) ──┬── Phase 2 (WATCH+FEED) ──┬── Phase 
                        │                          ├── Phase 4 (TRENDS)
                        │                          │
                        └──────────────────────────┴── Phase 5 (REC)
+
+Phase 1 ── Phase 6 (标签合并交互界面)
 ```
 
 执行顺序: 1 → 2 → 3 → 4 → 5 (Phases 3/4 可并行，Phase 5 需 1+2)
+Phase 6 可在 Phase 1 之后任意时间执行
+
+---
+
+### Phase 6: 标签合并交互界面
+
+**Goal**: 用户可手动触发全量标签合并扫描，预览待合并标签对（源→目标），修改合并后标签名称，确认后执行合并，查看合并前后差异
+
+**Depends on**: Phase 1 (embedding 基础设施 + MergeTags)
+
+**Requirements**: CONV-02
+
+**Success Criteria:**
+1. 用户可在前端手动触发全量标签相似度扫描，系统返回所有高相似度标签对（>= 0.97）
+2. 预览界面展示每对标签的源名称、目标名称、相似度、各自关联文章数
+3. 用户可修改合并后的标签名称（不限于源或目标的名称）
+4. 用户可逐对确认或跳过合并，也可一键全部合并
+5. 合并完成后展示结果汇总：哪些标签被合并、合并后的新名称、迁移的文章数
+
+**Plans:** 3 plans in 3 waves
+
+Plans:
+- [ ] 06-01-PLAN.md — Backend scan-preview API + merge-with-name API (CONV-02)
+- [ ] 06-02-PLAN.md — Frontend API layer for preview and custom merge
+- [ ] 06-03-PLAN.md — TagMergePreview.vue component (cards, inline edit, summary)
+
+**Files affected:**
+- `backend-go/internal/domain/topicanalysis/tag_merge_preview.go` (scan logic extracted)
+- `backend-go/internal/domain/topicanalysis/tag_merge_preview_handler.go` (preview & custom merge APIs)
+- `backend-go/internal/app/router.go` (route registration)
+- `front/app/api/tagMergePreview.ts` (frontend API)
+- `front/app/types/tagMerge.ts` (type definitions)
+- `front/app/features/topic-graph/components/TagMergePreview.vue` (UI component)
+- `front/app/pages/topics.vue` (entry point)
 
 ---
 
@@ -170,6 +207,7 @@ Phase 1 (INFRA+CONV) ──┬── Phase 2 (WATCH+FEED) ──┬── Phase 
 3. 日报周报按关注标签输出，4 通道正确
 4. 标签叙事分析内容合理、时间范围可控
 5. 相关标签推荐有意义且不重复
+6. 标签合并交互界面功能完整，用户可预览、修改、确认合并
 
 ---
 
