@@ -25,6 +25,7 @@ import TopicGraphHeader from '~/features/topic-graph/components/TopicGraphHeader
 import TopicGraphSidebar from '~/features/topic-graph/components/TopicGraphSidebar.vue'
 import TopicTimeline from '~/features/topic-graph/components/TopicTimeline.vue'
 import TagMergePreview from '~/features/topic-graph/components/TagMergePreview.vue'
+import TagHierarchy from '~/features/topic-graph/components/TagHierarchy.vue'
 import { buildDisplayedTopicGraph, collectRelatedTopicSlugs } from '~/features/topic-graph/utils/buildDisplayedTopicGraph'
 import { buildTopicGraphViewModel } from '~/features/topic-graph/utils/buildTopicGraphViewModel'
 import { normalizeTopicCategory } from '~/features/topic-graph/utils/normalizeTopicCategory'
@@ -79,6 +80,10 @@ const loadingPendingArticles = ref(false)
 
 // Tag merge preview state
 const showMergePreview = ref(false)
+
+// Active view tab state (graph / hierarchy)
+const activeTab = ref<'graph' | 'hierarchy'>('graph')
+const showAbstractMerge = ref(false)
 
 const viewModel = computed(() => graphPayload.value
   ? buildTopicGraphViewModel(graphPayload.value)
@@ -868,9 +873,33 @@ await loadGraph()
                   <span>标签合并预览</span>
                 </button>
 
+                <!-- View tabs -->
+                <div class="mt-4 flex gap-1.5">
+                  <button
+                    type="button"
+                    class="th-tab-btn"
+                    :class="{ 'th-tab-btn--active': activeTab === 'graph' }"
+                    @click="activeTab = 'graph'"
+                  >
+                    <Icon icon="mdi:graph-outline" width="14" />
+                    <span>图谱</span>
+                  </button>
+                  <button
+                    type="button"
+                    class="th-tab-btn"
+                    :class="{ 'th-tab-btn--active': activeTab === 'hierarchy' }"
+                    @click="activeTab = 'hierarchy'"
+                  >
+                    <Icon icon="mdi:file-tree-outline" width="14" />
+                    <span>标签层级</span>
+                  </button>
+                </div>
+
               </aside>
 
               <div class="space-y-4">
+                <!-- Graph view (default) -->
+                <template v-if="activeTab === 'graph'">
                 <TopicGraphCanvas
                   :nodes="displayedGraph.nodes"
                   :edges="displayedGraph.edges"
@@ -1038,6 +1067,23 @@ await loadGraph()
                 </section>
 
                 <TopicGraphFooterPanels :detail="detail" />
+                </template>
+
+                <!-- Hierarchy view -->
+                <template v-else>
+                  <article class="rounded-[30px] p-4 md:p-5 border border-[rgba(255,255,255,0.08)] bg-[rgba(11,18,24,0.4)] backdrop-blur-xl">
+                    <TagHierarchy />
+
+                    <button
+                      type="button"
+                      class="mt-4 inline-flex items-center gap-1.5 rounded-full border border-[rgba(240,138,75,0.35)] bg-[rgba(240,138,75,0.12)] px-3.5 py-2 text-xs text-[rgba(255,220,200,0.88)] transition-all hover:border-[rgba(240,138,75,0.55)] hover:bg-[rgba(240,138,75,0.2)]"
+                      @click="showAbstractMerge = true"
+                    >
+                      <Icon icon="mdi:merge" width="14" />
+                      <span>合并抽象标签</span>
+                    </button>
+                  </article>
+                </template>
               </div>
             </div>
           </article>
@@ -1148,6 +1194,12 @@ await loadGraph()
       :scope-category-id="selectedFilterCategoryId"
       :scope-feed-id="selectedFilterFeedId"
       @close="showMergePreview = false"
+      @merged="handleMergeComplete"
+    />
+
+    <TagMergePreview
+      :visible="showAbstractMerge"
+      @close="showAbstractMerge = false"
       @merged="handleMergeComplete"
     />
   </div>
@@ -1723,6 +1775,31 @@ await loadGraph()
 .topic-more-hint:hover {
   background: rgba(255, 255, 255, 0.1);
   color: rgba(255, 255, 255, 0.6);
+}
+
+.th-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  background: none;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 0.7rem;
+  padding: 0.28rem 0.7rem;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.th-tab-btn:hover {
+  border-color: rgba(255, 255, 255, 0.2);
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.th-tab-btn--active {
+  border-color: rgba(240, 138, 75, 0.45);
+  background: rgba(240, 138, 75, 0.1);
+  color: rgba(255, 220, 200, 0.88);
 }
 
 .topic-count {
