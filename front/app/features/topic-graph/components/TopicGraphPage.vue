@@ -24,9 +24,11 @@ import TopicGraphFooterPanels from '~/features/topic-graph/components/TopicGraph
 import TopicGraphHeader from '~/features/topic-graph/components/TopicGraphHeader.vue'
 import TopicGraphSidebar from '~/features/topic-graph/components/TopicGraphSidebar.vue'
 import TopicTimeline from '~/features/topic-graph/components/TopicTimeline.vue'
+import TagMergePreview from '~/features/topic-graph/components/TagMergePreview.vue'
 import { buildDisplayedTopicGraph, collectRelatedTopicSlugs } from '~/features/topic-graph/utils/buildDisplayedTopicGraph'
 import { buildTopicGraphViewModel } from '~/features/topic-graph/utils/buildTopicGraphViewModel'
 import { normalizeTopicCategory } from '~/features/topic-graph/utils/normalizeTopicCategory'
+import type { MergeSummary } from '~/types/tagMerge'
 
 const topicGraphApi = useTopicGraphApi()
 const articlesApi = useArticlesApi()
@@ -74,6 +76,9 @@ const selectedHotspotTag = ref<{ slug: string; label: string; category: TopicCat
 const pendingArticles = ref<PendingArticle[]>([])
 const selectedPendingNode = ref(false)
 const loadingPendingArticles = ref(false)
+
+// Tag merge preview state
+const showMergePreview = ref(false)
 
 const viewModel = computed(() => graphPayload.value
   ? buildTopicGraphViewModel(graphPayload.value)
@@ -749,6 +754,11 @@ function closeArticlePreview() {
   selectedPreviewArticle.value = null
 }
 
+function handleMergeComplete(_summary: MergeSummary) {
+  // Refresh topic data after merge
+  void loadGraph()
+}
+
 async function handleArticleFavorite(articleId: string) {
   const currentFavorite = selectedPreviewArticle.value?.id === articleId
     ? selectedPreviewArticle.value.favorite
@@ -852,6 +862,15 @@ await loadGraph()
                   @update:selected-category-id="selectedFilterCategoryId = $event"
                   @update:selected-feed-id="selectedFilterFeedId = $event"
                 />
+
+                <button
+                  type="button"
+                  class="mt-4 inline-flex items-center gap-1.5 rounded-full border border-[rgba(240,138,75,0.35)] bg-[rgba(240,138,75,0.12)] px-3.5 py-2 text-xs text-[rgba(255,220,200,0.88)] transition-all hover:border-[rgba(240,138,75,0.55)] hover:bg-[rgba(240,138,75,0.2)]"
+                  @click="showMergePreview = true"
+                >
+                  <Icon icon="mdi:merge" width="14" />
+                  <span>标签合并预览</span>
+                </button>
 
               </aside>
 
@@ -1127,6 +1146,12 @@ await loadGraph()
         </div>
       </div>
     </Teleport>
+
+    <TagMergePreview
+      :visible="showMergePreview"
+      @close="showMergePreview = false"
+      @merged="handleMergeComplete"
+    />
   </div>
 </template>
 
