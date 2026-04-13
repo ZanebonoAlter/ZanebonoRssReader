@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -18,11 +19,21 @@ type UpdateSchedulerIntervalRequest struct {
 }
 
 type SchedulerStatusResponse struct {
-	Name          string `json:"name"`
-	Status        string `json:"status"`
-	CheckInterval int64  `json:"check_interval"`
-	NextRun       int64  `json:"next_run"`
-	IsExecuting   bool   `json:"is_executing"`
+	Name                   string                 `json:"name"`
+	Status                 string                 `json:"status"`
+	CheckInterval          int64                  `json:"check_interval"`
+	NextRun                int64                  `json:"next_run"`
+	IsExecuting            bool                   `json:"is_executing"`
+	Description            string                 `json:"description,omitempty"`
+	DatabaseState          map[string]interface{} `json:"database_state,omitempty"`
+	Overview               map[string]interface{} `json:"overview,omitempty"`
+	LastRunSummary         interface{}            `json:"last_run_summary,omitempty"`
+	CurrentArticle         interface{}            `json:"current_article,omitempty"`
+	LastProcessed          interface{}            `json:"last_processed,omitempty"`
+	LiveProcessingCount    int                    `json:"live_processing_count,omitempty"`
+	StaleProcessingCount   int                    `json:"stale_processing_count,omitempty"`
+	StaleProcessingArticle interface{}            `json:"stale_processing_article,omitempty"`
+	AIConfigured           bool                   `json:"ai_configured,omitempty"`
 }
 
 type schedulerDescriptor struct {
@@ -88,6 +99,14 @@ func schedulerDescriptors() []schedulerDescriptor {
 				return runtimeinfo.DigestSchedulerInterface
 			},
 		},
+		{
+			Name:        "auto_tag_merge",
+			DisplayName: "Auto Tag Merge",
+			Description: "Auto-merge similar tags based on embedding similarity",
+			Get: func() interface{} {
+				return runtimeinfo.AutoTagMergeSchedulerInterface
+			},
+		},
 	}
 }
 
@@ -134,7 +153,9 @@ func safeGetStatus(scheduler interface{}, displayName string) *SchedulerStatusRe
 func GetSchedulersStatus(c *gin.Context) {
 	schedulers := make([]SchedulerStatusResponse, 0)
 	for _, descriptor := range schedulerDescriptors() {
-		if status := safeGetStatus(descriptor.Get(), descriptor.DisplayName); status != nil {
+		scheduler := descriptor.Get()
+		if status := safeGetStatus(scheduler, descriptor.DisplayName); status != nil {
+			enrichStatus(scheduler, descriptor, status)
 			schedulers = append(schedulers, *status)
 		}
 	}
@@ -154,6 +175,7 @@ func GetSchedulerStatus(c *gin.Context) {
 	}
 
 	if status := safeGetStatus(scheduler, descriptor.DisplayName); status != nil {
+		enrichStatus(scheduler, *descriptor, status)
 		c.JSON(http.StatusOK, gin.H{"success": true, "data": status})
 		return
 	}
@@ -357,6 +379,67 @@ func safeGetTaskStatus(scheduler interface{}) map[string]interface{} {
 	}
 
 	return nil
+}
+
+func enrichStatus(scheduler interface{}, descriptor schedulerDescriptor, status *SchedulerStatusResponse) {
+	status.Name = descriptor.Name
+	status.Description = descriptor.Description
+
+	if detailer, ok := scheduler.(interface{ GetTaskStatusDetails() map[string]interface{} }); ok {
+		details := detailer.GetTaskStatusDetails()
+		if details == nil {
+			return
+		}
+		if v, ok := details["database_state"].(map[string]interface{}); ok {
+			status.DatabaseState = v
+		}
+		if v, ok := details["overview"].(map[string]interface{}); ok {
+			status.Overview = v
+		}
+		if v, ok := details["last_run_summary"]; ok && v != nil {
+			status.LastRunSummary = v
+		}
+		if v, ok := details["current_article"]; ok && v != nil {
+			status.CurrentArticle = v
+		}
+		if v, ok := details["last_processed"]; ok && v != nil {
+			status.LastProcessed = v
+		}
+		if v, ok := details["live_processing_count"]; ok {
+			if n, ok := v.(int); ok && n > 0 {
+				status.LiveProcessingCount = n
+			}
+		}
+		if v, ok := details["stale_processing_count"]; ok {
+			if n, ok := v.(int); ok && n > 0 {
+				status.StaleProcessingCount = n
+			}
+		}
+		if v, ok := details["stale_processing_article"]; ok && v != nil {
+			status.StaleProcessingArticle = v
+		}
+		if v, ok := details["ai_configured"]; ok {
+			if b, ok := v.(bool); ok {
+				status.AIConfigured = b
+			}
+		}
+		return
+	}
+
+	taskName := descriptor.TaskName
+	if taskName == "" {
+		taskName = descriptor.Name
+	}
+	var task models.SchedulerTask
+	if err := database.DB.Where("name = ?", taskName).First(&task).Error; err == nil {
+		status.DatabaseState = task.ToDict()
+		if task.LastExecutionResult != "" {
+			var summary interface{}
+			if err := json.Unmarshal([]byte(task.LastExecutionResult), &summary); err == nil {
+				status.LastRunSummary = summary
+			}
+		}
+	}
 }
 
 func normalizeSchedulerStatus(status SchedulerStatusResponse, displayName string) SchedulerStatusResponse {

@@ -23,6 +23,7 @@ type Runtime struct {
 	Firecrawl              *jobs.FirecrawlScheduler
 	Digest                 *digest.DigestScheduler
 	BlockedArticleRecovery *jobs.BlockedArticleRecoveryScheduler
+	AutoTagMerge           *jobs.AutoTagMergeScheduler
 }
 
 func StartRuntime() *Runtime {
@@ -102,12 +103,21 @@ func StartRuntime() *Runtime {
 		log.Println("Blocked article recovery scheduler started successfully")
 	}
 
+	// Auto tag merge scheduler (hourly)
+	runtime.AutoTagMerge = jobs.NewAutoTagMergeScheduler(3600)
+	if err := runtime.AutoTagMerge.Start(); err != nil {
+		log.Printf("Warning: Failed to start auto tag merge scheduler: %v", err)
+	} else {
+		log.Println("Auto tag merge scheduler started successfully")
+	}
+
 	runtimeinfo.AutoRefreshSchedulerInterface = runtime.AutoRefresh
 	runtimeinfo.AutoSummarySchedulerInterface = runtime.AutoSummary
 	runtimeinfo.PreferenceUpdateSchedulerInterface = runtime.PreferenceUpdate
 	runtimeinfo.AISummarySchedulerInterface = runtime.ContentCompletion
 	runtimeinfo.FirecrawlSchedulerInterface = runtime.Firecrawl
 	runtimeinfo.DigestSchedulerInterface = runtime.Digest
+	runtimeinfo.AutoTagMergeSchedulerInterface = runtime.AutoTagMerge
 
 	return runtime
 }
@@ -164,6 +174,11 @@ func SetupGracefulShutdown(runtime *Runtime) {
 			if runtime.BlockedArticleRecovery != nil {
 				log.Println("Stopping blocked article recovery scheduler...")
 				runtime.BlockedArticleRecovery.Stop()
+			}
+
+			if runtime.AutoTagMerge != nil {
+				log.Println("Stopping auto tag merge scheduler...")
+				runtime.AutoTagMerge.Stop()
 			}
 
 			close(done)
