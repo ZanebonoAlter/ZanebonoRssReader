@@ -46,6 +46,12 @@
 - 复用现有 TopicGraphPage 作为入口
 - 新增 TagHierarchy.vue 组件
 
+### 抽象标签合并管理
+- **D-07:** 新增专门的抽象标签管理页面，支持对抽象标签进行二次/多次合并
+- 复用现有的 TagMergePreview 组件（相似度扫描 + 预览 + 自定义名称）
+- 原有的标签合并功能移动到全局配置页面（Settings），作为系统级功能
+- 抽象标签管理页面专注于层级结构的维护和优化
+
 ### Claude's Discretion
 - 抽象标签的 category 继承自第一个子标签的 category
 - 抽象标签默认为 active 状态，可被合并
@@ -63,6 +69,9 @@
 - `backend-go/internal/domain/topicextraction/tagger.go` — 标签创建和 ai_judgment 处理
 - `backend-go/internal/domain/models/topic_graph.go` — TopicTag 模型定义
 - `backend-go/internal/platform/airouter/embedding.go` — Embedding 客户端
+- `backend-go/internal/domain/topicanalysis/tag_merge_preview.go` — 标签合并预览扫描逻辑
+- `backend-go/internal/domain/topicanalysis/tag_merge_preview_handler.go` — 预览和自定义合并 API
+- `front/app/features/topic-graph/components/TagMergePreview.vue` — 合并预览组件（可复用）
 
 ### 项目文档
 - `.planning/ROADMAP.md` § Phase 7 — 阶段目标和成功标准
@@ -120,6 +129,24 @@ CREATE TABLE topic_tag_relations (
 - `GET /api/tags/hierarchy` — 获取标签层级树
 - `PUT /api/tags/:id/abstract-name` — 更新抽象标签名称
 - `POST /api/tags/:id/detach` — 将子标签从抽象标签中分离
+- `POST /api/tags/abstract/scan` — 扫描可合并的抽象标签对
+- `POST /api/tags/abstract/merge` — 合并抽象标签（复用现有 MergeTags 逻辑）
+
+### 前端页面结构
+```
+/pages/
+├── topics.vue              # 标签图谱主页（现有）
+├── topics/
+│   ├── hierarchy.vue       # 标签层级树（新增）
+│   └── abstract-merge.vue  # 抽象标签合并管理（新增）
+└── settings/
+    └── tags.vue            # 全局标签配置（移动现有合并功能）
+```
+
+### 组件复用
+- `TagMergePreview.vue` — 复用于抽象标签合并页面
+- 相同的扫描 → 预览 → 自定义名称 → 确认流程
+- 区别：只展示和处理 abstract 类型的标签
 
 </specifics>
 
