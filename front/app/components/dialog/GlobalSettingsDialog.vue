@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Icon } from "@iconify/vue";
 import AIRouterSettingsPanel from '~/features/ai/components/AIRouterSettingsPanel.vue'
+import EmbeddingConfigPanel from '~/features/ai/components/EmbeddingConfigPanel.vue'
 import type { RssFeed } from '~/types'
 import type { ReadingStats, UserPreference } from '~/types/reading_behavior'
 import type { SchedulerStatus, SchedulerTriggerResult } from '~/types/scheduler'
@@ -919,6 +920,7 @@ function formatNextRun(nextRun: string | null | undefined): string {
         <!-- General Settings Tab -->
         <div v-if="activeTab === 'general'" class="space-y-6">
           <AIRouterSettingsPanel />
+          <EmbeddingConfigPanel />
 
           <!-- AI Podcast Settings -->
           <div class="bg-gradient-to-br from-green-50 to-teal-50 rounded-xl p-6 border border-green-100">
