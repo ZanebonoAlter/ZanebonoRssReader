@@ -184,8 +184,8 @@ Phase 6 可在 Phase 1 之后任意时间执行
 **Plans:** 3 plans in 3 waves
 
 Plans:
-- [ ] 06-01-PLAN.md — Backend: extract ScanSimilarTagPairs + preview/merge-with-name APIs (CONV-02)
-- [ ] 06-02-PLAN.md — Frontend: TypeScript types + API layer for preview and custom merge
+- [x] 06-01-PLAN.md — Backend: extract ScanSimilarTagPairs + preview/merge-with-name APIs (CONV-02)
+- [x] 06-02-PLAN.md — Frontend: TypeScript types + API layer for preview and custom merge
 - [ ] 06-03-PLAN.md — Frontend: TagMergePreview.vue modal component + TopicGraphPage entry point
 
 **Files affected:**

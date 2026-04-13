@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: milestone
 status: executing
-stopped_at: Phase 06 context gathered
-last_updated: "2026-04-13T12:26:00.188Z"
-last_activity: "2026-04-13 - Completed quick task 260413-r4v: 新增一个专门展示后端队列处理情况的 Tab，将现有 embedding 队列与新增的“标签合并后 embedding 重算队列”一起展示"
+stopped_at: Completed 06-02-PLAN.md
+last_updated: "2026-04-13T13:52:04.229Z"
+last_activity: 2026-04-13
 progress:
   total_phases: 6
   completed_phases: 1
-  total_plans: 4
-  completed_plans: 4
-  percent: 100
+  total_plans: 7
+  completed_plans: 6
+  percent: 86
 ---
 
 # STATE: Milestone v1.2 标签智能收敛与关注推送
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-12)
 
 **Core value:** 通过智能标签系统帮助用户高效消费信息
-**Current focus:** Phase 01 — 基础设施与标签收敛
+**Current focus:** Phase 06 — tag-merge-ui
 
 ## Current Position
 
-Phase: 2
-Plan: Not started
-Status: Executing Phase 01
-Last activity: 2026-04-13 - Completed quick task 260413-r4v: 新增一个专门展示后端队列处理情况的 Tab，将现有 embedding 队列与新增的“标签合并后 embedding 重算队列”一起展示
+Phase: 06 (tag-merge-ui) — EXECUTING
+Plan: 2 of 3
+Status: Ready to execute
+Last activity: 2026-04-13
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -51,6 +51,7 @@ Progress: [░░░░░░░░░░] 0%
 | 6. 标签合并交互界面 | 0/? | - | Not started |
 
 *Updated after each plan completion*
+| Phase 06 P02 | 4min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -66,6 +67,7 @@ Decisions logged in PROJECT.md Key Decisions table. Recent:
 - v1.2: 自动合并标签（非聚类展示），减少碎片
 - v1.2: 新文章入库时实时触发收敛
 - v1.2: 完全替换日报周报逻辑
+- [Phase 06]: Article titles optional via include_articles param, POST body snake_case/types camelCase
 
 ### Pending Todos
 
@@ -92,9 +94,9 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-13T12:26:00.185Z
-Stopped at: Phase 06 context gathered
-Resume file: .planning/phases/06-tag-merge-ui/06-CONTEXT.md
+Last session: 2026-04-13T13:52:04.227Z
+Stopped at: Completed 06-02-PLAN.md
+Resume file: None
 
 ---
 
