@@ -166,7 +166,9 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 					if len(tag.Aliases) > 0 {
 						aJSON, _ := json.Marshal(tag.Aliases)
 						existing.Aliases = string(aJSON)
-						database.DB.Save(existing)
+						if err := database.DB.Save(existing).Error; err != nil {
+							fmt.Printf("[WARN] Failed to update aliases for tag %d: %v\n", existing.ID, err)
+						}
 					}
 					// Backfill embedding if missing
 					go ensureTagEmbedding(es, existing.ID)

@@ -143,12 +143,11 @@ func (s *EmbeddingService) FindSimilarTags(ctx context.Context, tag *models.Topi
 	}
 
 	// Build pgvector format for the query vector
-	pgVecStr := floatsToPgVector(nil)
 	var vector []float64
 	if err := json.Unmarshal([]byte(embedding.Vector), &vector); err != nil {
 		return nil, fmt.Errorf("failed to parse embedding vector: %w", err)
 	}
-	pgVecStr = floatsToPgVector(vector)
+	pgVecStr := floatsToPgVector(vector)
 
 	// Use pgvector SQL cosine distance (<=>) for similarity search
 	// Filter out merged tags (only match active tags)
@@ -324,9 +323,11 @@ func MergeTags(sourceTagID, targetTagID uint) error {
 		for _, link := range sourceLinks {
 			// Check if target already has a link for this article
 			var existingCount int64
-			tx.Model(&models.ArticleTopicTag{}).
+			if err := tx.Model(&models.ArticleTopicTag{}).
 				Where("article_id = ? AND topic_tag_id = ?", link.ArticleID, targetTagID).
-				Count(&existingCount)
+				Count(&existingCount).Error; err != nil {
+				return fmt.Errorf("check existing article_topic_tag for article %d: %w", link.ArticleID, err)
+			}
 
 			if existingCount > 0 {
 				// Target already covers this article — delete the source link
@@ -349,9 +350,11 @@ func MergeTags(sourceTagID, targetTagID uint) error {
 
 		for _, link := range sourceSummaryLinks {
 			var existingCount int64
-			tx.Model(&models.AISummaryTopic{}).
+			if err := tx.Model(&models.AISummaryTopic{}).
 				Where("summary_id = ? AND topic_tag_id = ?", link.SummaryID, targetTagID).
-				Count(&existingCount)
+				Count(&existingCount).Error; err != nil {
+				return fmt.Errorf("check existing ai_summary_topic for summary %d: %w", link.SummaryID, err)
+			}
 
 			if existingCount > 0 {
 				if err := tx.Delete(&link).Error; err != nil {
@@ -505,16 +508,7 @@ func splitByComma(s string) []string {
 }
 
 func lower(s string) string {
-	// Simple lowercase
-	result := make([]byte, len(s))
-	for i, r := range s {
-		if r >= 'A' && r <= 'Z' {
-			result[i] = byte(r + 32)
-		} else {
-			result[i] = byte(r)
-		}
-	}
-	return string(result)
+	return strings.ToLower(s)
 }
 
 func min(a, b int) int {
