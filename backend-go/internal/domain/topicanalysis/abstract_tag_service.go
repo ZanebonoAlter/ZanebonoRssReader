@@ -381,6 +381,48 @@ func DetachChildTag(parentID, childID uint) error {
 	return nil
 }
 
+// ReassignTagParent moves a tag to a new abstract parent.
+// If the tag currently has a parent, the old relation is removed first.
+// If the tag is itself an abstract tag (has children), reassignment is blocked to prevent nesting.
+func ReassignTagParent(tagID, newParentID uint) error {
+	if tagID == 0 || newParentID == 0 {
+		return fmt.Errorf("tag_id and new_parent_id must be > 0")
+	}
+	if tagID == newParentID {
+		return fmt.Errorf("tag_id and new_parent_id must be different")
+	}
+
+	return database.DB.Transaction(func(tx *gorm.DB) error {
+		// 1. Check if new parent exists
+		var parent models.TopicTag
+		if err := tx.First(&parent, newParentID).Error; err != nil {
+			return fmt.Errorf("parent tag not found: %w", err)
+		}
+
+		// 2. Check if tag is itself an abstract tag (has children)
+		var childCount int64
+		tx.Model(&models.TopicTagRelation{}).Where("parent_id = ?", tagID).Count(&childCount)
+		if childCount > 0 {
+			return fmt.Errorf("cannot reassign an abstract tag that has children")
+		}
+
+		// 3. Remove from current parent (if any)
+		tx.Where("child_id = ?", tagID).Delete(&models.TopicTagRelation{})
+
+		// 4. Create new relation
+		relation := models.TopicTagRelation{
+			ParentID:     newParentID,
+			ChildID:      tagID,
+			RelationType: "abstract",
+		}
+		if err := tx.Create(&relation).Error; err != nil {
+			return fmt.Errorf("create reassignment relation: %w", err)
+		}
+
+		return nil
+	})
+}
+
 // --- Internal helpers ---
 
 // callLLMForAbstractName calls the LLM to extract a common abstract concept and description from candidates.

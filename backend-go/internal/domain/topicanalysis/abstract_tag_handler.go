@@ -136,6 +136,44 @@ func DetachChildTagHandler(c *gin.Context) {
 	})
 }
 
+// ReassignTagHandler moves a tag to a new abstract parent.
+// POST /api/topic-tags/:id/reassign
+func ReassignTagHandler(c *gin.Context) {
+	tagIDStr := c.Param("id")
+	tagID, err := strconv.ParseUint(tagIDStr, 10, 32)
+	if err != nil || tagID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid tag id"})
+		return
+	}
+
+	var body struct {
+		ParentID uint `json:"parent_id"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid request body"})
+		return
+	}
+	if body.ParentID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "parent_id is required"})
+		return
+	}
+
+	if err := ReassignTagParent(uint(tagID), body.ParentID); err != nil {
+		status := http.StatusInternalServerError
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "must be") || strings.Contains(errMsg, "not found") || strings.Contains(errMsg, "cannot reassign") {
+			status = http.StatusBadRequest
+		}
+		c.JSON(status, gin.H{"success": false, "error": errMsg})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "tag reassigned",
+	})
+}
+
 // RegisterAbstractTagRoutes registers the abstract tag management endpoints.
 func RegisterAbstractTagRoutes(rg *gin.RouterGroup) {
 	tags := rg.Group("/topic-tags")
@@ -143,5 +181,6 @@ func RegisterAbstractTagRoutes(rg *gin.RouterGroup) {
 		tags.GET("/hierarchy", GetTagHierarchyHandler)
 		tags.PUT("/:id/abstract-name", UpdateAbstractTagNameHandler)
 		tags.POST("/:id/detach", DetachChildTagHandler)
+		tags.POST("/:id/reassign", ReassignTagHandler)
 	}
 }
