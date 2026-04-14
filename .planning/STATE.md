@@ -88,6 +88,7 @@ None yet.
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260414-pg-alias | 修复 PostgreSQL 下 topic tag 别名 JSON 数组查询使用错误函数导致的 SQL 报错 | 2026-04-14 | pending | - |
 | 260413-p2t | 新增一个专门展示后端队列处理情况的 Tab，将现有 embedding 队列与新增的“标签合并后 embedding 重算队列”一起展示 | 2026-04-13 | 67997d8 | [260413-p2t-tab-embedding-embedding](./quick/260413-p2t-tab-embedding-embedding/) |
 | 260413-r4v | 实现标签自动合并调度器 | 2026-04-13 | 245370e | [260413-r4v-auto-tag-merge-scheduler](./quick/260413-r4v-auto-tag-merge-scheduler/) |
 

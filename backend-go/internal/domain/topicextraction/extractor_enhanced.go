@@ -145,7 +145,7 @@ func (te *TagExtractor) resolveCandidate(ctx context.Context, candidate topictyp
 
 	// Step 2: Check for alias match
 	var aliasMatch models.TopicTag
-	aliasMatchErr := database.DB.Where("category = ? AND ? IN (SELECT value FROM json_each(COALESCE(NULLIF(aliases, ''), '[]')))", category, candidate.Label).First(&aliasMatch).Error
+	aliasMatchErr := database.DB.Where("category = ? AND ? IN (SELECT jsonb_array_elements_text(COALESCE(NULLIF(aliases, ''), '[]')::jsonb))", category, candidate.Label).First(&aliasMatch).Error
 	if aliasMatchErr == nil {
 		return &topictypes.TopicTag{
 			Label:     aliasMatch.Label,
