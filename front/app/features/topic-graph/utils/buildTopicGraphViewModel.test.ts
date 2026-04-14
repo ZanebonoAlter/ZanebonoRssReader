@@ -159,6 +159,58 @@ describe('buildTopicGraphViewModel', () => {
     expect(viewModel.graph.nodes.find(node => node.id === 'feed-1')?.accent).toBe('#3b6b87')
   })
 
+  it('propagates is_abstract to isAbstract on scene nodes', () => {
+    const viewModel = buildTopicGraphViewModel({
+      type: 'daily',
+      anchor_date: '2026-03-11',
+      period_label: '2026-03-11 当日',
+      topic_count: 3,
+      article_count: 2,
+      feed_count: 1,
+      top_topics: [
+        { label: 'AI Agent', slug: 'ai-agent', category: 'keyword', score: 2.9 },
+      ],
+      nodes: [
+        { id: 'ai-agent', label: 'AI Agent', slug: 'ai-agent', kind: 'topic', weight: 5.2, article_count: 2, is_abstract: true },
+        { id: 'openai', label: 'OpenAI', slug: 'openai', kind: 'topic', weight: 4.1, article_count: 2 },
+        { id: 'feed-1', label: 'OpenAI Blog', kind: 'feed', weight: 1.8, color: '#3b6b87', feed_name: 'OpenAI Blog', category_name: 'AI' },
+      ],
+      edges: [
+        { id: 'ai-agent::openai', source: 'ai-agent', target: 'openai', kind: 'topic_topic', weight: 2.2 },
+      ],
+    })
+
+    // Abstract node should have isAbstract = true
+    const abstractNode = viewModel.graph.nodes.find(n => n.id === 'ai-agent')
+    expect(abstractNode?.isAbstract).toBe(true)
+
+    // Non-abstract nodes should have isAbstract = false
+    const normalNode = viewModel.graph.nodes.find(n => n.id === 'openai')
+    expect(normalNode?.isAbstract).toBe(false)
+
+    // Feed nodes should also have isAbstract = false
+    const feedNode = viewModel.graph.nodes.find(n => n.id === 'feed-1')
+    expect(feedNode?.isAbstract).toBe(false)
+  })
+
+  it('defaults isAbstract to false when is_abstract is undefined', () => {
+    const viewModel = buildTopicGraphViewModel({
+      type: 'daily',
+      anchor_date: '2026-03-11',
+      period_label: '2026-03-11 当日',
+      topic_count: 1,
+      article_count: 1,
+      feed_count: 0,
+      top_topics: [],
+      nodes: [
+        { id: 'topic-1', label: 'Topic', slug: 'topic-1', kind: 'topic', weight: 3.0 },
+      ],
+      edges: [],
+    })
+
+    expect(viewModel.graph.nodes[0]?.isAbstract).toBe(false)
+  })
+
   it('handles trunk derivation when hero does not match any node', () => {
     const viewModel = buildTopicGraphViewModel({
       type: 'daily',
