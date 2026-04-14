@@ -28,6 +28,12 @@ const saving = ref(false)
 // Detach confirm state
 const confirmingDetach = ref<{ parentId: number; childId: number; childLabel: string } | null>(null)
 
+// Reassign modal state
+const reassignModal = ref<{ tagId: number; tagLabel: string } | null>(null)
+const reassignCandidates = ref<TagHierarchyNode[]>([])
+const reassignLoading = ref(false)
+const reassignError = ref<string | null>(null)
+
 const tagCategories = ['event', 'person', 'keyword'] as const
 
 const categoryLabel = (cat: string) =>
@@ -128,6 +134,48 @@ function requestDetach(node: TagHierarchyNode) {
   const parentId = findParentId(nodes.value, node.id)
   if (parentId) {
     confirmingDetach.value = { parentId, childId: node.id, childLabel: node.label }
+  }
+}
+
+function collectAbstractTags(tree: TagHierarchyNode[], excludeId: number): TagHierarchyNode[] {
+  const result: TagHierarchyNode[] = []
+  for (const node of tree) {
+    if (node.id === excludeId) continue
+    if (node.children.length > 0) {
+      result.push(node)
+    }
+    result.push(...collectAbstractTags(node.children, excludeId))
+  }
+  return result
+}
+
+function requestReassign(node: TagHierarchyNode) {
+  reassignCandidates.value = collectAbstractTags(nodes.value, node.id)
+  reassignModal.value = { tagId: node.id, tagLabel: node.label }
+  reassignError.value = null
+}
+
+function cancelReassign() {
+  reassignModal.value = null
+  reassignError.value = null
+}
+
+async function confirmReassign(newParentId: number) {
+  if (!reassignModal.value) return
+  reassignLoading.value = true
+  reassignError.value = null
+  try {
+    const response = await abstractTagApi.reassignTag(reassignModal.value.tagId, newParentId)
+    if (response.success) {
+      reassignModal.value = null
+      await loadHierarchy()
+    } else {
+      reassignError.value = response.error || '归类失败'
+    }
+  } catch (e) {
+    reassignError.value = e instanceof Error ? e.message : '归类失败'
+  } finally {
+    reassignLoading.value = false
   }
 }
 
@@ -302,6 +350,7 @@ watch(timeRange, () => {
         @cancel-edit="cancelEdit"
         @confirm-edit="void confirmEdit()"
         @detach="requestDetach"
+        @reassign="requestReassign"
         @update:editing-value="handleUpdateEditingValue"
       />
     </div>
@@ -314,6 +363,46 @@ watch(timeRange, () => {
           <div class="flex gap-2 mt-4 justify-end">
             <button type="button" class="th-btn th-btn--ghost" @click="cancelDetach">取消</button>
             <button type="button" class="th-btn th-btn--danger" @click="void confirmDetach()">分离</button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- Reassign modal -->
+    <Teleport to="body">
+      <div v-if="reassignModal" class="th-confirm-overlay" @click.self="cancelReassign">
+        <div class="th-confirm-dialog" style="width: min(480px, 90%);">
+          <p class="text-sm text-white/60 mb-1">归类标签</p>
+          <p class="text-base text-white font-medium mb-3">{{ reassignModal.tagLabel }}</p>
+
+          <div v-if="reassignError" class="th-error mb-3">
+            <Icon icon="mdi:alert-circle-outline" width="14" />
+            <span>{{ reassignError }}</span>
+          </div>
+
+          <p class="text-xs text-white/40 mb-2">选择目标抽象标签：</p>
+
+          <div v-if="reassignCandidates.length === 0" class="text-xs text-white/30 py-4 text-center">
+            暂无可选的抽象标签
+          </div>
+
+          <div v-else class="th-reassign-list">
+            <button
+              v-for="candidate in reassignCandidates"
+              :key="candidate.id"
+              type="button"
+              class="th-reassign-item"
+              :disabled="reassignLoading"
+              @click="void confirmReassign(candidate.id)"
+            >
+              <span class="th-reassign-item-label">{{ candidate.label }}</span>
+              <span class="th-reassign-item-cat">{{ candidate.category === 'event' ? '事件' : candidate.category === 'person' ? '人物' : '关键词' }}</span>
+              <span v-if="candidate.feedCount > 0" class="th-reassign-item-count">{{ candidate.feedCount }}</span>
+            </button>
+          </div>
+
+          <div class="flex gap-2 mt-4 justify-end">
+            <button type="button" class="th-btn th-btn--ghost" @click="cancelReassign">取消</button>
           </div>
         </div>
       </div>
@@ -446,4 +535,48 @@ watch(timeRange, () => {
 .th-btn--ghost:hover { background: rgba(255, 255, 255, 0.06); }
 .th-btn--danger { border-color: rgba(240, 138, 75, 0.4); color: rgba(255, 200, 180, 0.9); }
 .th-btn--danger:hover { background: rgba(240, 138, 75, 0.15); }
+
+.th-reassign-list {
+  max-height: 280px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.th-reassign-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 0.82rem;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.12s ease;
+}
+.th-reassign-item:hover {
+  border-color: rgba(99, 102, 241, 0.4);
+  background: rgba(99, 102, 241, 0.08);
+  color: white;
+}
+.th-reassign-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.th-reassign-item-label { flex: 1; }
+.th-reassign-item-cat {
+  font-size: 0.65rem;
+  color: rgba(255, 255, 255, 0.35);
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.th-reassign-item-count {
+  font-size: 0.65rem;
+  color: rgba(255, 255, 255, 0.3);
+}
 </style>

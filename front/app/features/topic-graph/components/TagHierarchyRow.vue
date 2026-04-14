@@ -15,6 +15,7 @@ const emit = defineEmits<{
   'cancel-edit': []
   'confirm-edit': []
   'detach': [node: TagHierarchyNode]
+  'reassign': [node: TagHierarchyNode]
   'update:editing-value': [value: string]
 }>()
 
@@ -43,10 +44,15 @@ function handleDetach(node: TagHierarchyNode) {
   emit('detach', node)
 }
 
+function handleReassign(node: TagHierarchyNode) {
+  emit('reassign', node)
+}
+
 function handleChildStartEdit(node: TagHierarchyNode) { emit('start-edit', node) }
 function handleChildCancelEdit() { emit('cancel-edit') }
 function handleChildConfirmEdit() { emit('confirm-edit') }
 function handleChildDetach(node: TagHierarchyNode) { emit('detach', node) }
+function handleChildReassign(node: TagHierarchyNode) { emit('reassign', node) }
 function handleChildUpdateEditingValue(val: string) { emit('update:editing-value', val) }
 </script>
 
@@ -110,6 +116,17 @@ function handleChildUpdateEditingValue(val: string) { emit('update:editing-value
       >
         <Icon icon="mdi:link-off" width="12" />
       </button>
+
+      <!-- Reassign button for child nodes -->
+      <button
+        v-if="depth > 0"
+        type="button"
+        class="th-reassign-btn"
+        title="归类到其他抽象层"
+        @click="handleReassign(node)"
+      >
+        <Icon icon="mdi:arrow-right-bold" width="12" />
+      </button>
     </div>
 
     <!-- Children (recursive) -->
@@ -125,6 +142,7 @@ function handleChildUpdateEditingValue(val: string) { emit('update:editing-value
         @cancel-edit="handleChildCancelEdit"
         @confirm-edit="handleChildConfirmEdit"
         @detach="handleChildDetach"
+        @reassign="handleChildReassign"
         @update:editing-value="handleChildUpdateEditingValue"
       />
     </div>
@@ -238,6 +256,23 @@ function handleChildUpdateEditingValue(val: string) { emit('update:editing-value
 }
 .th-row:hover .th-detach-btn { opacity: 1; }
 .th-detach-btn:hover { color: rgba(240, 138, 75, 0.9); background: rgba(240, 138, 75, 0.12); }
+
+.th-reassign-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: rgba(255, 255, 255, 0.2);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease, color 0.12s ease;
+}
+.th-row:hover .th-reassign-btn { opacity: 1; }
+.th-reassign-btn:hover { color: rgba(99, 102, 241, 0.9); background: rgba(99, 102, 241, 0.12); }
 
 .th-children {
   border-left: 1px solid rgba(255, 255, 255, 0.06);

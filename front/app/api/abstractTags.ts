@@ -63,5 +63,9 @@ export function useAbstractTagApi() {
     async detachChild(parentId: number, childId: number): Promise<ApiResponse<{ message: string }>> {
       return apiClient.post('/topic-tags/' + parentId + '/detach', { child_id: childId })
     },
+
+    async reassignTag(tagId: number, newParentId: number): Promise<ApiResponse<{ message: string }>> {
+      return apiClient.post('/topic-tags/' + tagId + '/reassign', { parent_id: newParentId })
+    },
   }
 }
