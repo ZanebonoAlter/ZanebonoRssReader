@@ -150,6 +150,16 @@ func postgresMigrations() []Migration {
 		},
 		{
 			Version:     "20260414_0001",
+			Description: "Add description column to topic_tags for LLM-generated tag descriptions.",
+			Up: func(db *gorm.DB) error {
+				if err := db.Exec("ALTER TABLE topic_tags ADD COLUMN IF NOT EXISTS description TEXT").Error; err != nil {
+					return fmt.Errorf("add topic_tags.description column: %w", err)
+				}
+				return nil
+			},
+		},
+		{
+			Version:     "20260414_0002",
 			Description: "Create topic_tag_relations table for abstract tag hierarchical relationships.",
 			Up: func(db *gorm.DB) error {
 				stmts := []string{

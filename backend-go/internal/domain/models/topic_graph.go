@@ -46,6 +46,7 @@ type TopicTag struct {
 	Category     string    `gorm:"size:20;not null;default:keyword;index:idx_topic_tags_category_slug" json:"category"` // event, person, keyword
 	Icon         string    `gorm:"size:100" json:"icon"`                                                                // Iconify icon id, overrides category default
 	Aliases      string    `gorm:"type:text" json:"aliases"`                                                            // JSON array of alias strings
+	Description  string    `gorm:"type:text" json:"description"`                                                        // LLM-generated tag description
 	IsCanonical  bool      `gorm:"default:false" json:"is_canonical"`                                                   // true if this is a canonical tag (not merged)
 	Source       string    `gorm:"size:20;default:llm" json:"source"`                                                   // llm, heuristic, manual
 	FeedCount    int       `gorm:"default:0" json:"feed_count"`                                                         // distinct feed count referencing this tag
