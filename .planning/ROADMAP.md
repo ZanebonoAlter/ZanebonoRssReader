@@ -281,7 +281,7 @@ Plans:
 5. 标签树节点支持手动调整到其他节点，弹窗显示 embedding 相近的抽象层供选择归类
 6. 子标签合并到抽象标签时删除原标签的 embedding，控制 embedding 向量数量增长
 
-**Plans:** 6 plans in 4 waves
+**Plans:** 9 plans in 5 waves (6 original + 3 gap closure)
 
 Plans:
 - [x] 08-01-PLAN.md — 后端 Description 字段 + 文章标签 Description 生成 (D-01)
@@ -290,6 +290,9 @@ Plans:
 - [x] 08-04-PLAN.md — 图谱抽象标签可视化 + 点击详情面板 (D-05, D-06)
 - [x] 08-05-PLAN.md — TagMergePreview 迁移至设置页 + 合并后重建提示 (D-07, D-08)
 - [x] 08-06-PLAN.md — 标签树节点手动归类 (success criteria item 5)
+- [ ] 08-07-PLAN.md — [gap closure] 抽象标签图谱渲染修复 + TagMergePreview 自动扫描 (Tests 6, 7, 8)
+- [ ] 08-08-PLAN.md — [gap closure] GlobalSettingsDialog 合并标签页渲染修复 (Test 8)
+- [ ] 08-09-PLAN.md — [gap closure] 自定义时间范围 + inactive 标签排序 (Tests 4, 5)
 
 ---
 
