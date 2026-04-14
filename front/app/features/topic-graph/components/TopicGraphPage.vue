@@ -81,6 +81,9 @@ const loadingPendingArticles = ref(false)
 // Tag merge preview state
 const showMergePreview = ref(false)
 
+// Abstract tag node tracking (for sidebar detail panel)
+const abstractNodeSlug = ref<string | null>(null)
+
 // Active view tab state (graph / hierarchy)
 const activeTab = ref<'graph' | 'hierarchy'>('graph')
 const showAbstractMerge = ref(false)
@@ -673,7 +676,7 @@ function handleSelectPending() {
   previewDigestId.value = null
 }
 
-function handleNodeClick(node: { slug?: string; kind: string; category?: TopicCategory; label?: string }) {
+function handleNodeClick(node: { slug?: string; kind: string; category?: TopicCategory; label?: string; isAbstract?: boolean }) {
   if (node.kind !== 'topic' || !node.slug) return
 
   ensureTopicShownInGraph(node.slug)
@@ -683,6 +686,9 @@ function handleNodeClick(node: { slug?: string; kind: string; category?: TopicCa
   if (node.category) {
     selectedCategory.value = node.category
   }
+
+  // Track whether this is an abstract tag node
+  abstractNodeSlug.value = node.isAbstract ? node.slug : null
 
   // Set hotspot tag state for the clicked node and load its digests
   selectedHotspotTag.value = {
@@ -1072,7 +1078,7 @@ await loadGraph()
                 <!-- Hierarchy view -->
                 <template v-else>
                   <article class="rounded-[30px] p-4 md:p-5 border border-[rgba(255,255,255,0.08)] bg-[rgba(11,18,24,0.4)] backdrop-blur-xl">
-                    <TagHierarchy />
+                    <TagHierarchy :feed-id="selectedFilterFeedId" :category-id="selectedFilterCategoryId" />
 
                     <button
                       type="button"
@@ -1119,6 +1125,7 @@ await loadGraph()
             :selected-tag-slug="selectedHotspotTag?.slug"
             :pending-articles="selectedPendingNode ? pendingArticles : []"
             :selected-pending-node="selectedPendingNode"
+            :abstract-node-slug="abstractNodeSlug"
             @open-article="openArticlePreview"
             @highlight-keyword="handleKeywordHighlight"
           />

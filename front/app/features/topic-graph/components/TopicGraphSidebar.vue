@@ -2,6 +2,8 @@
 import { computed, ref, watch } from 'vue'
 import { Icon } from '@iconify/vue'
 import { useTopicGraphApi, type TopicCategory, type TopicGraphDetailPayload } from '~/api/topicGraph'
+import { useAbstractTagApi } from '~/api/abstractTags'
+import type { TagHierarchyNode } from '~/types/topicTag'
 import type { PendingArticle, TimelineDigestSelection } from '~/types/timeline'
 import { normalizeTopicCategory } from '~/features/topic-graph/utils/normalizeTopicCategory'
 import KeywordCloud, { type Keyword } from './KeywordCloud.vue'
@@ -16,6 +18,7 @@ interface Props {
   selectedTagSlug?: string | null
   pendingArticles?: PendingArticle[]
   selectedPendingNode?: boolean
+  abstractNodeSlug?: string | null
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -27,6 +30,7 @@ const props = withDefaults(defineProps<Props>(), {
   selectedTagSlug: null,
   pendingArticles: () => [],
   selectedPendingNode: false,
+  abstractNodeSlug: null,
 })
 
 const emit = defineEmits<{
@@ -135,6 +139,58 @@ const mergeMerging = ref(false)
 const mergeError = ref<string | null>(null)
 const mergeSuccess = ref<string | null>(null)
 let mergeSearchTimer: ReturnType<typeof setTimeout> | null = null
+
+// Abstract tag detail state
+const abstractTagApi = useAbstractTagApi()
+const abstractChildren = ref<TagHierarchyNode[]>([])
+const abstractLoading = ref(false)
+const abstractFilterChildSlug = ref<string | null>(null)
+
+// Filtered articles based on selected child tag
+const abstractFilteredArticles = computed(() => {
+  if (!props.detail?.articles) return []
+  if (!abstractFilterChildSlug.value) return props.detail.articles
+
+  // When a child tag is selected, filter articles to only show those matching
+  // Since we don't have per-article tag data in the detail response, show all
+  // and let the parent page handle filtering via the tag slug
+  return props.detail.articles
+})
+
+// Load child tags when abstractNodeSlug changes
+watch(() => props.abstractNodeSlug, async (slug) => {
+  abstractFilterChildSlug.value = null
+  if (!slug) {
+    abstractChildren.value = []
+    return
+  }
+
+  abstractLoading.value = true
+  try {
+    const res = await abstractTagApi.fetchHierarchy(undefined, undefined, undefined, undefined, undefined)
+    if (res.success && res.data) {
+      // Find the matching hierarchy node by slug
+      const findNodeBySlug = (nodes: TagHierarchyNode[], targetSlug: string): TagHierarchyNode | null => {
+        for (const node of nodes) {
+          if (node.slug === targetSlug) return node
+          const found = findNodeBySlug(node.children, targetSlug)
+          if (found) return found
+        }
+        return null
+      }
+      const match = findNodeBySlug(res.data.nodes, slug)
+      abstractChildren.value = match?.children || []
+    }
+  } catch {
+    abstractChildren.value = []
+  } finally {
+    abstractLoading.value = false
+  }
+}, { immediate: true })
+
+function filterTimeline(childSlug: string) {
+  abstractFilterChildSlug.value = abstractFilterChildSlug.value === childSlug ? null : childSlug
+}
 
 function openMergeDialog() {
   showMergeDialog.value = true
@@ -308,6 +364,51 @@ async function doMerge(targetTagId: number, targetLabel: string) {
           <p class="keywords-hint">
             点击标签，只高亮当前标签节点和它的一跳邻居
           </p>
+        </div>
+      </section>
+
+      <!-- Abstract Tag Detail Panel -->
+      <section v-if="props.abstractNodeSlug && abstractChildren.length > 0" class="topic-panel rounded-[26px] p-4">
+        <p class="topic-sidebar__eyebrow">抽象标签详情</p>
+
+        <!-- Child Tags -->
+        <div class="mt-3">
+          <h4 class="text-xs font-medium text-[var(--topic-ink-soft)]">子标签</h4>
+          <div class="mt-2 grid gap-1.5">
+            <button
+              v-for="child in abstractChildren"
+              :key="child.slug"
+              type="button"
+              class="flex items-center gap-2 rounded-xl px-2.5 py-1.5 text-left transition-all"
+              :class="abstractFilterChildSlug === child.slug
+                ? 'bg-[rgba(240,138,75,0.15)] border border-[rgba(240,138,75,0.3)]'
+                : 'bg-[rgba(10,16,23,0.56)] border border-[var(--topic-border)] hover:border-[rgba(240,138,75,0.2)]'"
+              @click="filterTimeline(child.slug)"
+            >
+              <span class="w-2 h-2 rounded-full shrink-0" :class="`bg-[#6366f1]`"></span>
+              <span class="text-sm text-[var(--topic-ink-strong)] truncate">{{ child.label }}</span>
+              <span class="ml-auto text-xs text-[var(--topic-ink-soft)] shrink-0">{{ child.feedCount }}</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Article Timeline (filtered by child tag) -->
+        <div class="mt-4">
+          <h4 class="text-xs font-medium text-[var(--topic-ink-soft)]">
+            {{ abstractFilterChildSlug ? '筛选时间线' : '文章时间线' }}
+          </h4>
+          <div v-if="abstractFilteredArticles.length" class="mt-2 grid gap-1.5">
+            <button
+              v-for="article in abstractFilteredArticles.slice(0, 12)"
+              :key="article.id"
+              class="topic-related-card"
+              type="button"
+              @click="emit('openArticle', article.id)"
+            >
+              <h3 class="topic-related-card__title text-sm">{{ article.title }}</h3>
+            </button>
+          </div>
+          <div v-else class="mt-2 text-sm text-[var(--topic-ink-soft)]">暂无关联文章</div>
         </div>
       </section>
     </div>
