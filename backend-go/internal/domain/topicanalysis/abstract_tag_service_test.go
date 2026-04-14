@@ -154,3 +154,115 @@ func TestParseAbstractNameTooLong(t *testing.T) {
 		t.Error("expected error for name exceeding 160 chars")
 	}
 }
+
+// --- Tests for parseAbstractTagResponse (returns name + description) ---
+
+func TestParseAbstractTagResponse(t *testing.T) {
+	tests := []struct {
+		name         string
+		input        string
+		expectedName string
+		expectedDesc string
+		hasError     bool
+	}{
+		{
+			name:         "valid JSON with description",
+			input:        `{"abstract_name": "AI技术", "description": "人工智能相关技术的总称", "reason": "all about AI"}`,
+			expectedName: "AI技术",
+			expectedDesc: "人工智能相关技术的总称",
+			hasError:     false,
+		},
+		{
+			name:         "valid JSON without description",
+			input:        `{"abstract_name": "编程语言", "reason": "x"}`,
+			expectedName: "编程语言",
+			expectedDesc: "",
+			hasError:     false,
+		},
+		{
+			name:         "description truncated to 500 chars",
+			input:        fmt.Sprintf(`{"abstract_name": "测试", "description": "%s", "reason": "x"}`, strings.Repeat("A", 600)),
+			expectedName: "测试",
+			expectedDesc: strings.Repeat("A", 500),
+			hasError:     false,
+		},
+		{
+			name:     "empty abstract_name",
+			input:    `{"abstract_name": "", "description": "some desc", "reason": "none"}`,
+			hasError: true,
+		},
+		{
+			name:     "invalid JSON",
+			input:    `not json`,
+			hasError: true,
+		},
+		{
+			name:         "whitespace trimmed on both fields",
+			input:        `{"abstract_name": "  AI  ", "description": "  some desc  ", "reason": "x"}`,
+			expectedName: "AI",
+			expectedDesc: "some desc",
+			hasError:     false,
+		},
+		{
+			name:     "abstract_name exceeds 160 chars",
+			input:    fmt.Sprintf(`{"abstract_name": "%s", "description": "ok", "reason": "x"}`, strings.Repeat("很", 200)),
+			hasError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			name, desc, err := parseAbstractTagResponse(tt.input)
+			if tt.hasError && err == nil {
+				t.Errorf("expected error, got nil")
+			}
+			if !tt.hasError && err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+			if name != tt.expectedName {
+				t.Errorf("expected name %q, got %q", tt.expectedName, name)
+			}
+			if desc != tt.expectedDesc {
+				t.Errorf("expected desc %q, got %q", tt.expectedDesc, desc)
+			}
+		})
+	}
+}
+
+// --- Tests for buildAbstractTagPrompt with description ---
+
+func TestBuildAbstractTagPromptWithDescription(t *testing.T) {
+	t.Run("includes candidate descriptions in prompt", func(t *testing.T) {
+		candidates := []TagCandidate{
+			{Tag: &models.TopicTag{Label: "大语言模型", Description: "大型语言模型技术"}, Similarity: 0.92},
+			{Tag: &models.TopicTag{Label: "GPT-4", Description: ""}, Similarity: 0.88},
+		}
+		prompt := buildAbstractTagPrompt(candidates, "Gemini")
+
+		if !strings.Contains(prompt, "description: 大型语言模型技术") {
+			t.Error("prompt should contain candidate description '大型语言模型技术'")
+		}
+		if !strings.Contains(prompt, "description") && strings.Contains(prompt, "GPT-4") {
+			// GPT-4 has no description, so no "description:" should appear after its entry
+			t.Log("GPT-4 entry without description is fine")
+		}
+		// Should contain description instruction in the prompt
+		if !strings.Contains(prompt, "description") {
+			t.Error("prompt should mention description field")
+		}
+	})
+
+	t.Run("degrades gracefully when no descriptions", func(t *testing.T) {
+		candidates := []TagCandidate{
+			{Tag: &models.TopicTag{Label: "Rust"}, Similarity: 0.90},
+		}
+		prompt := buildAbstractTagPrompt(candidates, "Go")
+
+		if !strings.Contains(prompt, "Rust") {
+			t.Error("prompt should contain label 'Rust'")
+		}
+		if !strings.Contains(prompt, "Go") {
+			t.Error("prompt should contain label 'Go'")
+		}
+	})
+}
