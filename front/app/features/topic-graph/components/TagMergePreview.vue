@@ -72,7 +72,7 @@ watch(() => props.visible, (isVisible) => {
   if (isVisible && state.value === 'idle') {
     void startScan()
   }
-})
+}, { immediate: true })
 
 function toggleExpand(id: number) {
   const idx = expandedIds.value.indexOf(id)
