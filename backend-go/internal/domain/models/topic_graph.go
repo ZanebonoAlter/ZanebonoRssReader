@@ -40,20 +40,22 @@ func GetCategoryMeta(category string) TagCategoryMeta {
 // TopicTag represents a tag extracted from AI summaries
 // Tags are categorized into event, person, or keyword
 type TopicTag struct {
-	ID           uint      `gorm:"primaryKey" json:"id"`
-	Slug         string    `gorm:"size:120;not null;index:idx_topic_tags_category_slug" json:"slug"`
-	Label        string    `gorm:"size:160;not null" json:"label"`
-	Category     string    `gorm:"size:20;not null;default:keyword;index:idx_topic_tags_category_slug" json:"category"` // event, person, keyword
-	Icon         string    `gorm:"size:100" json:"icon"`                                                                // Iconify icon id, overrides category default
-	Aliases      string    `gorm:"type:text" json:"aliases"`                                                            // JSON array of alias strings
-	Description  string    `gorm:"type:text" json:"description"`                                                        // LLM-generated tag description
-	IsCanonical  bool      `gorm:"default:false" json:"is_canonical"`                                                   // true if this is a canonical tag (not merged)
-	Source       string    `gorm:"size:20;default:llm" json:"source"`                                                   // llm, heuristic, manual
-	FeedCount    int       `gorm:"default:0" json:"feed_count"`                                                         // distinct feed count referencing this tag
-	Status       string    `gorm:"size:20;not null;default:active;index" json:"status"`                                 // active, merged
-	MergedIntoID *uint     `gorm:"index" json:"merged_into_id,omitempty"`                                               // points to target tag when merged
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID           uint       `gorm:"primaryKey" json:"id"`
+	Slug         string     `gorm:"size:120;not null;index:idx_topic_tags_category_slug" json:"slug"`
+	Label        string     `gorm:"size:160;not null" json:"label"`
+	Category     string     `gorm:"size:20;not null;default:keyword;index:idx_topic_tags_category_slug" json:"category"` // event, person, keyword
+	Icon         string     `gorm:"size:100" json:"icon"`                                                                // Iconify icon id, overrides category default
+	Aliases      string     `gorm:"type:text" json:"aliases"`                                                            // JSON array of alias strings
+	Description  string     `gorm:"type:text" json:"description"`                                                        // LLM-generated tag description
+	IsCanonical  bool       `gorm:"default:false" json:"is_canonical"`                                                   // true if this is a canonical tag (not merged)
+	Source       string     `gorm:"size:20;default:llm" json:"source"`                                                   // llm, heuristic, manual
+	FeedCount    int        `gorm:"default:0" json:"feed_count"`                                                         // distinct feed count referencing this tag
+	Status       string     `gorm:"size:20;not null;default:active;index" json:"status"`                                 // active, merged
+	MergedIntoID *uint      `gorm:"index" json:"merged_into_id,omitempty"`                                               // points to target tag when merged
+	IsWatched    bool       `gorm:"default:false" json:"is_watched"`                                                     // user-watched tag for feed filtering
+	WatchedAt    *time.Time `json:"watched_at,omitempty"`                                                                // when the tag was watched
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
 
 	// Kind is retained for backward compatibility, maps to Category
 	// Deprecated: Use Category instead
