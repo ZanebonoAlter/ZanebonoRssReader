@@ -6,6 +6,7 @@ export interface TagHierarchyNode {
   icon: string
   feedCount: number
   similarityScore?: number
+  isActive: boolean
   children: TagHierarchyNode[]
 }
 

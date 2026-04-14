@@ -10,6 +10,7 @@ interface RawTagHierarchyNode {
   icon: string
   feed_count: number
   similarity_score?: number
+  is_active: boolean
   children: RawTagHierarchyNode[]
 }
 
@@ -27,14 +28,21 @@ function mapNode(raw: RawTagHierarchyNode): TagHierarchyNode {
     icon: raw.icon,
     feedCount: raw.feed_count,
     similarityScore: raw.similarity_score,
+    isActive: raw.is_active,
     children: raw.children ? raw.children.map(mapNode) : [],
   }
 }
 
 export function useAbstractTagApi() {
   return {
-    async fetchHierarchy(category?: string): Promise<ApiResponse<TagHierarchyResponse>> {
-      const query = category ? `?category=${encodeURIComponent(category)}` : ''
+    async fetchHierarchy(category?: string, feedId?: string, categoryId?: string, unclassified?: boolean, timeRange?: string): Promise<ApiResponse<TagHierarchyResponse>> {
+      const params = new URLSearchParams()
+      if (category) params.set('category', category)
+      if (feedId) params.set('feed_id', feedId)
+      if (categoryId) params.set('category_id', categoryId)
+      if (unclassified) params.set('unclassified', 'true')
+      if (timeRange) params.set('time_range', timeRange)
+      const query = params.toString() ? `?${params.toString()}` : ''
       const response = await apiClient.get<RawHierarchyResponse>(`/topic-tags/hierarchy${query}`)
       if (response.success && response.data) {
         return {

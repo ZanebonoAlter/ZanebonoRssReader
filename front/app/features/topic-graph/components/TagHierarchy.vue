@@ -1,9 +1,14 @@
 <script setup lang="ts">
 import { Icon } from '@iconify/vue'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useAbstractTagApi } from '~/api/abstractTags'
 import TagHierarchyRow from '~/features/topic-graph/components/TagHierarchyRow.vue'
 import type { TagHierarchyNode } from '~/types/topicTag'
+
+const props = defineProps<{
+  feedId?: string | null
+  categoryId?: string | null
+}>()
 
 const abstractTagApi = useAbstractTagApi()
 
@@ -11,6 +16,9 @@ const nodes = ref<TagHierarchyNode[]>([])
 const loading = ref(true)
 const error = ref<string | null>(null)
 const selectedCategory = ref<string>('')
+const showUnclassified = ref(false)
+const searchQuery = ref('')
+const timeRange = ref<string>('')
 
 // Inline editing state
 const editingNodeId = ref<number | null>(null)
@@ -20,15 +28,31 @@ const saving = ref(false)
 // Detach confirm state
 const confirmingDetach = ref<{ parentId: number; childId: number; childLabel: string } | null>(null)
 
-const filteredNodes = computed(() => {
-  if (!selectedCategory.value) return nodes.value
-  return nodes.value.filter(n => n.category === selectedCategory.value)
-})
+const tagCategories = ['event', 'person', 'keyword'] as const
 
-const categories = computed(() => {
-  const cats = new Set<string>()
-  nodes.value.forEach(n => cats.add(n.category))
-  return Array.from(cats)
+const categoryLabel = (cat: string) =>
+  cat === 'event' ? '事件' : cat === 'person' ? '人物' : '关键词'
+
+function matchesSearch(label: string): boolean {
+  if (!searchQuery.value) return true
+  const q = searchQuery.value.toLowerCase()
+  return label.toLowerCase().includes(q)
+}
+
+function filterTree(list: TagHierarchyNode[]): TagHierarchyNode[] {
+  if (!searchQuery.value) return list
+  const result: TagHierarchyNode[] = []
+  for (const node of list) {
+    const childMatch = filterTree(node.children)
+    if (matchesSearch(node.label) || childMatch.length > 0) {
+      result.push({ ...node, children: childMatch })
+    }
+  }
+  return result
+}
+
+const filteredNodes = computed(() => {
+  return filterTree(nodes.value)
 })
 
 const totalCount = computed(() => {
@@ -47,7 +71,14 @@ async function loadHierarchy() {
   loading.value = true
   error.value = null
   try {
-    const response = await abstractTagApi.fetchHierarchy(selectedCategory.value || undefined)
+    const apiCategory = selectedCategory.value || undefined
+    const response = await abstractTagApi.fetchHierarchy(
+      apiCategory,
+      props.feedId || undefined,
+      props.categoryId || undefined,
+      showUnclassified.value,
+      timeRange.value || undefined,
+    )
     if (response.success && response.data) {
       nodes.value = response.data.nodes
     } else {
@@ -139,19 +170,40 @@ function handleUpdateEditingValue(val: string) {
 onMounted(() => {
   void loadHierarchy()
 })
+
+watch(() => [props.feedId, props.categoryId] as const, () => {
+  void loadHierarchy()
+})
+
+watch(timeRange, () => {
+  void loadHierarchy()
+})
 </script>
 
 <template>
   <div class="tag-hierarchy">
     <!-- Header with category filter -->
-    <div class="flex items-center justify-between gap-3 mb-4">
+    <div class="flex items-center justify-between gap-3 mb-2">
       <div>
         <h3 class="font-serif text-lg text-white">标签层级</h3>
         <p class="text-xs text-white/50 mt-0.5">
-          {{ totalCount }} 个标签 {{ categories.length > 1 ? '· 选择类别筛选' : '' }}
+          {{ totalCount }} 个标签
         </p>
       </div>
-      <div v-if="categories.length > 1" class="flex gap-1.5">
+      <button
+        type="button"
+        class="th-category-btn"
+        :class="{ 'th-category-btn--active': showUnclassified }"
+        @click="showUnclassified = !showUnclassified; void loadHierarchy()"
+      >
+        <Icon icon="mdi:label-off-outline" width="12" class="mr-1" />
+        未分类
+      </button>
+    </div>
+
+    <!-- Category tabs + search -->
+    <div class="flex items-center gap-2 mb-3">
+      <div class="flex gap-1.5 flex-shrink-0">
         <button
           type="button"
           class="th-category-btn"
@@ -161,16 +213,62 @@ onMounted(() => {
           全部
         </button>
         <button
-          v-for="cat in categories"
+          v-for="cat in tagCategories"
           :key="cat"
           type="button"
           class="th-category-btn"
           :class="{ 'th-category-btn--active': selectedCategory === cat }"
           @click="selectedCategory = cat; void loadHierarchy()"
         >
-          {{ cat === 'event' ? '事件' : cat === 'person' ? '人物' : '关键词' }}
+          {{ categoryLabel(cat) }}
         </button>
       </div>
+      <div class="th-search-wrap flex-1 min-w-0">
+        <Icon icon="mdi:magnify" width="14" class="th-search-icon" />
+        <input
+          v-model="searchQuery"
+          type="text"
+          class="th-search-input"
+          placeholder="搜索标签..."
+        />
+        <button
+          v-if="searchQuery"
+          type="button"
+          class="th-search-clear"
+          @click="searchQuery = ''"
+        >
+          <Icon icon="mdi:close" width="12" />
+        </button>
+      </div>
+    </div>
+
+    <!-- Time filter -->
+    <div class="flex items-center gap-1.5 mb-3">
+      <span class="text-xs text-white/40 mr-0.5">时间</span>
+      <button
+        type="button"
+        class="th-category-btn"
+        :class="{ 'th-category-btn--active': timeRange === '' }"
+        @click="timeRange = ''"
+      >
+        全部
+      </button>
+      <button
+        type="button"
+        class="th-category-btn"
+        :class="{ 'th-category-btn--active': timeRange === '7d' }"
+        @click="timeRange = '7d'"
+      >
+        7天
+      </button>
+      <button
+        type="button"
+        class="th-category-btn"
+        :class="{ 'th-category-btn--active': timeRange === '30d' }"
+        @click="timeRange = '30d'"
+      >
+        30天
+      </button>
     </div>
 
     <!-- Loading -->
@@ -274,6 +372,46 @@ onMounted(() => {
 }
 .th-category-btn:hover { border-color: rgba(255, 255, 255, 0.25); color: rgba(255, 255, 255, 0.8); }
 .th-category-btn--active { border-color: rgba(240, 138, 75, 0.5); background: rgba(240, 138, 75, 0.12); color: rgba(255, 220, 200, 0.9); }
+
+.th-search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.th-search-icon {
+  position: absolute;
+  left: 8px;
+  color: rgba(255, 255, 255, 0.3);
+  pointer-events: none;
+}
+.th-search-input {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 0.72rem;
+  padding: 0.25rem 1.5rem 0.25rem 1.75rem;
+  outline: none;
+  transition: border-color 0.12s ease;
+}
+.th-search-input::placeholder { color: rgba(255, 255, 255, 0.25); }
+.th-search-input:focus { border-color: rgba(240, 138, 75, 0.4); }
+.th-search-clear {
+  position: absolute;
+  right: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.4);
+  cursor: pointer;
+}
+.th-search-clear:hover { background: rgba(255, 255, 255, 0.15); color: rgba(255, 255, 255, 0.7); }
 
 .th-confirm-overlay {
   position: fixed;

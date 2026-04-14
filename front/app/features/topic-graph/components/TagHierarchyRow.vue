@@ -51,7 +51,7 @@ function handleChildUpdateEditingValue(val: string) { emit('update:editing-value
 </script>
 
 <template>
-  <div>
+  <div :class="{ 'opacity-40': !node.isActive }">
     <div
       class="th-row"
       :style="{ paddingLeft: (depth * 20 + 8) + 'px' }"
