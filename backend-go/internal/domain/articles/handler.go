@@ -3,6 +3,7 @@ package articles
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -66,16 +67,54 @@ func GetArticles(c *gin.Context) {
 	search := c.Query("search")
 	startDate := c.Query("start_date")
 	endDate := c.Query("end_date")
+	watchedTagIDsStr := c.Query("watched_tag_ids")
+	sortBy := c.Query("sort_by")
 
 	maxPerPage := 100
 	if perPage <= 0 || perPage > maxPerPage {
 		perPage = maxPerPage
 	}
 
+	// Parse and expand watched tag IDs (include child tags of abstract tags)
+	var expandedTagIDs []uint
+	var childTagIDs []uint
+	usingWatchedTags := false
+	if watchedTagIDsStr != "" {
+		parsedIDs, children, err := parseAndExpandWatchedTagIDs(watchedTagIDsStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid watched_tag_ids format"})
+			return
+		}
+		if len(parsedIDs) > 0 {
+			expandedTagIDs = append(parsedIDs, children...)
+			childTagIDs = children
+			usingWatchedTags = true
+		}
+	}
+
+	// Build base query with standard joins
 	query := database.DB.Model(&models.Article{}).
 		Joins("LEFT JOIN feeds ON articles.feed_id = feeds.id").
-		Joins("LEFT JOIN (SELECT article_id, COUNT(*) AS tag_count FROM article_topic_tags GROUP BY article_id) tag_stats ON tag_stats.article_id = articles.id").
-		Select("articles.*, feeds.category_id AS category_id, COALESCE(tag_stats.tag_count, 0) AS tag_count")
+		Joins("LEFT JOIN (SELECT article_id, COUNT(*) AS tag_count FROM article_topic_tags GROUP BY article_id) tag_stats ON tag_stats.article_id = articles.id")
+
+	// Apply watched tag filter via JOIN
+	if usingWatchedTags {
+		query = query.Joins("JOIN article_topic_tags att ON att.article_id = articles.id AND att.topic_tag_id IN ?", expandedTagIDs)
+	}
+
+	// Select fields — vary by watched tags mode and sort
+	if usingWatchedTags && sortBy == "relevance" {
+		// Relevance: abstract tag children (childTagIDs) weight 2, direct tags weight 1
+		query = query.
+			Select("articles.*, feeds.category_id AS category_id, COALESCE(tag_stats.tag_count, 0) AS tag_count, (SELECT COALESCE(SUM(CASE WHEN att2.topic_tag_id IN ? THEN 2.0 ELSE 1.0 END), 0) FROM article_topic_tags att2 WHERE att2.article_id = articles.id AND att2.topic_tag_id IN ?) AS relevance_score", childTagIDs, expandedTagIDs).
+			Group("articles.id")
+	} else if usingWatchedTags {
+		query = query.
+			Select("DISTINCT articles.*, feeds.category_id AS category_id, COALESCE(tag_stats.tag_count, 0) AS tag_count")
+	} else {
+		query = query.
+			Select("articles.*, feeds.category_id AS category_id, COALESCE(tag_stats.tag_count, 0) AS tag_count")
+	}
 
 	if feedID > 0 {
 		query = query.Where("articles.feed_id = ?", feedID)
@@ -110,10 +149,47 @@ func GetArticles(c *gin.Context) {
 		query = query.Where("DATE(articles.pub_date) <= ?", endDate)
 	}
 
-	query = query.Order("articles.pub_date DESC")
+	// Ordering
+	if usingWatchedTags && sortBy == "relevance" {
+		query = query.Order("relevance_score DESC, articles.pub_date DESC")
+	} else {
+		query = query.Order("articles.pub_date DESC")
+	}
 
+	// Count — handle separately for watched tags to avoid JOIN inflation
 	var total int64
-	query.Count(&total)
+	if usingWatchedTags {
+		countQuery := database.DB.Table("articles").
+			Joins("JOIN article_topic_tags att ON att.article_id = articles.id AND att.topic_tag_id IN ?", expandedTagIDs)
+		if feedID > 0 {
+			countQuery = countQuery.Where("articles.feed_id = ?", feedID)
+		}
+		if categoryID > 0 {
+			countQuery = countQuery.Joins("JOIN feeds ON articles.feed_id = feeds.id").Where("feeds.category_id = ?", categoryID)
+		}
+		if uncategorized {
+			countQuery = countQuery.Joins("JOIN feeds ON articles.feed_id = feeds.id").Where("feeds.category_id IS NULL")
+		}
+		if read == "true" || read == "false" {
+			countQuery = countQuery.Where("articles.read = ?", read == "true")
+		}
+		if favorite == "true" || favorite == "false" {
+			countQuery = countQuery.Where("articles.favorite = ?", favorite == "true")
+		}
+		if search != "" {
+			searchTerm := "%" + search + "%"
+			countQuery = countQuery.Where("articles.title LIKE ? OR articles.description LIKE ?", searchTerm, searchTerm)
+		}
+		if startDate != "" {
+			countQuery = countQuery.Where("DATE(articles.pub_date) >= ?", startDate)
+		}
+		if endDate != "" {
+			countQuery = countQuery.Where("DATE(articles.pub_date) <= ?", endDate)
+		}
+		countQuery.Select("COUNT(DISTINCT articles.id)").Scan(&total)
+	} else {
+		query.Count(&total)
+	}
 
 	var articles []models.Article
 	offset := (page - 1) * perPage
@@ -145,6 +221,39 @@ func GetArticles(c *gin.Context) {
 			"pages":    pages,
 		},
 	})
+}
+
+// parseAndExpandWatchedTagIDs parses comma-separated tag IDs and expands abstract tag children.
+func parseAndExpandWatchedTagIDs(raw string) ([]uint, []uint, error) {
+	parts := strings.Split(raw, ",")
+	ids := make([]uint, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		id, err := strconv.ParseUint(p, 10, 32)
+		if err != nil {
+			return nil, nil, err
+		}
+		if id > 0 {
+			ids = append(ids, uint(id))
+		}
+	}
+	if len(ids) == 0 {
+		return nil, nil, nil
+	}
+
+	// Find child tags of abstract watched tags (parents in topic_tag_relations)
+	var relations []models.TopicTagRelation
+	database.DB.Where("parent_id IN ?", ids).Find(&relations)
+
+	childIDs := make([]uint, 0)
+	for _, rel := range relations {
+		childIDs = append(childIDs, rel.ChildID)
+	}
+
+	return ids, childIDs, nil
 }
 
 func GetArticle(c *gin.Context) {

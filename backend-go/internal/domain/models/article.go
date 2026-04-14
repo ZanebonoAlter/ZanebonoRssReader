@@ -20,6 +20,8 @@ type Article struct {
 	SummaryStatus              string     `gorm:"size:20;default:complete" json:"summary_status"`
 	SummaryGeneratedAt         *time.Time `json:"summary_generated_at"`
 	SummaryProcessingStartedAt *time.Time `json:"summary_processing_started_at"`
+	FeedSummaryID              *uint      `gorm:"index" json:"feed_summary_id"`
+	FeedSummaryGeneratedAt     *time.Time `json:"feed_summary_generated_at"`
 	CompletionAttempts         int        `gorm:"default:0" json:"completion_attempts"`
 	CompletionError            string     `gorm:"type:text" json:"completion_error"`
 	AIContentSummary           string     `gorm:"type:text" json:"ai_content_summary"`
@@ -29,6 +31,7 @@ type Article struct {
 	FirecrawlCrawledAt         *time.Time `json:"firecrawl_crawled_at"`
 	CreatedAt                  time.Time  `json:"created_at"`
 	TagCount                   int        `gorm:"->;column:tag_count" json:"tag_count"`
+	RelevanceScore             float64    `gorm:"->;column:relevance_score" json:"relevance_score"`
 	Feed                       Feed       `gorm:"foreignKey:FeedID" json:"feed,omitempty"`
 }
 
@@ -53,6 +56,8 @@ func (a *Article) ToDict() map[string]interface{} {
 		"summary_status":                a.SummaryStatus,
 		"summary_generated_at":          FormatDatetimeCSTPtr(a.SummaryGeneratedAt),
 		"summary_processing_started_at": FormatDatetimeCSTPtr(a.SummaryProcessingStartedAt),
+		"feed_summary_id":               a.FeedSummaryID,
+		"feed_summary_generated_at":     FormatDatetimeCSTPtr(a.FeedSummaryGeneratedAt),
 		"completion_attempts":           a.CompletionAttempts,
 		"completion_error":              a.CompletionError,
 		"ai_content_summary":            a.AIContentSummary,
@@ -62,5 +67,6 @@ func (a *Article) ToDict() map[string]interface{} {
 		"firecrawl_crawled_at":          FormatDatetimeCSTPtr(a.FirecrawlCrawledAt),
 		"created_at":                    FormatDatetimeCST(a.CreatedAt),
 		"tag_count":                     a.TagCount,
+		"relevance_score":               a.RelevanceScore,
 	}
 }
