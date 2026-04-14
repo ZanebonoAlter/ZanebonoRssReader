@@ -284,12 +284,12 @@ Plans:
 **Plans:** 6 plans in 4 waves
 
 Plans:
-- [ ] 08-01-PLAN.md — 后端 Description 字段 + 文章标签 Description 生成 (D-01)
-- [ ] 08-02-PLAN.md — 抽象标签 Description 生成 (D-02)
-- [ ] 08-03-PLAN.md — 后端时间筛选 API + 前端时间筛选 UI (D-03, D-04)
-- [ ] 08-04-PLAN.md — 图谱抽象标签可视化 + 点击详情面板 (D-05, D-06)
-- [ ] 08-05-PLAN.md — TagMergePreview 迁移至设置页 + 合并后重建提示 (D-07, D-08)
-- [ ] 08-06-PLAN.md — 标签树节点手动归类 (success criteria item 5)
+- [x] 08-01-PLAN.md — 后端 Description 字段 + 文章标签 Description 生成 (D-01)
+- [x] 08-02-PLAN.md — 抽象标签 Description 生成 (D-02)
+- [x] 08-03-PLAN.md — 后端时间筛选 API + 前端时间筛选 UI (D-03, D-04)
+- [x] 08-04-PLAN.md — 图谱抽象标签可视化 + 点击详情面板 (D-05, D-06)
+- [x] 08-05-PLAN.md — TagMergePreview 迁移至设置页 + 合并后重建提示 (D-07, D-08)
+- [x] 08-06-PLAN.md — 标签树节点手动归类 (success criteria item 5)
 
 ---
 

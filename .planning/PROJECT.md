@@ -56,6 +56,14 @@ See `.planning/REQUIREMENTS.md` for current milestone requirements.
 - CONV-03: 中间地带跳过 AI 判定创建新标签
 - CONV-04: 合并标签标记 merged 状态保留历史
 
+**Validated in Phase 8 (标签树图谱增强):**
+- TopicTag Description 字段 + LLM 生成标签描述
+- 抽象标签 Description 生成（ExtractAbstractTag 扩展）
+- 后端时间筛选 API + 前端时间筛选 UI
+- 图谱抽象标签可视化（3D 发光效果）+ 点击详情面板
+- TagMergePreview 迁移至设置页 + 合并后重建提示
+- 标签树节点手动归类（后端 API + 前端弹窗）
+
 ### Out of Scope
 
 | Requirement | Reason |
@@ -106,4 +114,4 @@ This document evolves at phase transitions and milestone boundaries.
 
 ---
 
-*Last updated: 2026-04-13 (Phase 1 complete)*
+*Last updated: 2026-04-14 (Phase 8 complete — v1.2 milestone finished)*
