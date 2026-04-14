@@ -545,27 +545,53 @@ func resolveActiveTagIDs(timeRange string, candidateIDs map[uint]bool) map[uint]
 		return result
 	}
 
-	var since time.Time
-	switch timeRange {
-	case "7d":
-		since = time.Now().AddDate(0, 0, -7)
-	case "30d":
-		since = time.Now().AddDate(0, 0, -30)
+	var activeIDs []uint
+	switch {
+	case timeRange == "7d":
+		since := time.Now().AddDate(0, 0, -7)
+		database.DB.Model(&models.ArticleTopicTag{}).
+			Joins("JOIN articles ON articles.id = article_topic_tags.article_id").
+			Where("articles.pub_date >= ?", since).
+			Where("article_topic_tags.topic_tag_id IN ?", candidateIDSetToSlice(candidateIDs)).
+			Pluck("DISTINCT article_topic_tags.topic_tag_id", &activeIDs)
+	case timeRange == "30d":
+		since := time.Now().AddDate(0, 0, -30)
+		database.DB.Model(&models.ArticleTopicTag{}).
+			Joins("JOIN articles ON articles.id = article_topic_tags.article_id").
+			Where("articles.pub_date >= ?", since).
+			Where("article_topic_tags.topic_tag_id IN ?", candidateIDSetToSlice(candidateIDs)).
+			Pluck("DISTINCT article_topic_tags.topic_tag_id", &activeIDs)
+	case strings.HasPrefix(timeRange, "custom:"):
+		parts := strings.SplitN(timeRange, ":", 3)
+		if len(parts) == 3 {
+			startDate := parts[1]
+			endDate := parts[2]
+			// Validate YYYY-MM-DD format
+			if _, err := time.Parse("2006-01-02", startDate); err != nil {
+				for id := range candidateIDs {
+					result[id] = true
+				}
+				return result
+			}
+			if _, err := time.Parse("2006-01-02", endDate); err != nil {
+				for id := range candidateIDs {
+					result[id] = true
+				}
+				return result
+			}
+			database.DB.Model(&models.ArticleTopicTag{}).
+				Joins("JOIN articles ON articles.id = article_topic_tags.article_id").
+				Where("articles.pub_date >= ? AND articles.pub_date <= ?", startDate+" 00:00:00", endDate+" 23:59:59").
+				Where("article_topic_tags.topic_tag_id IN ?", candidateIDSetToSlice(candidateIDs)).
+				Pluck("DISTINCT article_topic_tags.topic_tag_id", &activeIDs)
+		}
 	default:
-		// Invalid value per T-08-04 — treat as no filter
+		// Invalid value — treat as no filter
 		for id := range candidateIDs {
 			result[id] = true
 		}
 		return result
 	}
-
-	// Query tags that have articles published within the time range
-	var activeIDs []uint
-	database.DB.Model(&models.ArticleTopicTag{}).
-		Joins("JOIN articles ON articles.id = article_topic_tags.article_id").
-		Where("articles.pub_date >= ?", since).
-		Where("article_topic_tags.topic_tag_id IN ?", candidateIDSetToSlice(candidateIDs)).
-		Pluck("DISTINCT article_topic_tags.topic_tag_id", &activeIDs)
 
 	for _, id := range activeIDs {
 		result[id] = true

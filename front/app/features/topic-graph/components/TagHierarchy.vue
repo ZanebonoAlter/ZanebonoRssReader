@@ -19,6 +19,9 @@ const selectedCategory = ref<string>('')
 const showUnclassified = ref(false)
 const searchQuery = ref('')
 const timeRange = ref<string>('')
+const customStartDate = ref('')
+const customEndDate = ref('')
+const showCustomRange = ref(false)
 
 // Inline editing state
 const editingNodeId = ref<number | null>(null)
@@ -61,6 +64,20 @@ const filteredNodes = computed(() => {
   return filterTree(nodes.value)
 })
 
+function sortNodesByActivity(list: TagHierarchyNode[]): TagHierarchyNode[] {
+  return [...list].sort((a, b) => {
+    const aActive = a.isActive !== false
+    const bActive = b.isActive !== false
+    if (aActive !== bActive) return aActive ? -1 : 1
+    return 0
+  }).map(node => ({
+    ...node,
+    children: sortNodesByActivity(node.children),
+  }))
+}
+
+const sortedNodes = computed(() => sortNodesByActivity(filteredNodes.value))
+
 const totalCount = computed(() => {
   let count = 0
   function walk(list: TagHierarchyNode[]) {
@@ -69,7 +86,7 @@ const totalCount = computed(() => {
       if (node.children.length > 0) walk(node.children)
     }
   }
-  walk(filteredNodes.value)
+  walk(sortedNodes.value)
   return count
 })
 
@@ -179,6 +196,12 @@ async function confirmReassign(newParentId: number) {
   }
 }
 
+function applyCustomRange() {
+  if (customStartDate.value && customEndDate.value) {
+    timeRange.value = `custom:${customStartDate.value}:${customEndDate.value}`
+  }
+}
+
 function findParentId(tree: TagHierarchyNode[], targetId: number, parentId: number | null = null): number | null {
   for (const node of tree) {
     if (node.id === targetId) return parentId
@@ -223,7 +246,10 @@ watch(() => [props.feedId, props.categoryId] as const, () => {
   void loadHierarchy()
 })
 
-watch(timeRange, () => {
+watch(timeRange, (newVal) => {
+  if (!newVal.startsWith('custom:')) {
+    showCustomRange.value = false
+  }
   void loadHierarchy()
 })
 </script>
@@ -291,7 +317,7 @@ watch(timeRange, () => {
     </div>
 
     <!-- Time filter -->
-    <div class="flex items-center gap-1.5 mb-3">
+    <div class="flex items-center gap-1.5 mb-3 flex-wrap">
       <span class="text-xs text-white/40 mr-0.5">时间</span>
       <button
         type="button"
@@ -317,6 +343,21 @@ watch(timeRange, () => {
       >
         30天
       </button>
+      <button
+        type="button"
+        class="th-category-btn"
+        :class="{ 'th-category-btn--active': showCustomRange }"
+        @click="showCustomRange = !showCustomRange"
+      >
+        <Icon icon="mdi:calendar-range" width="12" class="mr-1" />
+        自定义
+      </button>
+    </div>
+    <div v-if="showCustomRange" class="flex items-center gap-2 mb-3 th-custom-range">
+      <input v-model="customStartDate" type="date" class="th-date-input" />
+      <span class="text-white/30 text-xs">至</span>
+      <input v-model="customEndDate" type="date" class="th-date-input" />
+      <button type="button" class="th-category-btn th-category-btn--active" @click="applyCustomRange">确定</button>
     </div>
 
     <!-- Loading -->
@@ -331,7 +372,7 @@ watch(timeRange, () => {
     </div>
 
     <!-- Empty -->
-    <div v-else-if="filteredNodes.length === 0" class="th-empty">
+    <div v-else-if="sortedNodes.length === 0" class="th-empty">
       <Icon icon="mdi:file-tree-outline" width="32" class="text-white/20" />
       <p>暂无标签层级关系</p>
       <p class="text-xs text-white/30 mt-1">当新文章入库时，中间相似度标签将自动提取抽象概念</p>
@@ -340,7 +381,7 @@ watch(timeRange, () => {
     <!-- Tree -->
     <div v-else class="th-tree">
       <TagHierarchyRow
-        v-for="node in filteredNodes"
+        v-for="node in sortedNodes"
         :key="node.id"
         :node="node"
         :depth="0"
@@ -501,6 +542,18 @@ watch(timeRange, () => {
   cursor: pointer;
 }
 .th-search-clear:hover { background: rgba(255, 255, 255, 0.15); color: rgba(255, 255, 255, 0.7); }
+
+.th-date-input {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 0.72rem;
+  padding: 0.25rem 0.5rem;
+  outline: none;
+}
+.th-date-input:focus { border-color: rgba(240, 138, 75, 0.4); }
+.th-custom-range { margin-top: -0.25rem; }
 
 .th-confirm-overlay {
   position: fixed;
