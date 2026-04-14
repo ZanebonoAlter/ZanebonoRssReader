@@ -8,9 +8,14 @@ interface Props {
   visible: boolean
   scopeCategoryId?: string | null
   scopeFeedId?: string | null
+  standalone?: boolean
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), {
+  scopeCategoryId: null,
+  scopeFeedId: null,
+  standalone: true,
+})
 const emit = defineEmits<{
   close: []
   merged: [summary: MergeSummary]
@@ -214,9 +219,9 @@ function formatSimilarity(similarity: number) {
 </script>
 
 <template>
-  <Teleport to="body">
-    <div v-if="visible" class="tag-merge-overlay" @click.self="handleClose">
-      <div class="tag-merge-modal">
+  <Teleport to="body" :disabled="!props.standalone">
+    <div v-if="visible" :class="props.standalone ? 'tag-merge-overlay' : 'tag-merge-inline'" @click.self="props.standalone ? handleClose() : undefined">
+      <div :class="props.standalone ? 'tag-merge-modal' : 'tag-merge-inline__content'">
         <!-- Scanning state -->
         <div v-if="state === 'scanning'" class="tag-merge-loading">
           <Icon icon="mdi:loading" width="32" class="animate-spin text-[rgba(240,138,75,0.9)]" />
@@ -885,5 +890,19 @@ function formatSimilarity(similarity: number) {
   margin-top: 1.5rem;
   padding-top: 1rem;
   border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.tag-merge-inline {
+  width: 100%;
+}
+
+.tag-merge-inline__content {
+  width: 100%;
+  max-height: 60vh;
+  overflow-y: auto;
+  border-radius: 1rem;
+  background: linear-gradient(180deg, rgba(17, 27, 38, 0.98), rgba(9, 15, 23, 1));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 1.5rem;
 }
 </style>

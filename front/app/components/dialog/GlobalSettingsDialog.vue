@@ -975,6 +975,7 @@ function formatNextRun(nextRun: string | null | undefined): string {
         <div v-if="activeTab === 'tag-merge'" class="space-y-4">
           <TagMergePreview
             :visible="true"
+            :standalone="false"
             @merged="handleMerged"
             @close="activeTab = 'backend-queues'"
           />
