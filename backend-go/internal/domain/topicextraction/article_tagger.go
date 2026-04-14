@@ -73,9 +73,25 @@ func tagArticle(article *models.Article, feedName, categoryName string, options 
 		return nil
 	}
 
+	// Build article context for description generation
+	articleContext := ""
+	if article.Title != "" {
+		articleContext = article.Title
+	}
+	articleSummary := buildArticleSummary(*article)
+	if articleSummary != "" {
+		if articleContext != "" {
+			articleContext += ". "
+		}
+		if len(articleSummary) > 200 {
+			articleSummary = articleSummary[:200]
+		}
+		articleContext += articleSummary
+	}
+
 	// Process each tag
 	for _, tag := range dedupeTagsWithCategory(tags) {
-		dbTag, err := findOrCreateTag(context.Background(), tag, source)
+		dbTag, err := findOrCreateTag(context.Background(), tag, source, articleContext)
 		if err != nil {
 			continue // Skip on error, don't fail the whole operation
 		}

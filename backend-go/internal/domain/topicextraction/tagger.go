@@ -5,13 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"my-robot-backend/internal/domain/topicanalysis"
-	"my-robot-backend/internal/domain/topictypes"
+	"log"
 	"sort"
 	"strings"
 	"sync"
 
 	"my-robot-backend/internal/domain/models"
+	"my-robot-backend/internal/domain/topicanalysis"
+	"my-robot-backend/internal/domain/topictypes"
+	"my-robot-backend/internal/platform/airouter"
 	"my-robot-backend/internal/platform/database"
 )
 
@@ -81,9 +83,26 @@ func TagSummary(summary *models.AISummary) error {
 		return nil
 	}
 
+	// Build article context for description generation
+	articleContext := ""
+	if summary.Title != "" {
+		articleContext = summary.Title
+	}
+	if summary.Summary != "" {
+		if articleContext != "" {
+			articleContext += ". "
+		}
+		// Limit to first 200 chars
+		summaryText := summary.Summary
+		if len(summaryText) > 200 {
+			summaryText = summaryText[:200]
+		}
+		articleContext += summaryText
+	}
+
 	// Process each tag
 	for _, tag := range dedupeTagsWithCategory(tags) {
-		dbTag, err := findOrCreateTag(context.Background(), tag, source)
+		dbTag, err := findOrCreateTag(context.Background(), tag, source, articleContext)
 		if err != nil {
 			continue // Skip on error, don't fail the whole operation
 		}
@@ -123,7 +142,7 @@ func legacyExtractTopics(input topictypes.ExtractionInput) []topictypes.TopicTag
 
 // findOrCreateTag finds an existing tag or creates a new one
 // Uses three-level matching: exact/alias → embedding similarity → create new
-func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string) (*models.TopicTag, error) {
+func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string, articleContext string) (*models.TopicTag, error) {
 	slug := topictypes.Slugify(tag.Label)
 	category := NormalizeDisplayCategory(tag.Kind, tag.Category)
 	kind := NormalizeTopicKind(tag.Kind, category)
@@ -259,7 +278,64 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 		go generateAndSaveEmbedding(es, &newTag)
 	}
 
+	// Generate description asynchronously via LLM
+	if articleContext != "" {
+		go generateTagDescription(newTag.ID, tag.Label, category, articleContext)
+	}
+
 	return &newTag, nil
+}
+
+// generateTagDescription generates a description for a tag via LLM and updates the database.
+// Runs in a goroutine — never blocks tag creation. Failures are logged and swallowed.
+func generateTagDescription(tagID uint, label, category, articleContext string) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[WARN] generateTagDescription panic for tag %d: %v", tagID, r)
+		}
+	}()
+
+	router := airouter.NewRouter()
+	prompt := fmt.Sprintf(`Generate a concise description (1-2 sentences) for this tag.
+Tag: %q
+Category: %s
+Context from article: %s
+
+Respond with JSON: {"description": "your answer"}`, label, category, articleContext)
+
+	req := airouter.ChatRequest{
+		Capability: airouter.CapabilityTopicTagging,
+		Messages: []airouter.Message{
+			{Role: "system", Content: "You are a tag taxonomy assistant. Respond only with valid JSON."},
+			{Role: "user", Content: prompt},
+		},
+		JSONMode:    true,
+		Temperature: func() *float64 { f := 0.3; return &f }(),
+	}
+
+	result, err := router.Chat(context.Background(), req)
+	if err != nil {
+		log.Printf("[WARN] Description LLM call failed for tag %d: %v", tagID, err)
+		return
+	}
+
+	var parsed struct {
+		Description string `json:"description"`
+	}
+	if err := json.Unmarshal([]byte(result.Content), &parsed); err != nil || parsed.Description == "" {
+		log.Printf("[WARN] Failed to parse description for tag %d", tagID)
+		return
+	}
+
+	// Truncate to 500 chars (threat model T-08-01)
+	desc := parsed.Description
+	if len(desc) > 500 {
+		desc = desc[:500]
+	}
+
+	if err := database.DB.Model(&models.TopicTag{}).Where("id = ?", tagID).Update("description", desc).Error; err != nil {
+		log.Printf("[WARN] Failed to save description for tag %d: %v", tagID, err)
+	}
 }
 
 // generateAndSaveEmbedding generates and stores an embedding for a tag in a goroutine.
