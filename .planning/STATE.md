@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: milestone
 status: executing
-stopped_at: Phase 08 context gathered
-last_updated: "2026-04-14T10:03:40.000Z"
-last_activity: 2026-04-14
+stopped_at: Phase 02 context re-gathered
+last_updated: "2026-04-14T16:54:05.249Z"
+last_activity: 2026-04-14 -- Phase 08 execution started
 progress:
   total_phases: 8
   completed_phases: 4
-  total_plans: 15
-  completed_plans: 15
+  total_plans: 18
+  completed_plans: 18
   percent: 100
 ---
 
@@ -25,10 +25,10 @@ See: .planning/PROJECT.md (updated 2026-04-12)
 
 ## Current Position
 
-Phase: 08
-Plan: Not started
+Phase: 08 (tag-tree-graph-enhancement) — EXECUTING
+Plan: 1 of 9
 Status: Executing Phase 08
-Last activity: 2026-04-14 - Completed quick task 260414-ok6: 做后端 Go 日志管理，将 info 与 error 输出区分开，减少日志混杂
+Last activity: 2026-04-14 -- Phase 08 execution started
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -90,6 +90,7 @@ None yet.
 |---|-------------|------|--------|-----------|
 | 260414-ok6 | 做后端 Go 日志管理，将 info 与 error 输出区分开，减少日志混杂 | 2026-04-14 | 3b5ca38 | [260414-ok6-go-info-error](./quick/260414-ok6-go-info-error/) |
 | 260414-pg-alias | 修复 PostgreSQL 下 topic tag 别名 JSON 数组查询使用错误函数导致的 SQL 报错 | 2026-04-14 | pending | - |
+| 260415-0gc | Refactor tag matching flow with abstract tag hierarchy (区分抽象/普通标签的阈值匹配 + 抽象标签多级分层) | 2026-04-15 | pending | [260415-0gc-refactor-tag-matching-flow-with-abstract](./quick/260415-0gc-refactor-tag-matching-flow-with-abstract/) |
 | 260413-p2t | 新增一个专门展示后端队列处理情况的 Tab，将现有 embedding 队列与新增的“标签合并后 embedding 重算队列”一起展示 | 2026-04-13 | 67997d8 | [260413-p2t-tab-embedding-embedding](./quick/260413-p2t-tab-embedding-embedding/) |
 | 260413-r4v | 实现标签自动合并调度器 | 2026-04-13 | 245370e | [260413-r4v-auto-tag-merge-scheduler](./quick/260413-r4v-auto-tag-merge-scheduler/) |
 
@@ -101,9 +102,9 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-14T04:01:59.910Z
-Stopped at: Phase 08 context gathered
-Resume file: .planning/phases/08-tag-tree-graph-enhancement/08-CONTEXT.md
+Last session: 2026-04-14T16:54:05.243Z
+Stopped at: Phase 02 context re-gathered
+Resume file: .planning/phases/02-watched-tags-homepage-feed/02-CONTEXT.md
 
 ---
 
