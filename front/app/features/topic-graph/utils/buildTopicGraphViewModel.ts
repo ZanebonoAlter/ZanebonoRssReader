@@ -4,6 +4,7 @@ import { normalizeTopicCategory } from './normalizeTopicCategory'
 export interface TopicGraphSceneNode extends GraphNode {
   size: number
   accent: string
+  isAbstract: boolean
   x?: number
   y?: number
   z?: number
@@ -61,6 +62,7 @@ export function buildTopicGraphViewModel(payload: TopicGraphPayload): TopicGraph
       ...normalizedNode,
       size: buildNodeSize(normalizedNode),
       accent: resolveNodeAccent(normalizedNode),
+      isAbstract: normalizedNode.is_abstract ?? false,
     }
   })
 

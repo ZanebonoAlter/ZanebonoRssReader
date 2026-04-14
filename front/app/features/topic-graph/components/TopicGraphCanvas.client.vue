@@ -266,6 +266,30 @@ function buildNodeObject(node: TopicGraphSceneNode) {
   )
   group.add(sphere)
 
+  // Abstract tag glow: emissive halo using lighter version of accent color
+  if (node.isAbstract) {
+    const glowColor = lightenColor(node.accent, 0.35)
+    const abstractHalo = new THREE.Mesh(
+      new THREE.SphereGeometry(radius * 1.6, 24, 24),
+      new THREE.MeshBasicMaterial({
+        color: glowColor,
+        transparent: true,
+        opacity: 0.18,
+      }),
+    )
+    group.add(abstractHalo)
+
+    const abstractOuterGlow = new THREE.Mesh(
+      new THREE.SphereGeometry(radius * 2.1, 24, 24),
+      new THREE.MeshBasicMaterial({
+        color: glowColor,
+        transparent: true,
+        opacity: 0.08,
+      }),
+    )
+    group.add(abstractOuterGlow)
+  }
+
   // Trunk gets a strong, pulsing-like halo
   if (isTrunk || isNeighborHighlighted) {
     const halo = new THREE.Mesh(
@@ -395,6 +419,14 @@ function resolveLinkNodeId(node: string | TopicGraphSceneNode) {
 
 function compactLabel(label: string, maxLength: number) {
   return label.length > maxLength ? `${label.slice(0, maxLength)}…` : label
+}
+
+function lightenColor(hex: string, amount: number): string {
+  const color = hex.replace('#', '')
+  const r = Math.min(255, parseInt(color.slice(0, 2), 16) + Math.round(255 * amount))
+  const g = Math.min(255, parseInt(color.slice(2, 4), 16) + Math.round(255 * amount))
+  const b = Math.min(255, parseInt(color.slice(4, 6), 16) + Math.round(255 * amount))
+  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`
 }
 
 function cancelFocusAnimation() {

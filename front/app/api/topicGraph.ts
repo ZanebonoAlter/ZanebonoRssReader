@@ -53,6 +53,7 @@ export interface GraphNode {
   color?: string
   feed_name?: string
   category_name?: string
+  is_abstract?: boolean
 }
 
 export type TopicGraphNode = GraphNode
