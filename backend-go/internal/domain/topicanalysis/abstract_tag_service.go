@@ -40,8 +40,8 @@ func ExtractAbstractTag(ctx context.Context, candidates []TagCandidate, newLabel
 		return nil, fmt.Errorf("no candidates provided for abstract tag extraction")
 	}
 
-	// Call LLM to extract abstract name
-	abstractName, err := callLLMForAbstractName(ctx, candidates, newLabel)
+	// Call LLM to extract abstract name and description
+	abstractName, abstractDesc, err := callLLMForAbstractName(ctx, candidates, newLabel)
 	if err != nil {
 		log.Printf("[WARN] Abstract tag extraction LLM call failed: %v", err)
 		return nil, err
@@ -72,12 +72,13 @@ func ExtractAbstractTag(ctx context.Context, candidates []TagCandidate, newLabel
 		} else {
 			// Create new abstract tag
 			abstractTag = &models.TopicTag{
-				Slug:     slug,
-				Label:    abstractName,
-				Category: category,
-				Kind:     category,
-				Source:   "abstract",
-				Status:   "active",
+				Slug:        slug,
+				Label:       abstractName,
+				Category:    category,
+				Kind:        category,
+				Source:      "abstract",
+				Status:      "active",
+				Description: abstractDesc,
 			}
 			if err := tx.Create(abstractTag).Error; err != nil {
 				return fmt.Errorf("create abstract tag: %w", err)
@@ -144,8 +145,19 @@ func ExtractAbstractTag(ctx context.Context, candidates []TagCandidate, newLabel
 }
 
 // GetTagHierarchy returns the tag hierarchy tree for a given category filter.
-func GetTagHierarchy(category string) ([]TagHierarchyNode, error) {
-	// Query all abstract relations
+func GetTagHierarchy(category string, scopeFeedID uint, scopeCategoryID uint) ([]TagHierarchyNode, error) {
+	var scopeTagIDs map[uint]bool
+	if scopeFeedID > 0 || scopeCategoryID > 0 {
+		var err error
+		scopeTagIDs, err = resolveScopeTagIDs(scopeFeedID, scopeCategoryID)
+		if err != nil {
+			return nil, err
+		}
+		if len(scopeTagIDs) == 0 {
+			return []TagHierarchyNode{}, nil
+		}
+	}
+
 	query := database.DB.Model(&models.TopicTagRelation{}).
 		Where("relation_type = ?", "abstract")
 
@@ -158,7 +170,19 @@ func GetTagHierarchy(category string) ([]TagHierarchyNode, error) {
 		return []TagHierarchyNode{}, nil
 	}
 
-	// Collect all unique tag IDs
+	if scopeTagIDs != nil {
+		filtered := make([]models.TopicTagRelation, 0, len(relations))
+		for _, r := range relations {
+			if scopeTagIDs[r.ParentID] || scopeTagIDs[r.ChildID] {
+				filtered = append(filtered, r)
+			}
+		}
+		relations = filtered
+		if len(relations) == 0 {
+			return []TagHierarchyNode{}, nil
+		}
+	}
+
 	tagIDSet := make(map[uint]bool)
 	for _, r := range relations {
 		tagIDSet[r.ParentID] = true
@@ -169,7 +193,6 @@ func GetTagHierarchy(category string) ([]TagHierarchyNode, error) {
 		tagIDs = append(tagIDs, id)
 	}
 
-	// Load all referenced tags
 	var tags []models.TopicTag
 	if err := database.DB.Where("id IN ? AND status = ?", tagIDs, "active").Find(&tags).Error; err != nil {
 		return nil, fmt.Errorf("load tags: %w", err)
@@ -179,7 +202,6 @@ func GetTagHierarchy(category string) ([]TagHierarchyNode, error) {
 		tagMap[tags[i].ID] = &tags[i]
 	}
 
-	// Filter by category if specified
 	if category != "" {
 		// Only include trees where the root parent matches the category
 		filteredRelations := make([]models.TopicTagRelation, 0, len(relations))
@@ -353,8 +375,8 @@ func DetachChildTag(parentID, childID uint) error {
 
 // --- Internal helpers ---
 
-// callLLMForAbstractName calls the LLM to extract a common abstract concept from candidates.
-func callLLMForAbstractName(ctx context.Context, candidates []TagCandidate, newLabel string) (string, error) {
+// callLLMForAbstractName calls the LLM to extract a common abstract concept and description from candidates.
+func callLLMForAbstractName(ctx context.Context, candidates []TagCandidate, newLabel string) (string, string, error) {
 	router := airouter.NewRouter()
 	prompt := buildAbstractTagPrompt(candidates, newLabel)
 
@@ -370,10 +392,10 @@ func callLLMForAbstractName(ctx context.Context, candidates []TagCandidate, newL
 
 	result, err := router.Chat(ctx, req)
 	if err != nil {
-		return "", fmt.Errorf("LLM call failed: %w", err)
+		return "", "", fmt.Errorf("LLM call failed: %w", err)
 	}
 
-	return parseAbstractNameFromJSON(result.Content)
+	return parseAbstractTagResponse(result.Content)
 }
 
 // buildAbstractTagPrompt constructs the prompt for abstract tag extraction.
@@ -381,7 +403,11 @@ func buildAbstractTagPrompt(candidates []TagCandidate, newLabel string) string {
 	var parts []string
 	for _, c := range candidates {
 		if c.Tag != nil {
-			parts = append(parts, fmt.Sprintf("- %q (similarity: %.2f)", c.Tag.Label, c.Similarity))
+			desc := ""
+			if c.Tag.Description != "" {
+				desc = fmt.Sprintf(" (description: %s)", c.Tag.Description)
+			}
+			parts = append(parts, fmt.Sprintf("- %q (similarity: %.2f)%s", c.Tag.Label, c.Similarity, desc))
 		}
 	}
 	parts = append(parts, fmt.Sprintf("- %q (new tag)", newLabel))
@@ -391,12 +417,14 @@ func buildAbstractTagPrompt(candidates []TagCandidate, newLabel string) string {
 
 Extract a common abstract concept that encompasses ALL of them.
 The abstract name should be broader and more general.
+Also generate a brief description (1-2 sentences) summarizing the common theme based on the child tag descriptions.
 
 Respond with JSON:
-{"abstract_name": "your answer", "reason": "brief explanation"}
+{"abstract_name": "your answer", "description": "brief description", "reason": "explanation"}
 
 Rules:
 - abstract_name must be 1-160 characters
+- description must be 1-500 characters
 - abstract_name should be in the original language of the tags
 - Prefer concise, meaningful names over vague descriptions`,
 		strings.Join(parts, "\n"))
@@ -425,6 +453,35 @@ func parseAbstractNameFromJSON(content string) (string, error) {
 	return name, nil
 }
 
+// parseAbstractTagResponse extracts abstract_name and description from LLM JSON response.
+func parseAbstractTagResponse(content string) (string, string, error) {
+	content = strings.TrimSpace(content)
+
+	var result struct {
+		AbstractName string `json:"abstract_name"`
+		Description  string `json:"description"`
+		Reason       string `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(content), &result); err != nil {
+		return "", "", fmt.Errorf("failed to parse LLM response: %w", err)
+	}
+
+	name := strings.TrimSpace(result.AbstractName)
+	if name == "" {
+		return "", "", fmt.Errorf("LLM returned empty abstract_name")
+	}
+	if len(name) > maxAbstractNameLen {
+		return "", "", fmt.Errorf("abstract_name exceeds %d characters", maxAbstractNameLen)
+	}
+
+	desc := strings.TrimSpace(result.Description)
+	if len(desc) > 500 {
+		desc = desc[:500]
+	}
+
+	return name, desc, nil
+}
+
 // candidateLabels returns a comma-separated list of candidate labels for logging.
 func candidateLabels(candidates []TagCandidate) string {
 	labels := make([]string, 0, len(candidates))
@@ -434,4 +491,104 @@ func candidateLabels(candidates []TagCandidate) string {
 		}
 	}
 	return strings.Join(labels, ", ")
+}
+
+// resolveScopeTagIDs returns the set of topic tag IDs that are associated with articles
+// matching the given feed_id or category_id scope.
+func resolveScopeTagIDs(feedID uint, categoryID uint) (map[uint]bool, error) {
+	if feedID == 0 && categoryID == 0 {
+		return nil, nil
+	}
+
+	query := database.DB.Model(&models.ArticleTopicTag{}).
+		Select("DISTINCT topic_tag_id")
+
+	if feedID > 0 {
+		query = query.Joins("JOIN articles ON articles.id = article_topic_tags.article_id").
+			Where("articles.feed_id = ?", feedID)
+	} else if categoryID > 0 {
+		query = query.Joins("JOIN articles ON articles.id = article_topic_tags.article_id").
+			Joins("JOIN feeds ON feeds.id = articles.feed_id").
+			Where("feeds.category_id = ?", categoryID)
+	}
+
+	var tagIDs []uint
+	if err := query.Pluck("topic_tag_id", &tagIDs).Error; err != nil {
+		return nil, fmt.Errorf("resolve scope tag IDs: %w", err)
+	}
+
+	result := make(map[uint]bool, len(tagIDs))
+	for _, id := range tagIDs {
+		result[id] = true
+	}
+	return result, nil
+}
+
+// GetUnclassifiedTags returns tags that are NOT part of any abstract hierarchy.
+// These are active tags that do not appear as parent or child in any abstract relation.
+func GetUnclassifiedTags(category string, scopeFeedID uint, scopeCategoryID uint) ([]TagHierarchyNode, error) {
+	// Collect all tag IDs involved in abstract relations
+	var relatedTagIDs []uint
+	database.DB.Model(&models.TopicTagRelation{}).
+		Where("relation_type = ?", "abstract").
+		Pluck("parent_id", &relatedTagIDs)
+	var childIDs []uint
+	database.DB.Model(&models.TopicTagRelation{}).
+		Where("relation_type = ?", "abstract").
+		Pluck("child_id", &childIDs)
+	relatedTagIDs = append(relatedTagIDs, childIDs...)
+	relatedSet := make(map[uint]bool, len(relatedTagIDs))
+	for _, id := range relatedTagIDs {
+		relatedSet[id] = true
+	}
+
+	query := database.DB.Model(&models.TopicTag{}).
+		Where("status = ? AND source != ?", "active", "abstract").
+		Where("id IN (SELECT DISTINCT topic_tag_id FROM article_topic_tags)")
+
+	if len(relatedSet) > 0 {
+		allRelated := make([]uint, 0, len(relatedSet))
+		for id := range relatedSet {
+			allRelated = append(allRelated, id)
+		}
+		query = query.Where("id NOT IN ?", allRelated)
+	}
+
+	if category != "" {
+		query = query.Where("category = ?", category)
+	}
+
+	if scopeFeedID > 0 || scopeCategoryID > 0 {
+		scopeTagIDs, err := resolveScopeTagIDs(scopeFeedID, scopeCategoryID)
+		if err != nil {
+			return nil, err
+		}
+		if len(scopeTagIDs) == 0 {
+			return []TagHierarchyNode{}, nil
+		}
+		scopeSlice := make([]uint, 0, len(scopeTagIDs))
+		for id := range scopeTagIDs {
+			scopeSlice = append(scopeSlice, id)
+		}
+		query = query.Where("id IN ?", scopeSlice)
+	}
+
+	var tags []models.TopicTag
+	if err := query.Order("feed_count DESC").Limit(200).Find(&tags).Error; err != nil {
+		return nil, fmt.Errorf("query unclassified tags: %w", err)
+	}
+
+	nodes := make([]TagHierarchyNode, 0, len(tags))
+	for _, tag := range tags {
+		nodes = append(nodes, TagHierarchyNode{
+			ID:        tag.ID,
+			Label:     tag.Label,
+			Slug:      tag.Slug,
+			Category:  tag.Category,
+			Icon:      tag.Icon,
+			FeedCount: tag.FeedCount,
+			Children:  []TagHierarchyNode{},
+		})
+	}
+	return nodes, nil
 }
