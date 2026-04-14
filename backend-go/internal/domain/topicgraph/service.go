@@ -12,6 +12,8 @@ import (
 	"my-robot-backend/internal/domain/topicextraction"
 	"my-robot-backend/internal/domain/topictypes"
 	"my-robot-backend/internal/platform/database"
+
+	"gorm.io/gorm"
 )
 
 func BuildTopicGraph(kind string, anchor time.Time, categoryID, feedID *uint) (*topictypes.TopicGraphResponse, error) {
@@ -25,7 +27,7 @@ func BuildTopicGraph(kind string, anchor time.Time, categoryID, feedID *uint) (*
 		return nil, err
 	}
 
-	nodes, edges, topTopics, articleCount := buildGraphPayloadFromArticles(articleTags)
+	nodes, edges, topTopics, articleCount := buildGraphPayloadFromArticles(database.DB, articleTags)
 	feedCount := 0
 	for _, node := range nodes {
 		if node.Kind == "feed" {
@@ -298,7 +300,7 @@ func fetchSummaries(start time.Time, end time.Time, categoryID, feedID *uint) ([
 	return summaries, err
 }
 
-func buildGraphPayload(summaries []models.AISummary) ([]topictypes.GraphNode, []topictypes.GraphEdge, []topictypes.TopicTag) {
+func buildGraphPayload(db *gorm.DB, summaries []models.AISummary) ([]topictypes.GraphNode, []topictypes.GraphEdge, []topictypes.TopicTag) {
 	topicNodes := map[string]*topictypes.GraphNode{}
 	feedNodes := map[string]*topictypes.GraphNode{}
 	edgeMap := map[string]*topictypes.GraphEdge{}
@@ -388,6 +390,9 @@ func buildGraphPayload(summaries []models.AISummary) ([]topictypes.GraphNode, []
 		edges = append(edges, *edge)
 	}
 	sort.SliceStable(edges, func(i, j int) bool { return edges[i].Weight > edges[j].Weight })
+
+	// Identify abstract tags (parent tags in topic_tag_relations)
+	findAbstractSlugs(db, topicNodes)
 
 	topTopics := make([]topictypes.TopicTag, 0, len(topicScores))
 	for _, topic := range topicScores {
@@ -749,7 +754,7 @@ func fetchArticleTagsData(start, end time.Time, categoryID, feedID *uint) ([]Art
 }
 
 // buildGraphPayloadFromArticles builds graph nodes and edges from article tag data
-func buildGraphPayloadFromArticles(data []ArticleTagData) ([]topictypes.GraphNode, []topictypes.GraphEdge, []topictypes.TopicTag, int) {
+func buildGraphPayloadFromArticles(db *gorm.DB, data []ArticleTagData) ([]topictypes.GraphNode, []topictypes.GraphEdge, []topictypes.TopicTag, int) {
 	topicNodes := map[string]*topictypes.GraphNode{}
 	feedNodes := map[string]*topictypes.GraphNode{}
 	edgeMap := map[string]*topictypes.GraphEdge{}
@@ -835,6 +840,9 @@ func buildGraphPayloadFromArticles(data []ArticleTagData) ([]topictypes.GraphNod
 			}
 		}
 	}
+
+	// Identify abstract tags (parent tags in topic_tag_relations)
+	findAbstractSlugs(db, topicNodes)
 
 	nodes := make([]topictypes.GraphNode, 0, len(topicNodes)+len(feedNodes))
 	for _, node := range topicNodes {
@@ -953,4 +961,31 @@ func GetPendingArticlesByTag(tagSlug string, kind string, anchor time.Time) (*to
 		Articles: pendingArticles,
 		Total:    len(pendingArticles),
 	}, nil
+}
+
+// findAbstractSlugs queries topic_tag_relations to identify which tag slugs are abstract parents.
+// It annotates matching nodes in the topicNodes map with IsAbstract=true.
+func findAbstractSlugs(db *gorm.DB, topicNodes map[string]*topictypes.GraphNode) {
+	var abstractParentIDs []uint
+	db.Model(&models.TopicTagRelation{}).
+		Select("DISTINCT parent_id").
+		Pluck("parent_id", &abstractParentIDs)
+
+	if len(abstractParentIDs) == 0 {
+		return
+	}
+
+	var parentTags []models.TopicTag
+	db.Where("id IN ?", abstractParentIDs).Find(&parentTags)
+
+	abstractSlugs := make(map[string]bool, len(parentTags))
+	for _, t := range parentTags {
+		abstractSlugs[t.Slug] = true
+	}
+
+	for slug, node := range topicNodes {
+		if abstractSlugs[slug] {
+			node.IsAbstract = true
+		}
+	}
 }

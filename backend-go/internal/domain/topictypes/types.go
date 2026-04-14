@@ -86,6 +86,7 @@ type GraphNode struct {
 	Color        string  `json:"color,omitempty"`
 	FeedName     string  `json:"feed_name,omitempty"`
 	CategoryName string  `json:"category_name,omitempty"`
+	IsAbstract   bool    `json:"is_abstract,omitempty"`
 }
 
 // GraphEdge represents an edge in the topic graph
