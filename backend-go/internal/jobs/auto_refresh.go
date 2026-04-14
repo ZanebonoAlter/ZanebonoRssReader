@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -14,6 +13,7 @@ import (
 	"my-robot-backend/internal/domain/feeds"
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/logging"
 	"my-robot-backend/internal/platform/tracing"
 	"my-robot-backend/internal/platform/ws"
 )
@@ -65,7 +65,7 @@ func (s *AutoRefreshScheduler) Start() error {
 
 	s.cron.Start()
 	s.isRunning = true
-	log.Printf("Auto-refresh scheduler started with interval: %v", s.checkInterval)
+	logging.Infof("Auto-refresh scheduler started with interval: %v", s.checkInterval)
 	s.initSchedulerTask()
 
 	return nil
@@ -78,7 +78,7 @@ func (s *AutoRefreshScheduler) Stop() {
 
 	s.cron.Stop()
 	s.isRunning = false
-	log.Println("Auto-refresh scheduler stopped")
+	logging.Infoln("Auto-refresh scheduler stopped")
 }
 
 func (s *AutoRefreshScheduler) UpdateInterval(interval int) error {
@@ -139,7 +139,7 @@ func (s *AutoRefreshScheduler) ResetStats() error {
 func (s *AutoRefreshScheduler) checkAndRefreshFeeds() {
 	tracing.TraceSchedulerTick("auto_refresh", "cron", func(ctx context.Context) {
 		if !s.executionMutex.TryLock() {
-			log.Println("Auto-refresh scheduler already running, skipping this cycle")
+			logging.Infoln("Auto-refresh scheduler already running, skipping this cycle")
 			return
 		}
 		s.isExecuting = true
@@ -163,7 +163,7 @@ func (s *AutoRefreshScheduler) runRefreshCycle(triggerSource string) (*AutoRefre
 
 	var feeds []models.Feed
 	if err := database.DB.Where("refresh_interval > 0").Find(&feeds).Error; err != nil {
-		log.Printf("Error querying feeds: %v", err)
+		logging.Errorf("Error querying feeds: %v", err)
 		summary.Reason = "query_failed"
 		summary.FinishedAt = time.Now().Format(time.RFC3339)
 		s.updateSchedulerStatus("idle", err.Error(), &startTime, summary)
@@ -202,10 +202,10 @@ func (s *AutoRefreshScheduler) runRefreshCycle(triggerSource string) (*AutoRefre
 	summary.FinishedAt = time.Now().Format(time.RFC3339)
 	summary.Reason = autoRefreshReason(summary)
 	if summary.TriggeredFeeds > 0 {
-		log.Printf("Auto-refresh: triggered %d feed(s)", summary.TriggeredFeeds)
+		logging.Infof("Auto-refresh: triggered %d feed(s)", summary.TriggeredFeeds)
 	}
 	if summary.StaleResetFeeds > 0 {
-		log.Printf("Auto-refresh: reset %d stale feed(s)", summary.StaleResetFeeds)
+		logging.Infof("Auto-refresh: reset %d stale feed(s)", summary.StaleResetFeeds)
 	}
 
 	s.updateSchedulerStatus("idle", "", &startTime, summary)
@@ -226,13 +226,13 @@ func (s *AutoRefreshScheduler) needsRefresh(feed *models.Feed, now time.Time) bo
 func (s *AutoRefreshScheduler) refreshFeedAsync(ctx context.Context, feedID uint) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[PANIC] refreshFeedAsync for feed %d: %v", feedID, r)
+			logging.Errorf("PANIC in refreshFeedAsync for feed %d: %v", feedID, r)
 			s.resetFeedStatus(feedID, fmt.Sprintf("panic: %v", r))
 		}
 	}()
 
 	if err := s.refreshFeed(ctx, feedID); err != nil {
-		log.Printf("Error refreshing feed %d: %v", feedID, err)
+		logging.Errorf("Error refreshing feed %d: %v", feedID, err)
 		s.resetFeedStatus(feedID, err.Error())
 	}
 }
@@ -259,7 +259,7 @@ func (s *AutoRefreshScheduler) triggerAutoSummaryAfterRefreshes(wg *sync.WaitGro
 	}
 	data, err := json.Marshal(msg)
 	if err != nil {
-		log.Printf("Auto-refresh completion message marshal failed: %v", err)
+		logging.Warnf("Auto-refresh completion message marshal failed: %v", err)
 	} else {
 		ws.GetHub().BroadcastRaw(data)
 	}
@@ -275,7 +275,7 @@ func (s *AutoRefreshScheduler) triggerAutoSummaryAfterRefreshes(wg *sync.WaitGro
 
 	result := triggerable.TriggerNow()
 	if accepted, ok := result["accepted"].(bool); ok && !accepted {
-		log.Printf("Auto-summary trigger after refresh was skipped: %v", result["reason"])
+		logging.Infoln("Auto-summary trigger after refresh was skipped:", result["reason"])
 	}
 }
 
@@ -408,7 +408,7 @@ func (s *AutoRefreshScheduler) resetStaleRefreshingFeeds(now time.Time) int {
 	if err := database.DB.Model(&models.Feed{}).
 		Where("refresh_status = ? AND last_refresh_at < ?", "refreshing", cutoff).
 		Find(&staleFeeds).Error; err != nil {
-		log.Printf("Error querying stale feeds: %v", err)
+		logging.Errorf("Error querying stale feeds: %v", err)
 		return 0
 	}
 
@@ -416,7 +416,7 @@ func (s *AutoRefreshScheduler) resetStaleRefreshingFeeds(now time.Time) int {
 	for _, feed := range staleFeeds {
 		if feed.LastRefreshAt != nil {
 			staleDuration := now.Sub(*feed.LastRefreshAt)
-			log.Printf("[STALE] Feed %d stuck for %.1f minutes, resetting", feed.ID, staleDuration.Minutes())
+			logging.Warnf("Feed %d stuck for %.1f minutes, resetting", feed.ID, staleDuration.Minutes())
 		}
 	}
 
@@ -433,7 +433,7 @@ func (s *AutoRefreshScheduler) resetStaleRefreshingFeeds(now time.Time) int {
 		})
 	count := int(result.RowsAffected)
 	if count > 0 {
-		log.Printf("Auto-refresh: reset %d stale refreshing feed(s) (stuck > %v)", count, staleRefreshingTimeout)
+		logging.Infof("Auto-refresh: reset %d stale refreshing feed(s) (stuck > %v)", count, staleRefreshingTimeout)
 	}
 	return count
 }

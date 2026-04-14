@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -16,6 +15,7 @@ import (
 	"my-robot-backend/internal/domain/contentprocessing"
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/logging"
 	"my-robot-backend/internal/platform/tracing"
 )
 
@@ -68,7 +68,7 @@ func NewContentCompletionScheduler(completionService *contentprocessing.ContentC
 	interval := fmt.Sprintf("@every %dm", checkIntervalMinutes)
 	_, err := scheduler.cron.AddFunc(interval, scheduler.checkAndCompleteArticles)
 	if err != nil {
-		log.Printf("Failed to schedule AI summary: %v", err)
+		logging.Errorf("Failed to schedule AI summary: %v", err)
 	}
 
 	return scheduler
@@ -83,7 +83,7 @@ func (s *ContentCompletionScheduler) Start() error {
 	}
 	s.cron.Start()
 	s.isRunning = true
-	log.Printf("AI summary scheduler started (interval: %v)", s.checkInterval)
+	logging.Infof("AI summary scheduler started (interval: %v)", s.checkInterval)
 	return nil
 }
 
@@ -93,7 +93,7 @@ func (s *ContentCompletionScheduler) Stop() {
 	}
 	s.cron.Stop()
 	s.isRunning = false
-	log.Println("AI summary scheduler stopped")
+	logging.Infoln("AI summary scheduler stopped")
 }
 
 func (s *ContentCompletionScheduler) TriggerNow() map[string]interface{} {
@@ -184,7 +184,7 @@ func (s *ContentCompletionScheduler) ResetStats() error {
 func (s *ContentCompletionScheduler) checkAndCompleteArticles() {
 	tracing.TraceSchedulerTick("content_completion", "cron", func(ctx context.Context) {
 		if !s.executionMutex.TryLock() {
-			log.Println("Content completion scheduler already running, skipping this cycle")
+			logging.Infoln("Content completion scheduler already running, skipping this cycle")
 			return
 		}
 
@@ -197,7 +197,7 @@ func (s *ContentCompletionScheduler) runCompletionCycle(triggerSource, runID str
 
 	var task models.SchedulerTask
 	if err := database.DB.Where("name = ?", s.taskName).First(&task).Error; err != nil {
-		log.Printf("Scheduler task not found: %v", err)
+		logging.Errorf("Scheduler task not found: %v", err)
 		return
 	}
 
@@ -286,13 +286,13 @@ func (s *ContentCompletionScheduler) runCompletionCycle(triggerSource, runID str
 		task.ConsecutiveFailures++
 		task.LastError = errors[0].Error()
 		task.LastErrorTime = &now
-		log.Printf("AI summary completed with errors: %d completed, %d failed", len(completedIDs), len(errors))
+		logging.Warnf("AI summary completed with errors: %d completed, %d failed", len(completedIDs), len(errors))
 	} else {
 		task.Status = "idle"
 		task.SuccessfulExecutions++
 		task.ConsecutiveFailures = 0
 		task.LastError = ""
-		log.Printf("AI summary completed successfully: %d articles processed", len(completedIDs))
+		logging.Infof("AI summary completed successfully: %d articles processed", len(completedIDs))
 	}
 
 	overview, overviewErr := s.completionService.GetOverview()
@@ -345,7 +345,7 @@ func (s *ContentCompletionScheduler) initSchedulerTask() {
 	}
 
 	database.DB.Create(&task)
-	log.Println("AI summary scheduler task initialized")
+	logging.Infoln("AI summary scheduler task initialized")
 }
 
 func (s *ContentCompletionScheduler) reconcileSchedulerTask() error {
@@ -476,7 +476,7 @@ func (s *ContentCompletionScheduler) GetTaskStatusDetails() map[string]interface
 
 	overview, err := s.completionService.GetOverview()
 	if err != nil {
-		log.Printf("failed to load ai summary overview: %v", err)
+		logging.Warnf("failed to load ai summary overview: %v", err)
 	}
 
 	s.mu.RLock()

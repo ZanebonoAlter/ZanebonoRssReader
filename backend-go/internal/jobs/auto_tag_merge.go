@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -13,6 +12,7 @@ import (
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/domain/topicanalysis"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/logging"
 	"my-robot-backend/internal/platform/tracing"
 )
 
@@ -67,7 +67,7 @@ func (s *AutoTagMergeScheduler) Start() error {
 
 	s.cron.Start()
 	s.isRunning = true
-	log.Printf("Auto-tag-merge scheduler started with interval: %v", s.checkInterval)
+	logging.Infof("Auto-tag-merge scheduler started with interval: %v", s.checkInterval)
 
 	return nil
 }
@@ -79,7 +79,7 @@ func (s *AutoTagMergeScheduler) Stop() {
 
 	s.cron.Stop()
 	s.isRunning = false
-	log.Println("Auto-tag-merge scheduler stopped")
+	logging.Infoln("Auto-tag-merge scheduler stopped")
 }
 
 func (s *AutoTagMergeScheduler) UpdateInterval(interval int) error {
@@ -152,7 +152,7 @@ func (s *AutoTagMergeScheduler) TriggerNow() map[string]interface{} {
 		defer func() {
 			s.isExecuting = false
 			if r := recover(); r != nil {
-				log.Printf("[ERROR] PANIC in manual auto-tag-merge trigger: %v", r)
+				logging.Errorf("PANIC in manual auto-tag-merge trigger: %v", r)
 				s.updateSchedulerStatus("idle", fmt.Sprintf("Panic: %v", r), nil, nil)
 			}
 		}()
@@ -200,7 +200,7 @@ func (s *AutoTagMergeScheduler) initSchedulerTask() {
 func (s *AutoTagMergeScheduler) scanAndMergeTags() {
 	tracing.TraceSchedulerTick("auto_tag_merge", "cron", func(ctx context.Context) {
 		if !s.executionMutex.TryLock() {
-			log.Println("Tag merge already in progress, skipping this cycle")
+			logging.Infoln("Tag merge already in progress, skipping this cycle")
 			return
 		}
 		s.isExecuting = true
@@ -208,7 +208,7 @@ func (s *AutoTagMergeScheduler) scanAndMergeTags() {
 			s.executionMutex.Unlock()
 			s.isExecuting = false
 			if r := recover(); r != nil {
-				log.Printf("[ERROR] PANIC in scanAndMergeTags: %v", r)
+				logging.Errorf("PANIC in scanAndMergeTags: %v", r)
 				s.updateSchedulerStatus("idle", fmt.Sprintf("Panic: %v", r), nil, nil)
 			}
 		}()
@@ -218,7 +218,7 @@ func (s *AutoTagMergeScheduler) scanAndMergeTags() {
 }
 
 func (s *AutoTagMergeScheduler) runMergeCycle(triggerSource string) {
-	log.Println("Starting auto-tag-merge cycle")
+	logging.Infoln("Starting auto-tag-merge cycle")
 	startTime := time.Now()
 	summary := &AutoTagMergeRunSummary{
 		TriggerSource: triggerSource,
@@ -258,7 +258,7 @@ func (s *AutoTagMergeScheduler) runMergeCycle(triggerSource string) {
 		LIMIT 50
 	`
 	if err := database.DB.Raw(query, distanceThreshold).Scan(&pairs).Error; err != nil {
-		log.Printf("Error querying similar tag pairs: %v", err)
+		logging.Errorf("Error querying similar tag pairs: %v", err)
 		summary.Reason = "query_failed"
 		summary.FinishedAt = time.Now().Format(time.RFC3339)
 		s.updateSchedulerStatus("idle", err.Error(), &startTime, summary)
@@ -268,32 +268,32 @@ func (s *AutoTagMergeScheduler) runMergeCycle(triggerSource string) {
 	summary.TotalPairs = len(pairs)
 
 	if len(pairs) == 0 {
-		log.Println("No similar tag pairs found, skipping")
+		logging.Infoln("No similar tag pairs found, skipping")
 		summary.Reason = "no_similar_pairs"
 		summary.FinishedAt = time.Now().Format(time.RFC3339)
 		s.updateSchedulerStatus("idle", "", &startTime, summary)
 		return
 	}
 
-	log.Printf("Found %d similar tag pairs to evaluate", len(pairs))
+	logging.Infof("Found %d similar tag pairs to evaluate", len(pairs))
 
 	for _, pair := range pairs {
 		// Load both tags to verify they are still active
 		var tag1, tag2 models.TopicTag
 		if err := database.DB.First(&tag1, pair.SourceID).Error; err != nil {
-			log.Printf("Skipping pair (%d, %d): source tag not found", pair.SourceID, pair.TargetID)
+			logging.Warnf("Skipping pair (%d, %d): source tag not found", pair.SourceID, pair.TargetID)
 			summary.SkippedCount++
 			continue
 		}
 		if err := database.DB.First(&tag2, pair.TargetID).Error; err != nil {
-			log.Printf("Skipping pair (%d, %d): target tag not found", pair.SourceID, pair.TargetID)
+			logging.Warnf("Skipping pair (%d, %d): target tag not found", pair.SourceID, pair.TargetID)
 			summary.SkippedCount++
 			continue
 		}
 
 		// Check both tags are still active (not merged by a previous pair in this cycle)
 		if tag1.Status == "merged" || tag2.Status == "merged" {
-			log.Printf("Skipping pair (%d, %d): one or both tags already merged", pair.SourceID, pair.TargetID)
+			logging.Infoln(fmt.Sprintf("Skipping pair (%d, %d): one or both tags already merged", pair.SourceID, pair.TargetID))
 			summary.SkippedCount++
 			continue
 		}
@@ -343,14 +343,14 @@ func (s *AutoTagMergeScheduler) runMergeCycle(triggerSource string) {
 
 		similarity := 1.0 - pair.Distance
 
-		log.Printf("[AUTO-MERGE] merged tag '%s' (id=%d, %d articles) into '%s' (id=%d, %d articles), similarity=%.4f",
+		logging.Infof("[AUTO-MERGE] merged tag '%s' (id=%d, %d articles) into '%s' (id=%d, %d articles), similarity=%.4f",
 			sourceLabel, sourceID, sourceArticles,
 			targetLabel, targetID, targetArticles,
 			similarity,
 		)
 
 		if err := topicanalysis.MergeTags(sourceID, targetID); err != nil {
-			log.Printf("[ERROR] Failed to merge tag %d into %d: %v", sourceID, targetID, err)
+			logging.Errorf("Failed to merge tag %d into %d: %v", sourceID, targetID, err)
 			summary.FailedCount++
 			continue
 		}
@@ -368,7 +368,7 @@ func (s *AutoTagMergeScheduler) runMergeCycle(triggerSource string) {
 	}
 
 	duration := time.Since(startTime)
-	log.Printf("Auto-tag-merge cycle completed: %d merged, %d skipped, %d failed in %v",
+	logging.Infof("Auto-tag-merge cycle completed: %d merged, %d skipped, %d failed in %v",
 		summary.MergedCount, summary.SkippedCount, summary.FailedCount, duration)
 
 	summary.FinishedAt = time.Now().Format(time.RFC3339)
