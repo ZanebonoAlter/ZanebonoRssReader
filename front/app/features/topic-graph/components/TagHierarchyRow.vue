@@ -8,6 +8,7 @@ const props = defineProps<{
   depth: number
   editingId: number | null
   saving: boolean
+  watchedTagIds?: Set<number>
 }>()
 
 const emit = defineEmits<{
@@ -16,7 +17,9 @@ const emit = defineEmits<{
   'confirm-edit': []
   'detach': [node: TagHierarchyNode]
   'reassign': [node: TagHierarchyNode]
+  'select': [node: TagHierarchyNode]
   'update:editing-value': [value: string]
+  'toggle-watch': [node: TagHierarchyNode]
 }>()
 
 const editingValue = ref('')
@@ -48,12 +51,35 @@ function handleReassign(node: TagHierarchyNode) {
   emit('reassign', node)
 }
 
+function handleSelect(node: TagHierarchyNode) {
+  emit('select', node)
+}
+
 function handleChildStartEdit(node: TagHierarchyNode) { emit('start-edit', node) }
 function handleChildCancelEdit() { emit('cancel-edit') }
 function handleChildConfirmEdit() { emit('confirm-edit') }
 function handleChildDetach(node: TagHierarchyNode) { emit('detach', node) }
 function handleChildReassign(node: TagHierarchyNode) { emit('reassign', node) }
+function handleChildSelect(node: TagHierarchyNode) { emit('select', node) }
 function handleChildUpdateEditingValue(val: string) { emit('update:editing-value', val) }
+function handleChildToggleWatch(node: TagHierarchyNode) { emit('toggle-watch', node) }
+
+const isWatched = ref(false)
+
+function syncWatchedState() {
+  isWatched.value = props.watchedTagIds?.has(props.node.id) ?? false
+}
+
+syncWatchedState()
+
+import { watch } from 'vue'
+watch(() => [props.watchedTagIds, props.node.id] as const, syncWatchedState)
+
+function handleToggleWatch(e: Event) {
+  e.stopPropagation()
+  isWatched.value = !isWatched.value
+  emit('toggle-watch', props.node)
+}
 </script>
 
 <template>
@@ -75,6 +101,17 @@ function handleChildUpdateEditingValue(val: string) { emit('update:editing-value
 
       <!-- Category icon -->
       <Icon :icon="getCategoryIcon(node.category)" width="14" class="th-cat-icon" />
+
+      <!-- Watch heart icon -->
+      <button
+        type="button"
+        class="th-watch-btn"
+        :class="{ 'th-watch-btn--active': isWatched }"
+        :title="isWatched ? '取消关注' : '关注标签'"
+        @click="handleToggleWatch"
+      >
+        <Icon :icon="isWatched ? 'mdi:heart' : 'mdi:heart-outline'" width="14" />
+      </button>
 
       <!-- Label (edit mode or display mode) -->
       <div v-if="editingId === node.id" class="th-inline-edit">
@@ -98,6 +135,7 @@ function handleChildUpdateEditingValue(val: string) { emit('update:editing-value
         v-else
         type="button"
         class="th-label"
+        @click="handleSelect(node)"
         @dblclick="handleStartEdit(node)"
       >
         {{ node.label }}
@@ -138,12 +176,15 @@ function handleChildUpdateEditingValue(val: string) { emit('update:editing-value
         :depth="depth + 1"
         :editing-id="editingId"
         :saving="saving"
+        :watched-tag-ids="watchedTagIds"
         @start-edit="handleChildStartEdit"
         @cancel-edit="handleChildCancelEdit"
         @confirm-edit="handleChildConfirmEdit"
         @detach="handleChildDetach"
         @reassign="handleChildReassign"
+        @select="handleChildSelect"
         @update:editing-value="handleChildUpdateEditingValue"
+        @toggle-watch="handleChildToggleWatch"
       />
     </div>
   </div>
@@ -177,6 +218,24 @@ function handleChildUpdateEditingValue(val: string) { emit('update:editing-value
 .th-toggle--blank { visibility: hidden; }
 
 .th-cat-icon { color: rgba(255, 255, 255, 0.35); flex-shrink: 0; }
+
+.th-watch-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: rgba(255, 255, 255, 0.2);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 0.12s ease, background 0.12s ease;
+}
+.th-watch-btn:hover { color: rgba(239, 68, 68, 0.9); background: rgba(239, 68, 68, 0.1); }
+.th-watch-btn--active { color: rgba(239, 68, 68, 0.9); }
+.th-watch-btn--active:hover { color: rgba(239, 68, 68, 1); background: rgba(239, 68, 68, 0.15); }
 
 .th-label {
   border: none;

@@ -2,6 +2,8 @@
 import { Icon } from '@iconify/vue'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useAbstractTagApi } from '~/api/abstractTags'
+import { useWatchedTagsApi } from '~/api/watchedTags'
+import type { TopicCategory } from '~/api/topicGraph'
 import TagHierarchyRow from '~/features/topic-graph/components/TagHierarchyRow.vue'
 import type { TagHierarchyNode } from '~/types/topicTag'
 
@@ -10,7 +12,12 @@ const props = defineProps<{
   categoryId?: string | null
 }>()
 
+const emit = defineEmits<{
+  'select-tag': [slug: string, category: TopicCategory]
+}>()
+
 const abstractTagApi = useAbstractTagApi()
+const watchedTagsApi = useWatchedTagsApi()
 
 const nodes = ref<TagHierarchyNode[]>([])
 const loading = ref(true)
@@ -22,6 +29,8 @@ const timeRange = ref<string>('')
 const customStartDate = ref('')
 const customEndDate = ref('')
 const showCustomRange = ref(false)
+
+const watchedTagIds = ref<Set<number>>(new Set())
 
 // Inline editing state
 const editingNodeId = ref<number | null>(null)
@@ -41,6 +50,11 @@ const tagCategories = ['event', 'person', 'keyword'] as const
 
 const categoryLabel = (cat: string) =>
   cat === 'event' ? '事件' : cat === 'person' ? '人物' : '关键词'
+
+function normalizeHierarchyCategory(category: string): TopicCategory {
+  if (category === 'event' || category === 'person') return category
+  return 'keyword'
+}
 
 function matchesSearch(label: string): boolean {
   if (!searchQuery.value) return true
@@ -111,6 +125,38 @@ async function loadHierarchy() {
     error.value = e instanceof Error ? e.message : '加载失败'
   } finally {
     loading.value = false
+  }
+}
+
+async function loadWatchedTags() {
+  try {
+    const res = await watchedTagsApi.listWatchedTags()
+    if (res.success && res.data) {
+      watchedTagIds.value = new Set((res.data as any[]).map((t: any) => t.id))
+    }
+  } catch (e) {
+    console.error('Failed to load watched tags:', e)
+  }
+}
+
+async function toggleWatch(node: TagHierarchyNode) {
+  const wasWatched = watchedTagIds.value.has(node.id)
+  if (wasWatched) {
+    watchedTagIds.value.delete(node.id)
+    watchedTagIds.value = new Set(watchedTagIds.value)
+    const res = await watchedTagsApi.unwatchTag(node.id)
+    if (!res.success) {
+      watchedTagIds.value = new Set([...watchedTagIds.value, node.id])
+      console.error('Failed to unwatch tag:', res.error)
+    }
+  } else {
+    watchedTagIds.value = new Set([...watchedTagIds.value, node.id])
+    const res = await watchedTagsApi.watchTag(node.id)
+    if (!res.success) {
+      watchedTagIds.value.delete(node.id)
+      watchedTagIds.value = new Set(watchedTagIds.value)
+      console.error('Failed to watch tag:', res.error)
+    }
   }
 }
 
@@ -238,8 +284,13 @@ function handleUpdateEditingValue(val: string) {
   editingValue.value = val
 }
 
+function handleSelectNode(node: TagHierarchyNode) {
+  emit('select-tag', node.slug, normalizeHierarchyCategory(node.category))
+}
+
 onMounted(() => {
   void loadHierarchy()
+  void loadWatchedTags()
 })
 
 watch(() => [props.feedId, props.categoryId] as const, () => {
@@ -330,6 +381,14 @@ watch(timeRange, (newVal) => {
       <button
         type="button"
         class="th-category-btn"
+        :class="{ 'th-category-btn--active': timeRange === '1d' }"
+        @click="timeRange = '1d'"
+      >
+        今天
+      </button>
+      <button
+        type="button"
+        class="th-category-btn"
         :class="{ 'th-category-btn--active': timeRange === '7d' }"
         @click="timeRange = '7d'"
       >
@@ -387,12 +446,15 @@ watch(timeRange, (newVal) => {
         :depth="0"
         :editing-id="editingNodeId"
         :saving="saving"
+        :watched-tag-ids="watchedTagIds"
         @start-edit="startEdit"
         @cancel-edit="cancelEdit"
         @confirm-edit="void confirmEdit()"
         @detach="requestDetach"
         @reassign="requestReassign"
+        @select="handleSelectNode"
         @update:editing-value="handleUpdateEditingValue"
+        @toggle-watch="toggleWatch"
       />
     </div>
 

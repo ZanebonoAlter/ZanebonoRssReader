@@ -49,6 +49,8 @@ export interface ArticleFilters {
   search?: string
   start_date?: string
   end_date?: string
+  watched_tag_ids?: string
+  sort_by?: 'relevance' | 'date'
 }
 
 export interface UpdateArticleData {
