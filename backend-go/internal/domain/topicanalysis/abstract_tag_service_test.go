@@ -229,6 +229,52 @@ func TestParseAbstractTagResponse(t *testing.T) {
 	}
 }
 
+// --- Tests for resolveActiveTagIDs time range validation ---
+
+func TestResolveActiveTagIDsNoFilter(t *testing.T) {
+	candidates := map[uint]bool{1: true, 2: true, 3: true}
+	result := resolveActiveTagIDs("", candidates)
+	if len(result) != 3 {
+		t.Errorf("expected 3 active tags with no filter, got %d", len(result))
+	}
+	for id := range candidates {
+		if !result[id] {
+			t.Errorf("tag %d should be active with no filter", id)
+		}
+	}
+}
+
+func TestResolveActiveTagIDsInvalidValue(t *testing.T) {
+	// Invalid values are treated as no filter per T-08-04
+	candidates := map[uint]bool{1: true, 2: true}
+	result := resolveActiveTagIDs("invalid", candidates)
+	if len(result) != 2 {
+		t.Errorf("expected 2 active tags with invalid time_range, got %d", len(result))
+	}
+	for id := range candidates {
+		if !result[id] {
+			t.Errorf("tag %d should be active with invalid time_range (treated as no filter)", id)
+		}
+	}
+}
+
+func TestCandidateIDSetToSlice(t *testing.T) {
+	m := map[uint]bool{10: true, 20: true, 30: true}
+	slice := candidateIDSetToSlice(m)
+	if len(slice) != 3 {
+		t.Errorf("expected 3 elements, got %d", len(slice))
+	}
+	set := make(map[uint]bool, len(slice))
+	for _, id := range slice {
+		set[id] = true
+	}
+	for id := range m {
+		if !set[id] {
+			t.Errorf("expected id %d in slice", id)
+		}
+	}
+}
+
 // --- Tests for buildAbstractTagPrompt with description ---
 
 func TestBuildAbstractTagPromptWithDescription(t *testing.T) {

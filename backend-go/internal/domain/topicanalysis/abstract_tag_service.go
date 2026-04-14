@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/domain/topictypes"
@@ -29,6 +30,7 @@ type TagHierarchyNode struct {
 	Icon            string             `json:"icon"`
 	FeedCount       int                `json:"feed_count"`
 	SimilarityScore float64            `json:"similarity_score,omitempty"`
+	IsActive        bool               `json:"is_active"`
 	Children        []TagHierarchyNode `json:"children"`
 }
 
@@ -145,7 +147,8 @@ func ExtractAbstractTag(ctx context.Context, candidates []TagCandidate, newLabel
 }
 
 // GetTagHierarchy returns the tag hierarchy tree for a given category filter.
-func GetTagHierarchy(category string, scopeFeedID uint, scopeCategoryID uint) ([]TagHierarchyNode, error) {
+// timeRange filters by article recency: "7d", "30d", or "" for no filter.
+func GetTagHierarchy(category string, scopeFeedID uint, scopeCategoryID uint, timeRange string) ([]TagHierarchyNode, error) {
 	var scopeTagIDs map[uint]bool
 	if scopeFeedID > 0 || scopeCategoryID > 0 {
 		var err error
@@ -217,6 +220,9 @@ func GetTagHierarchy(category string, scopeFeedID uint, scopeCategoryID uint) ([
 		relations = filteredRelations
 	}
 
+	// Resolve active tag IDs based on time range
+	activeTagIDs := resolveActiveTagIDs(timeRange, tagIDSet)
+
 	// Build parent → children map
 	childrenMap := make(map[uint][]TagHierarchyNode)
 	parentSet := make(map[uint]bool)
@@ -233,6 +239,7 @@ func GetTagHierarchy(category string, scopeFeedID uint, scopeCategoryID uint) ([
 			Icon:            child.Icon,
 			FeedCount:       child.FeedCount,
 			SimilarityScore: r.SimilarityScore,
+			IsActive:        activeTagIDs[child.ID],
 			Children:        []TagHierarchyNode{},
 		})
 		parentSet[r.ParentID] = true
@@ -263,6 +270,7 @@ func GetTagHierarchy(category string, scopeFeedID uint, scopeCategoryID uint) ([
 			Category:  parent.Category,
 			Icon:      parent.Icon,
 			FeedCount: parent.FeedCount,
+			IsActive:  activeTagIDs[parent.ID],
 			Children:  children,
 		})
 	}
@@ -482,6 +490,56 @@ func parseAbstractTagResponse(content string) (string, string, error) {
 	return name, desc, nil
 }
 
+// resolveActiveTagIDs returns a set of tag IDs that have articles published within the given time range.
+// If timeRange is empty or invalid, all tags in the candidate set are considered active.
+func resolveActiveTagIDs(timeRange string, candidateIDs map[uint]bool) map[uint]bool {
+	result := make(map[uint]bool, len(candidateIDs))
+
+	if timeRange == "" {
+		// No filter — all tags are active
+		for id := range candidateIDs {
+			result[id] = true
+		}
+		return result
+	}
+
+	var since time.Time
+	switch timeRange {
+	case "7d":
+		since = time.Now().AddDate(0, 0, -7)
+	case "30d":
+		since = time.Now().AddDate(0, 0, -30)
+	default:
+		// Invalid value per T-08-04 — treat as no filter
+		for id := range candidateIDs {
+			result[id] = true
+		}
+		return result
+	}
+
+	// Query tags that have articles published within the time range
+	var activeIDs []uint
+	database.DB.Model(&models.ArticleTopicTag{}).
+		Joins("JOIN articles ON articles.id = article_topic_tags.article_id").
+		Where("articles.pub_date >= ?", since).
+		Where("article_topic_tags.topic_tag_id IN ?", candidateIDSetToSlice(candidateIDs)).
+		Pluck("DISTINCT article_topic_tags.topic_tag_id", &activeIDs)
+
+	for _, id := range activeIDs {
+		result[id] = true
+	}
+	return result
+}
+
+// candidateIDSetToSlice converts a map[uint]bool to []uint
+func candidateIDSetToSlice(m map[uint]bool) []uint {
+	result := make([]uint, 0, len(m))
+	for id := range m {
+		result = append(result, id)
+	}
+	return result
+}
+
 // candidateLabels returns a comma-separated list of candidate labels for logging.
 func candidateLabels(candidates []TagCandidate) string {
 	labels := make([]string, 0, len(candidates))
@@ -526,7 +584,7 @@ func resolveScopeTagIDs(feedID uint, categoryID uint) (map[uint]bool, error) {
 
 // GetUnclassifiedTags returns tags that are NOT part of any abstract hierarchy.
 // These are active tags that do not appear as parent or child in any abstract relation.
-func GetUnclassifiedTags(category string, scopeFeedID uint, scopeCategoryID uint) ([]TagHierarchyNode, error) {
+func GetUnclassifiedTags(category string, scopeFeedID uint, scopeCategoryID uint, timeRange string) ([]TagHierarchyNode, error) {
 	// Collect all tag IDs involved in abstract relations
 	var relatedTagIDs []uint
 	database.DB.Model(&models.TopicTagRelation{}).
@@ -578,6 +636,13 @@ func GetUnclassifiedTags(category string, scopeFeedID uint, scopeCategoryID uint
 		return nil, fmt.Errorf("query unclassified tags: %w", err)
 	}
 
+	// Resolve active status based on time range
+	tagIDSet := make(map[uint]bool, len(tags))
+	for _, tag := range tags {
+		tagIDSet[tag.ID] = true
+	}
+	activeTagIDs := resolveActiveTagIDs(timeRange, tagIDSet)
+
 	nodes := make([]TagHierarchyNode, 0, len(tags))
 	for _, tag := range tags {
 		nodes = append(nodes, TagHierarchyNode{
@@ -587,6 +652,7 @@ func GetUnclassifiedTags(category string, scopeFeedID uint, scopeCategoryID uint
 			Category:  tag.Category,
 			Icon:      tag.Icon,
 			FeedCount: tag.FeedCount,
+			IsActive:  activeTagIDs[tag.ID],
 			Children:  []TagHierarchyNode{},
 		})
 	}

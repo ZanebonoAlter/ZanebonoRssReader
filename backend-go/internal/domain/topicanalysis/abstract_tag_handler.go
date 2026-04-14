@@ -9,11 +9,32 @@ import (
 )
 
 // GetTagHierarchyHandler returns the tag hierarchy tree.
-// GET /api/topic-tags/hierarchy?category=
+// GET /api/topic-tags/hierarchy?category=&feed_id=&category_id=&unclassified=&time_range=
 func GetTagHierarchyHandler(c *gin.Context) {
 	category := strings.TrimSpace(c.Query("category"))
+	unclassified := c.Query("unclassified") == "true"
+	timeRange := strings.TrimSpace(c.Query("time_range"))
 
-	nodes, err := GetTagHierarchy(category)
+	var scopeFeedID uint
+	var scopeCategoryID uint
+	if fid := c.Query("feed_id"); fid != "" {
+		if v, e := strconv.ParseUint(fid, 10, 32); e == nil {
+			scopeFeedID = uint(v)
+		}
+	}
+	if cid := c.Query("category_id"); cid != "" {
+		if v, e := strconv.ParseUint(cid, 10, 32); e == nil {
+			scopeCategoryID = uint(v)
+		}
+	}
+
+	var nodes []TagHierarchyNode
+	var err error
+	if unclassified {
+		nodes, err = GetUnclassifiedTags(category, scopeFeedID, scopeCategoryID, timeRange)
+	} else {
+		nodes, err = GetTagHierarchy(category, scopeFeedID, scopeCategoryID, timeRange)
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 		return
