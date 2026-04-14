@@ -275,6 +275,29 @@ func TestCandidateIDSetToSlice(t *testing.T) {
 	}
 }
 
+// --- Tests for ReassignTagParent validation ---
+
+func TestReassignTagParentZeroTagID(t *testing.T) {
+	err := ReassignTagParent(0, 5)
+	if err == nil {
+		t.Error("expected error for tag_id = 0")
+	}
+}
+
+func TestReassignTagParentZeroNewParentID(t *testing.T) {
+	err := ReassignTagParent(5, 0)
+	if err == nil {
+		t.Error("expected error for new_parent_id = 0")
+	}
+}
+
+func TestReassignTagParentSameIDs(t *testing.T) {
+	err := ReassignTagParent(5, 5)
+	if err == nil {
+		t.Error("expected error for tag_id == new_parent_id")
+	}
+}
+
 // --- Tests for buildAbstractTagPrompt with description ---
 
 func TestBuildAbstractTagPromptWithDescription(t *testing.T) {
