@@ -70,15 +70,22 @@ Plans:
 3. 用户可按单个关注标签筛选文章，文章列表支持按相关度排序（匹配标签数、embedding 距离加权）
 4. 无关注标签时首页回退到完整时间线，不显示空白
 
-**Plans:**
-- [ ] 02-01: [待规划]
+**Plans:** 2 plans in 2 waves
+
+Plans:
+- [ ] 02-01-PLAN.md — 后端: TopicTag 模型扩展 + 关注 CRUD API + GetArticles 关注标签筛选 (WATCH-01~03, FEED-01~03)
+- [ ] 02-02-PLAN.md — 前端: 关注标签 API + 心形图标 + 侧边栏分组 + 文章筛选 (WATCH-01, FEED-01~03)
 
 **Files affected:**
-- `backend-go/internal/domain/models/topic_tag.go` (新增 watched 字段)
-- `backend-go/internal/domain/topicextraction/handler.go` (关注 API)
-- `front/app/pages/` (首页关注推送)
-- `front/app/api/tags.ts` (前端 API)
-- `front/app/stores/` (关注标签 store)
+- `backend-go/internal/domain/models/topic_graph.go` (新增 is_watched/watched_at 字段)
+- `backend-go/internal/domain/topicanalysis/watched_tags_handler.go` (关注 API handlers)
+- `backend-go/internal/domain/topicanalysis/watched_tags_service.go` (关注业务逻辑)
+- `backend-go/internal/domain/articles/handler.go` (GetArticles 扩展)
+- `backend-go/internal/app/router.go` (路由注册)
+- `front/app/api/watchedTags.ts` (前端关注标签 API)
+- `front/app/features/shell/components/AppSidebarView.vue` (侧边栏关注分组)
+- `front/app/features/shell/components/FeedLayoutShell.vue` (首页筛选逻辑)
+- `front/app/features/topic-graph/components/TagHierarchy.vue` (心形关注图标)
 
 ---
 
