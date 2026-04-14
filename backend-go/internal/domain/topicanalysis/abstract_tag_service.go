@@ -563,28 +563,31 @@ func resolveActiveTagIDs(timeRange string, candidateIDs map[uint]bool) map[uint]
 			Pluck("DISTINCT article_topic_tags.topic_tag_id", &activeIDs)
 	case strings.HasPrefix(timeRange, "custom:"):
 		parts := strings.SplitN(timeRange, ":", 3)
-		if len(parts) == 3 {
-			startDate := parts[1]
-			endDate := parts[2]
-			// Validate YYYY-MM-DD format
-			if _, err := time.Parse("2006-01-02", startDate); err != nil {
-				for id := range candidateIDs {
-					result[id] = true
-				}
-				return result
+		if len(parts) != 3 {
+			for id := range candidateIDs {
+				result[id] = true
 			}
-			if _, err := time.Parse("2006-01-02", endDate); err != nil {
-				for id := range candidateIDs {
-					result[id] = true
-				}
-				return result
-			}
-			database.DB.Model(&models.ArticleTopicTag{}).
-				Joins("JOIN articles ON articles.id = article_topic_tags.article_id").
-				Where("articles.pub_date >= ? AND articles.pub_date <= ?", startDate+" 00:00:00", endDate+" 23:59:59").
-				Where("article_topic_tags.topic_tag_id IN ?", candidateIDSetToSlice(candidateIDs)).
-				Pluck("DISTINCT article_topic_tags.topic_tag_id", &activeIDs)
+			return result
 		}
+		startDate := parts[1]
+		endDate := parts[2]
+		if _, err := time.Parse("2006-01-02", startDate); err != nil {
+			for id := range candidateIDs {
+				result[id] = true
+			}
+			return result
+		}
+		if _, err := time.Parse("2006-01-02", endDate); err != nil {
+			for id := range candidateIDs {
+				result[id] = true
+			}
+			return result
+		}
+		database.DB.Model(&models.ArticleTopicTag{}).
+			Joins("JOIN articles ON articles.id = article_topic_tags.article_id").
+			Where("articles.pub_date >= ? AND articles.pub_date <= ?", startDate+" 00:00:00", endDate+" 23:59:59").
+			Where("article_topic_tags.topic_tag_id IN ?", candidateIDSetToSlice(candidateIDs)).
+			Pluck("DISTINCT article_topic_tags.topic_tag_id", &activeIDs)
 	default:
 		// Invalid value — treat as no filter
 		for id := range candidateIDs {
