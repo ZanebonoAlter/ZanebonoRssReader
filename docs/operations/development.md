@@ -18,6 +18,8 @@ go run cmd/server/main.go
 
 后端默认运行在 `http://localhost:5000`，首次启动会自动连接 PostgreSQL 数据库并执行迁移。
 
+开发时日志现在按级别分流：常规运行日志和 warning 走 `stdout`，error / fatal / panic 走 `stderr`。如果你在 PowerShell、Docker 或 systemd 里单独收集错误输出，可以直接利用这条分流。
+
 > 本地开发需要先启动 PostgreSQL 服务，推荐使用 Docker 启动：
 > ```bash
 > docker run -d --name rss-postgres -p 5432:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=rss_reader pgvector/pgvector:pg18-trixie
@@ -174,6 +176,7 @@ python test_firecrawl_integration.py
 - JSON 字段使用 `snake_case` struct tag
 - 导出符号使用 `PascalCase`，私有符号使用 `lowerCamelCase`
 - 错误包装使用 `fmt.Errorf("...: %w", err)`
+- 后端日志优先复用 `internal/platform/logging`，避免继续用裸 `log.Printf` + 文本前缀人工区分级别
 
 ## 目录结构约定
 

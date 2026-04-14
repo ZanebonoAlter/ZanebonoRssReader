@@ -4,7 +4,7 @@ milestone: v1.2
 milestone_name: milestone
 status: executing
 stopped_at: Phase 08 context gathered
-last_updated: "2026-04-14T07:33:45.378Z"
+last_updated: "2026-04-14T10:03:40.000Z"
 last_activity: 2026-04-14
 progress:
   total_phases: 8
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-04-12)
 Phase: 08
 Plan: Not started
 Status: Executing Phase 08
-Last activity: 2026-04-14
+Last activity: 2026-04-14 - Completed quick task 260414-ok6: 做后端 Go 日志管理，将 info 与 error 输出区分开，减少日志混杂
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -88,6 +88,7 @@ None yet.
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260414-ok6 | 做后端 Go 日志管理，将 info 与 error 输出区分开，减少日志混杂 | 2026-04-14 | 3b5ca38 | [260414-ok6-go-info-error](./quick/260414-ok6-go-info-error/) |
 | 260414-pg-alias | 修复 PostgreSQL 下 topic tag 别名 JSON 数组查询使用错误函数导致的 SQL 报错 | 2026-04-14 | pending | - |
 | 260413-p2t | 新增一个专门展示后端队列处理情况的 Tab，将现有 embedding 队列与新增的“标签合并后 embedding 重算队列”一起展示 | 2026-04-13 | 67997d8 | [260413-p2t-tab-embedding-embedding](./quick/260413-p2t-tab-embedding-embedding/) |
 | 260413-r4v | 实现标签自动合并调度器 | 2026-04-13 | 245370e | [260413-r4v-auto-tag-merge-scheduler](./quick/260413-r4v-auto-tag-merge-scheduler/) |

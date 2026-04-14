@@ -97,6 +97,7 @@ backend-go/
 
 - `config/`：读取 `configs/config.yaml`
 - `database/`：初始化 SQLite、建表、索引、字段补丁
+- `logging/`：轻量日志门面，负责把 info/warn 与 error/fatal/panic 分流到 stdout / stderr
 - `middleware/`：Gin 中间件，例如 CORS
 - `ws/`：WebSocket hub，给前端推送异步任务状态
 - `ai/`：AI 调用封装
