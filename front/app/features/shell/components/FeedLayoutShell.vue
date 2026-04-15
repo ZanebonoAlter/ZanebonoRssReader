@@ -12,6 +12,9 @@ import AISummariesList from '~/features/summaries/components/AISummariesListView
 import AISummaryDetail from '~/features/summaries/components/AISummaryDetailView.vue'
 import { SIDEBAR_DEFAULT_WIDTH, MAX_POLLING_TIME, REFRESH_POLLING_INTERVAL } from '~/utils/constants'
 import type { WatchedTag } from '~/api/watchedTags'
+import type { Article } from '~/types/article'
+import type { ArticleFilters } from '~/types/article'
+import type { AISummary } from '~/types/ai'
 
 const apiStore = useApiStore()
 const feedsStore = useFeedsStore()
@@ -38,9 +41,9 @@ const sidebarCollapsed = ref(false)
 const sidebarWidth = ref(SIDEBAR_DEFAULT_WIDTH)
 const selectedCategory = ref<string | null>(null)
 const selectedFeed = ref<string | null>(null)
-const selectedArticle = ref<any>(null)
+const selectedArticle = ref<Article | null>(null)
 const showAISummaries = ref(false)
-const selectedSummary = ref<any>(null)
+const selectedSummary = ref<AISummary | null>(null)
 
 const showAddFeedDialog = ref(false)
 const showAddCategoryDialog = ref(false)
@@ -93,7 +96,7 @@ async function fetchFeeds() {
 }
 
 function buildArticleFilters() {
-  const filters: any = {}
+	const filters: ArticleFilters = {}
   if (selectedCategory.value === 'watched-tags') {
     if (selectedWatchedTagId.value) {
       filters.watched_tag_ids = selectedWatchedTagId.value
