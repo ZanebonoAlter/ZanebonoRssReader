@@ -74,7 +74,9 @@ func ListWatchedTags(db *gorm.DB) ([]WatchedTagInfo, error) {
 	childSlugMap := make(map[uint][]string)
 	if len(watchedIDs) > 0 {
 		var relations []models.TopicTagRelation
-		db.Where("parent_id IN ?", watchedIDs).Find(&relations)
+		if err := db.Where("parent_id IN ?", watchedIDs).Find(&relations).Error; err != nil {
+			return nil, fmt.Errorf("query tag relations: %w", err)
+		}
 
 		// Collect unique child IDs
 		childIDSet := make(map[uint]bool)
@@ -92,7 +94,9 @@ func ListWatchedTags(db *gorm.DB) ([]WatchedTagInfo, error) {
 		}
 		if len(childIDs) > 0 {
 			var childTags []models.TopicTag
-			db.Where("id IN ?", childIDs).Select("id, slug").Find(&childTags)
+			if err := db.Where("id IN ?", childIDs).Select("id, slug").Find(&childTags).Error; err != nil {
+				return nil, fmt.Errorf("query child tag slugs: %w", err)
+			}
 			slugMap := make(map[uint]string)
 			for _, ct := range childTags {
 				slugMap[ct.ID] = ct.Slug
