@@ -184,6 +184,7 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 						return nil, err
 					}
 					go ensureTagEmbedding(es, existing.ID)
+					go backfillTagDescription(existing.ID, existing.Label, existing.Category, existing.Description, articleContext)
 					return existing, nil
 				}
 
@@ -205,6 +206,7 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 						fmt.Printf("[WARN] Failed to update aliases for tag %d: %v\n", matchedTag.ID, err)
 					}
 				}
+				go backfillTagDescription(matchedTag.ID, matchedTag.Label, matchedTag.Category, matchedTag.Description, articleContext)
 				return matchedTag, nil
 
 			case "ai_judgment":
@@ -233,13 +235,19 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 					fmt.Printf("[WARN] Abstract tag extraction failed for '%s', falling back to new tag creation: %v\n", tag.Label, abstractErr)
 					break
 				}
-				if delErr := topicanalysis.DeleteTagEmbedding(matchedTag.ID); delErr != nil {
-					fmt.Printf("[WARN] Failed to delete embedding for child tag %d: %v\n", matchedTag.ID, delErr)
+				for _, c := range validCandidates {
+					if c.Tag != nil {
+						if delErr := topicanalysis.DeleteTagEmbedding(c.Tag.ID); delErr != nil {
+							fmt.Printf("[WARN] Failed to delete embedding for child tag %d: %v\n", c.Tag.ID, delErr)
+						}
+					}
 				}
-				if validCandidates[0].Tag != nil {
-					return validCandidates[0].Tag, nil
+				newTag, childErr := createChildOfAbstract(ctx, es, tag, category, kind, source, articleContext, string(aliasesJSON), abstractTag)
+				if childErr != nil {
+					fmt.Printf("[WARN] Failed to create child of abstract %d: %v\n", abstractTag.ID, childErr)
+					break
 				}
-				return abstractTag, nil
+				return newTag, nil
 
 			case "low_similarity", "no_match":
 			}
@@ -270,6 +278,7 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 		if es != nil {
 			go ensureTagEmbedding(es, dbTag.ID)
 		}
+		go backfillTagDescription(dbTag.ID, dbTag.Label, dbTag.Category, dbTag.Description, articleContext)
 		return &dbTag, nil
 	}
 
@@ -327,9 +336,33 @@ func createChildOfAbstract(ctx context.Context, es *topicanalysis.EmbeddingServi
 		}
 	} else {
 		fmt.Printf("[INFO] Child tag '%s' (id=%d) linked to abstract '%s' (id=%d)\n", newTag.Label, newTag.ID, abstractParent.Label, abstractParent.ID)
+		var abstractSiblingCount int64
+		database.DB.Model(&models.TopicTagRelation{}).
+			Joins("JOIN topic_tags ON topic_tags.id = topic_tag_relations.child_id").
+			Where("topic_tag_relations.parent_id = ? AND topic_tag_relations.relation_type = ? AND topic_tags.source = ?",
+				abstractParent.ID, "abstract", "abstract").
+			Count(&abstractSiblingCount)
+		if abstractSiblingCount > 0 && es != nil {
+			go generateAndSaveEmbedding(es, &newTag)
+		}
+	}
+
+	if articleContext != "" {
+		go generateTagDescription(newTag.ID, tag.Label, category, articleContext)
+	} else if es != nil {
+		go generateAndSaveEmbedding(es, &newTag)
 	}
 
 	return &newTag, nil
+}
+
+// backfillTagDescription triggers async description generation only if the tag currently has no description.
+// Safe to call from any reuse path — skips silently if description already exists or context is empty.
+func backfillTagDescription(tagID uint, label, category, currentDesc, articleContext string) {
+	if currentDesc != "" || articleContext == "" {
+		return
+	}
+	go generateTagDescription(tagID, label, category, articleContext)
 }
 
 // generateTagDescription generates a description for a tag via LLM and updates the database.
@@ -347,15 +380,32 @@ Tag: %q
 Category: %s
 Context from article: %s
 
+Description requirements:
+- Must be in Chinese (中文)
+- Objective, factual statement — no subjective opinions or qualifiers
+- Must explain what the tag refers to, not just repeat the label
+- Keep under 500 characters
+- Examples of good descriptions:
+  * Tag "ChatGPT" → "OpenAI开发的大型语言模型聊天机器人，基于GPT架构，支持多轮对话和文本生成"
+  * Tag "苹果WWDC 2024" → "苹果公司于2024年6月举办的全球开发者大会，发布了Apple Intelligence等多项更新"
+  * Tag "Sam Altman" → "OpenAI首席执行官，曾多次参与AI安全与治理相关的公开讨论"
+
 Respond with JSON: {"description": "your answer"}`, label, category, articleContext)
 
 	req := airouter.ChatRequest{
 		Capability: airouter.CapabilityTopicTagging,
 		Messages: []airouter.Message{
-			{Role: "system", Content: "You are a tag taxonomy assistant. Respond only with valid JSON."},
+			{Role: "system", Content: "你是一个标签分类助手，只输出合法JSON。"},
 			{Role: "user", Content: prompt},
 		},
-		JSONMode:    true,
+		JSONMode: true,
+		JSONSchema: &airouter.JSONSchema{
+			Type: "object",
+			Properties: map[string]airouter.SchemaProperty{
+				"description": {Type: "string", Description: "标签的中文客观描述，不超过500字符"},
+			},
+			Required: []string{"description"},
+		},
 		Temperature: func() *float64 { f := 0.3; return &f }(),
 	}
 

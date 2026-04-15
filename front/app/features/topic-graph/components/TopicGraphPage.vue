@@ -276,8 +276,15 @@ function isDefaultVisibleTopic(topic: { is_low_quality?: boolean; is_abstract?: 
   return topic.is_abstract || !topic.is_low_quality
 }
 
-function sortTopicsByFrequency<T extends { score: number; quality_score?: number }>(topics: T[]) {
+function sortTopicsByFrequency<T extends { score: number; quality_score?: number; is_low_quality?: boolean }>(topics: T[]) {
   return [...topics].sort((left, right) => {
+    // 低质量标签排在底部
+    const leftLowQuality = left.is_low_quality ? 1 : 0
+    const rightLowQuality = right.is_low_quality ? 1 : 0
+    if (leftLowQuality !== rightLowQuality) {
+      return leftLowQuality - rightLowQuality
+    }
+
     const leftQuality = left.quality_score ?? left.score ?? 0
     const rightQuality = right.quality_score ?? right.score ?? 0
     if (rightQuality === leftQuality) {
@@ -295,11 +302,10 @@ function buildCategoryTopicState(category: TopicCategory, query: string, showAll
       : hotspotData.value?.keywords
   const sourceTopics = sortTopicsByFrequency(categoryTopics || buildFallbackTopics(category))
   const filteredTopics = filterTopics(sourceTopics, query || '')
-  const defaultTopics = filteredTopics.filter(isDefaultVisibleTopic)
-  const displayTopics = showAll ? filteredTopics : defaultTopics.slice(0, 8)
+  const displayTopics = showAll ? filteredTopics : filteredTopics.slice(0, 8)
 
   return {
-    topics: showAll ? filteredTopics : defaultTopics,
+    topics: filteredTopics,
     filteredTopics,
     displayTopics,
     hasMore: filteredTopics.length > displayTopics.length,
@@ -375,9 +381,16 @@ const hotspotCategories = computed(() => ([
 ]))
 const defaultGraphTopicSlugs = computed(() => {
   const slugs = new Set<string>()
+  const lowQualitySlugs = new Set<string>()
+
+  viewModel.value.topTopics.forEach((topic) => {
+    if (topic.is_low_quality && topic.slug) {
+      lowQualitySlugs.add(topic.slug)
+    }
+  })
 
   viewModel.value.graph.nodes.forEach((node) => {
-    if (node.kind === 'topic' && node.slug) {
+    if (node.kind === 'topic' && node.slug && !lowQualitySlugs.has(node.slug)) {
       slugs.add(node.slug)
     }
   })
@@ -932,11 +945,13 @@ function handleKeywordHighlight(keywordSlug: string | null) {
 
 function handleDigestSelect(digestId: string) {
   selectedDigestId.value = digestId
+  selectedPendingNode.value = false
 }
 
 function handlePreviewDigest(digestId: string) {
   selectedDigestId.value = digestId
   previewDigestId.value = digestId
+  selectedPendingNode.value = false
 }
 
 function closeDigestPreview() {
@@ -1289,6 +1304,7 @@ await loadGraph()
                     <TagHierarchy
                       :feed-id="selectedFilterFeedId"
                       :category-id="selectedFilterCategoryId"
+                      :anchor-date="selectedDate"
                       @select-tag="handleTagSelect"
                     />
                   </article>

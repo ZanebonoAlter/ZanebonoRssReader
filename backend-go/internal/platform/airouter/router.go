@@ -148,6 +148,7 @@ func (r *Router) Embed(ctx context.Context, req EmbeddingRequest, capability Cap
 				Success:      true,
 				IsFallback:   idx > 0,
 				LatencyMs:    latencyMs,
+				RequestMeta:  encodeMeta(req.Metadata),
 			})
 			return res, nil
 		}
@@ -168,6 +169,7 @@ func (r *Router) Embed(ctx context.Context, req EmbeddingRequest, capability Cap
 			LatencyMs:    latencyMs,
 			ErrorCode:    code,
 			ErrorMessage: callErr.Error(),
+			RequestMeta:  encodeMeta(req.Metadata),
 		})
 		attemptErrors = append(attemptErrors, fmt.Errorf("%s: %w", provider.Name, callErr))
 	}

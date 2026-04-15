@@ -8,8 +8,9 @@ import (
 type EmbeddingRequest struct {
 	Input          []string `json:"input"`
 	Model          string   `json:"model"`
-	EncodingFormat string   `json:"encoding_format,omitempty"` // optional: "float" or "base64"
-	Dimensions     int      `json:"dimensions,omitempty"`      // optional: reduce dimensions
+	EncodingFormat string   `json:"encoding_format,omitempty"`
+	Dimensions     int      `json:"dimensions,omitempty"`
+	Metadata       map[string]any
 }
 
 // EmbeddingResult represents the result of an embedding request

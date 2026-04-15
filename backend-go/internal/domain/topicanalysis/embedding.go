@@ -97,6 +97,11 @@ func (s *EmbeddingService) GenerateEmbedding(ctx context.Context, tag *models.To
 	// Use router with failover to generate embedding
 	req := airouter.EmbeddingRequest{
 		Input: []string{text},
+		Metadata: map[string]any{
+			"tag_id":    tag.ID,
+			"tag_label": tag.Label,
+			"category":  tag.Category,
+		},
 	}
 	result, err := s.router.Embed(ctx, req, airouter.CapabilityEmbedding)
 	if err != nil {
@@ -276,14 +281,13 @@ func (s *EmbeddingService) TagMatch(ctx context.Context, label, category string,
 		}, nil
 	}
 
-	// Middle band - per CONV-03, skip AI judgment and create new tag
-	// Candidates are still populated for logging/debugging purposes
+	// Middle band - candidates populated for abstract tag extraction by caller
 	return &TagMatchResult{
 		MatchType:    "ai_judgment",
 		ExistingTag:  best.Tag,
 		Similarity:   best.Similarity,
 		Candidates:   candidates[:min(3, len(candidates))],
-		ShouldCreate: true, // Degrades to creating new tag instead of AI judgment
+		ShouldCreate: false,
 	}, nil
 }
 

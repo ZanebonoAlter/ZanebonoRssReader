@@ -41,8 +41,8 @@ type TagHierarchyNode struct {
 // If LLM succeeds, creates an abstract tag + parent-child relations.
 // Returns the abstract tag on success, nil on failure (caller should fall back to creating a normal tag).
 func ExtractAbstractTag(ctx context.Context, candidates []TagCandidate, newLabel string, category string) (*models.TopicTag, error) {
-	if len(candidates) < 2 {
-		return nil, fmt.Errorf("need at least 2 candidates for abstract tag extraction, got %d", len(candidates))
+	if len(candidates) < 1 {
+		return nil, fmt.Errorf("need at least 1 candidate for abstract tag extraction, got %d", len(candidates))
 	}
 
 	// Call LLM to extract abstract name and description
@@ -216,6 +216,27 @@ func GetTagHierarchy(category string, scopeFeedID uint, scopeCategoryID uint, ti
 		tagIDSet[r.ParentID] = true
 		tagIDSet[r.ChildID] = true
 	}
+
+	activeTagIDs := resolveActiveTagIDs(timeRange, tagIDSet)
+
+	if timeRange != "" {
+		prunedRelations := make([]models.TopicTagRelation, 0, len(relations))
+		for _, r := range relations {
+			if activeTagIDs[r.ChildID] {
+				prunedRelations = append(prunedRelations, r)
+			}
+		}
+		relations = prunedRelations
+		if len(relations) == 0 {
+			return []TagHierarchyNode{}, nil
+		}
+		tagIDSet = make(map[uint]bool)
+		for _, r := range relations {
+			tagIDSet[r.ParentID] = true
+			tagIDSet[r.ChildID] = true
+		}
+	}
+
 	tagIDs := make([]uint, 0, len(tagIDSet))
 	for id := range tagIDSet {
 		tagIDs = append(tagIDs, id)
@@ -230,35 +251,19 @@ func GetTagHierarchy(category string, scopeFeedID uint, scopeCategoryID uint, ti
 		tagMap[tags[i].ID] = &tags[i]
 	}
 
-	// Calculate article count for each tag
-	articleCounts := make(map[uint]int)
-	for _, tagID := range tagIDs {
-		var count int64
-		database.DB.Model(&models.ArticleTopicTag{}).
-			Where("topic_tag_id = ?", tagID).
-			Count(&count)
-		articleCounts[tagID] = int(count)
-	}
+	articleCounts := countArticlesByTag(tagIDs, timeRange)
 
 	if category != "" {
-		// Only include trees where the root parent matches the category
 		filteredRelations := make([]models.TopicTagRelation, 0, len(relations))
-		parentHasCategory := make(map[uint]bool)
 		for _, r := range relations {
 			parent, ok := tagMap[r.ParentID]
 			if ok && parent.Category == category {
 				filteredRelations = append(filteredRelations, r)
-				parentHasCategory[r.ParentID] = true
 			}
-			// Also keep relations for children that are themselves parents in this category
 		}
 		relations = filteredRelations
 	}
 
-	// Resolve active tag IDs based on time range
-	activeTagIDs := resolveActiveTagIDs(timeRange, tagIDSet)
-
-	// Build parent → children map
 	childrenMap := make(map[uint][]TagHierarchyNode)
 	parentSet := make(map[uint]bool)
 	for _, r := range relations {
@@ -275,7 +280,7 @@ func GetTagHierarchy(category string, scopeFeedID uint, scopeCategoryID uint, ti
 			FeedCount:       child.FeedCount,
 			ArticleCount:    articleCounts[child.ID],
 			SimilarityScore: r.SimilarityScore,
-			IsActive:        activeTagIDs[child.ID],
+			IsActive:        timeRange != "" || activeTagIDs[child.ID],
 			QualityScore:    child.QualityScore,
 			IsLowQuality:    child.Source != "abstract" && child.QualityScore < 0.3,
 			Children:        []TagHierarchyNode{},
@@ -283,7 +288,6 @@ func GetTagHierarchy(category string, scopeFeedID uint, scopeCategoryID uint, ti
 		parentSet[r.ParentID] = true
 	}
 
-	// Find root parents (tags that are parents but not children in any relation in this set)
 	childSet := make(map[uint]bool)
 	for _, r := range relations {
 		childSet[r.ChildID] = true
@@ -295,9 +299,7 @@ func GetTagHierarchy(category string, scopeFeedID uint, scopeCategoryID uint, ti
 		if !ok {
 			continue
 		}
-		// A root is a parent that is not also a child (unless it's itself)
 		if childSet[parentID] && parentSet[parentID] {
-			// This is a nested parent — it's both a parent and a child
 			continue
 		}
 		children := buildHierarchy(childrenMap, parentID)
@@ -309,7 +311,7 @@ func GetTagHierarchy(category string, scopeFeedID uint, scopeCategoryID uint, ti
 			Icon:         parent.Icon,
 			FeedCount:    parent.FeedCount,
 			ArticleCount: articleCounts[parent.ID],
-			IsActive:     activeTagIDs[parent.ID],
+			IsActive:     timeRange != "" || activeTagIDs[parent.ID],
 			QualityScore: parent.QualityScore,
 			Children:     children,
 		})
@@ -531,8 +533,22 @@ func callLLMForAbstractName(ctx context.Context, candidates []TagCandidate, newL
 			{Role: "system", Content: "You are a tag taxonomy assistant. Respond only with valid JSON."},
 			{Role: "user", Content: prompt},
 		},
-		JSONMode:    true,
+		JSONMode: true,
+		JSONSchema: &airouter.JSONSchema{
+			Type: "object",
+			Properties: map[string]airouter.SchemaProperty{
+				"abstract_name": {Type: "string", Description: "抽象标签名称"},
+				"description":   {Type: "string", Description: "抽象标签的中文客观描述"},
+				"reason":        {Type: "string", Description: "归并理由"},
+			},
+			Required: []string{"abstract_name", "reason"},
+		},
 		Temperature: func() *float64 { f := 0.3; return &f }(),
+		Metadata: map[string]any{
+			"operation":       "abstract_tag_extraction",
+			"candidate_count": len(candidates),
+			"new_label":       newLabel,
+		},
 	}
 
 	result, err := router.Chat(ctx, req)
@@ -569,8 +585,10 @@ Respond with JSON:
 
 Rules:
 - abstract_name must be 1-160 characters
-- description must be 1-500 characters
+- description must be 1-500 characters, in Chinese (中文)
 - abstract_name should be in the original language of the tags
+- description must be an objective, factual summary of the common theme — no subjective opinions
+- description should explain the concept, not just restate the abstract_name
 - Prefer concise, meaningful names over vague descriptions`,
 		strings.Join(parts, "\n"))
 }
@@ -713,6 +731,55 @@ func candidateIDSetToSlice(m map[uint]bool) []uint {
 	return result
 }
 
+// countArticlesByTag returns article counts per tag ID, optionally filtered by time range.
+// Uses a single GROUP BY query instead of N+1.
+func countArticlesByTag(tagIDs []uint, timeRange string) map[uint]int {
+	result := make(map[uint]int)
+	if len(tagIDs) == 0 {
+		return result
+	}
+
+	query := database.DB.Model(&models.ArticleTopicTag{}).
+		Select("topic_tag_id, count(*) as cnt").
+		Where("topic_tag_id IN ?", tagIDs)
+
+	switch {
+	case timeRange == "1d":
+		since := time.Now().AddDate(0, 0, -1)
+		query = query.Joins("JOIN articles ON articles.id = article_topic_tags.article_id").
+			Where("articles.pub_date >= ?", since)
+	case timeRange == "7d":
+		since := time.Now().AddDate(0, 0, -7)
+		query = query.Joins("JOIN articles ON articles.id = article_topic_tags.article_id").
+			Where("articles.pub_date >= ?", since)
+	case timeRange == "30d":
+		since := time.Now().AddDate(0, 0, -30)
+		query = query.Joins("JOIN articles ON articles.id = article_topic_tags.article_id").
+			Where("articles.pub_date >= ?", since)
+	case strings.HasPrefix(timeRange, "custom:"):
+		parts := strings.SplitN(timeRange, ":", 3)
+		if len(parts) == 3 {
+			if _, err1 := time.Parse("2006-01-02", parts[1]); err1 == nil {
+				if _, err2 := time.Parse("2006-01-02", parts[2]); err2 == nil {
+					query = query.Joins("JOIN articles ON articles.id = article_topic_tags.article_id").
+						Where("articles.pub_date >= ? AND articles.pub_date <= ?", parts[1]+" 00:00:00", parts[2]+" 23:59:59")
+				}
+			}
+		}
+	}
+
+	var rows []struct {
+		TopicTagID uint `json:"topic_tag_id"`
+		Cnt        int  `json:"cnt"`
+	}
+	query.Group("topic_tag_id").Scan(&rows)
+
+	for _, row := range rows {
+		result[row.TopicTagID] = row.Cnt
+	}
+	return result
+}
+
 // candidateLabels returns a comma-separated list of candidate labels for logging.
 func candidateLabels(candidates []TagCandidate) string {
 	labels := make([]string, 0, len(candidates))
@@ -816,6 +883,16 @@ func GetUnclassifiedTags(category string, scopeFeedID uint, scopeCategoryID uint
 	}
 	activeTagIDs := resolveActiveTagIDs(timeRange, tagIDSet)
 
+	if timeRange != "" {
+		filteredTags := make([]models.TopicTag, 0, len(tags))
+		for _, tag := range tags {
+			if activeTagIDs[tag.ID] {
+				filteredTags = append(filteredTags, tag)
+			}
+		}
+		tags = filteredTags
+	}
+
 	nodes := make([]TagHierarchyNode, 0, len(tags))
 	for _, tag := range tags {
 		nodes = append(nodes, TagHierarchyNode{
@@ -825,7 +902,7 @@ func GetUnclassifiedTags(category string, scopeFeedID uint, scopeCategoryID uint
 			Category:     tag.Category,
 			Icon:         tag.Icon,
 			FeedCount:    tag.FeedCount,
-			IsActive:     activeTagIDs[tag.ID],
+			IsActive:     true,
 			QualityScore: tag.QualityScore,
 			IsLowQuality: tag.Source != "abstract" && tag.QualityScore < 0.3,
 			Children:     []TagHierarchyNode{},
@@ -867,9 +944,6 @@ func MatchAbstractTagHierarchy(ctx context.Context, abstractTagID uint) {
 			log.Printf("[WARN] MatchAbstractTagHierarchy: failed to link %d under %d: %v", abstractTagID, best.Tag.ID, err)
 			return
 		}
-		if delErr := DeleteTagEmbedding(abstractTagID); delErr != nil {
-			log.Printf("[WARN] MatchAbstractTagHierarchy: failed to delete embedding for child abstract %d: %v", abstractTagID, delErr)
-		}
 		log.Printf("[INFO] Abstract tag %d linked under existing abstract %d (similarity=%.4f)", abstractTagID, best.Tag.ID, best.Similarity)
 		return
 	}
@@ -884,9 +958,6 @@ func MatchAbstractTagHierarchy(ctx context.Context, abstractTagID uint) {
 			log.Printf("[WARN] MatchAbstractTagHierarchy: failed to link %d under %d: %v", childID, parentID, err)
 			return
 		}
-		if delErr := DeleteTagEmbedding(childID); delErr != nil {
-			log.Printf("[WARN] MatchAbstractTagHierarchy: failed to delete embedding for child abstract %d: %v", childID, delErr)
-		}
 		log.Printf("[INFO] Abstract hierarchy: %d is child of %d (AI judged, similarity=%.4f)", childID, parentID, best.Similarity)
 	}
 }
@@ -894,7 +965,7 @@ func MatchAbstractTagHierarchy(ctx context.Context, abstractTagID uint) {
 // linkAbstractParentChild creates a parent-child relation between two abstract tags.
 // Prevents a child from being adopted by multiple parents (one-parent rule).
 func linkAbstractParentChild(childID, parentID uint) error {
-	return database.DB.Transaction(func(tx *gorm.DB) error {
+	err := database.DB.Transaction(func(tx *gorm.DB) error {
 		wouldCycle, err := wouldCreateCycle(tx, parentID, childID)
 		if err != nil {
 			return fmt.Errorf("cycle check: %w", err)
@@ -926,6 +997,13 @@ func linkAbstractParentChild(childID, parentID uint) error {
 		}
 		return tx.Create(&relation).Error
 	})
+	if err != nil {
+		return err
+	}
+
+	go enqueueEmbeddingsForNormalChildren(parentID)
+
+	return nil
 }
 
 // aiJudgeAbstractHierarchy uses LLM to determine which abstract tag is broader (parent) vs more specific (child).
@@ -958,7 +1036,15 @@ Rules:
 			{Role: "system", Content: "You are a tag taxonomy assistant. Respond only with valid JSON."},
 			{Role: "user", Content: prompt},
 		},
-		JSONMode:    true,
+		JSONMode: true,
+		JSONSchema: &airouter.JSONSchema{
+			Type: "object",
+			Properties: map[string]airouter.SchemaProperty{
+				"parent": {Type: "string", Description: "更宽泛的标签标识，A 或 B"},
+				"reason": {Type: "string", Description: "判断理由"},
+			},
+			Required: []string{"parent", "reason"},
+		},
 		Temperature: func() *float64 { f := 0.3; return &f }(),
 	}
 
@@ -988,4 +1074,41 @@ func truncateStr(s string, maxLen int) string {
 		return s
 	}
 	return string(runes[:maxLen])
+}
+
+func enqueueEmbeddingsForNormalChildren(parentID uint) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[WARN] enqueueEmbeddingsForNormalChildren panic: %v", r)
+		}
+	}()
+
+	var normalChildIDs []uint
+	database.DB.Model(&models.TopicTag{}).
+		Joins("JOIN topic_tag_relations ON topic_tag_relations.child_id = topic_tags.id").
+		Where("topic_tag_relations.parent_id = ? AND topic_tag_relations.relation_type = ? AND topic_tags.source != ?",
+			parentID, "abstract", "abstract").
+		Pluck("topic_tags.id", &normalChildIDs)
+
+	if len(normalChildIDs) == 0 {
+		return
+	}
+
+	var existingEmbTagIDs []uint
+	database.DB.Model(&models.TopicTagEmbedding{}).
+		Where("topic_tag_id IN ?", normalChildIDs).
+		Pluck("topic_tag_id", &existingEmbTagIDs)
+	existingSet := make(map[uint]bool, len(existingEmbTagIDs))
+	for _, id := range existingEmbTagIDs {
+		existingSet[id] = true
+	}
+
+	qs := NewEmbeddingQueueService(nil)
+	for _, id := range normalChildIDs {
+		if !existingSet[id] {
+			if err := qs.Enqueue(id); err != nil {
+				log.Printf("[WARN] Failed to enqueue embedding for normal child %d under abstract %d: %v", id, parentID, err)
+			}
+		}
+	}
 }

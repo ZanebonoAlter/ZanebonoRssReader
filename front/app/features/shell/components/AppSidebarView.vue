@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { Icon } from '@iconify/vue'
 import { useRefreshPolling } from '~/features/feeds/composables/useRefreshPolling'
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from '~/utils/constants'
@@ -147,24 +147,24 @@ const navigateTo = useNuxtApp().$router ? (path: string) => useNuxtApp().$router
 .watched-tags-empty {
   padding: 0.5rem 0.5rem 0.75rem;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.03);
+  background: rgba(59, 107, 135, 0.06);
   margin: 0.25rem 0;
 }
 .watched-tags-go-btn {
   display: inline-block;
   margin-top: 0.35rem;
   padding: 0.2rem 0.6rem;
-  border: 1px solid rgba(240, 138, 75, 0.3);
+  border: 1px solid rgba(59, 107, 135, 0.25);
   border-radius: 999px;
   background: none;
-  color: rgba(255, 200, 180, 0.8);
+  color: var(--color-ink-600);
   font-size: 0.72rem;
   cursor: pointer;
   transition: all 0.12s ease;
 }
 .watched-tags-go-btn:hover {
-  background: rgba(240, 138, 75, 0.1);
-  border-color: rgba(240, 138, 75, 0.5);
+  background: rgba(59, 107, 135, 0.08);
+  border-color: rgba(59, 107, 135, 0.4);
 }
 </style>
 
@@ -204,8 +204,8 @@ const navigateTo = useNuxtApp().$router ? (path: string) => useNuxtApp().$router
 
       <div v-if="!sidebarCollapsed" class="watched-tags-section">
         <div class="watched-tags-header">
-          <Icon icon="mdi:heart-outline" width="14" class="text-white/40" />
-          <span class="text-xs text-white/40 font-medium">关注标签</span>
+          <Icon icon="mdi:heart-outline" width="14" class="text-ink-400" />
+          <span class="text-xs text-ink-400 font-medium">关注标签</span>
         </div>
 
         <template v-if="watchedTags.length > 0">
@@ -224,13 +224,13 @@ const navigateTo = useNuxtApp().$router ? (path: string) => useNuxtApp().$router
             :class="{ active: selectedCategory === 'watched-tags' && selectedWatchedTagId === String(tag.id) }"
             @click="emit('watchedTagClick', String(tag.id))"
           >
-            <Icon :icon="tag.isAbstract ? 'mdi:tag-multiple' : 'mdi:tag'" width="16" height="16" :class="tag.isAbstract ? 'text-indigo-400' : 'text-white/40'" />
+            <Icon :icon="tag.isAbstract ? 'mdi:tag-multiple' : 'mdi:tag'" width="16" height="16" :class="tag.isAbstract ? 'text-indigo-500' : 'text-ink-400'" />
             <span class="flex-1 text-left truncate">{{ tag.label }}</span>
           </button>
         </template>
 
         <div v-else class="watched-tags-empty">
-          <p class="text-xs text-white/35">关注标签可获取个性化文章推送</p>
+          <p class="text-xs text-ink-500">关注标签可获取个性化文章推送</p>
           <button class="watched-tags-go-btn" @click="navigateTo('/topics')">
             前往关注
           </button>

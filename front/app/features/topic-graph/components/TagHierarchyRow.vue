@@ -141,6 +141,9 @@ function handleToggleWatch(e: Event) {
         {{ node.label }}
       </button>
 
+      <!-- Low quality badge -->
+      <span v-if="node.isLowQuality" class="th-badge th-badge--low-quality">低质量</span>
+
       <!-- Feed count badge -->
       <span v-if="node.feedCount > 0" class="th-badge">{{ node.feedCount }}</span>
 
@@ -297,6 +300,11 @@ function handleToggleWatch(e: Event) {
   color: rgba(255, 255, 255, 0.5);
   font-size: 0.65rem;
   font-weight: 500;
+}
+.th-badge--low-quality {
+  background: rgba(240, 138, 75, 0.15);
+  color: rgba(255, 220, 200, 0.7);
+  border: 1px solid rgba(240, 138, 75, 0.2);
 }
 
 .th-detach-btn {

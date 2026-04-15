@@ -10,6 +10,7 @@ import type { TagHierarchyNode } from '~/types/topicTag'
 const props = defineProps<{
   feedId?: string | null
   categoryId?: string | null
+  anchorDate?: string
 }>()
 
 const emit = defineEmits<{
@@ -25,10 +26,19 @@ const error = ref<string | null>(null)
 const selectedCategory = ref<string>('')
 const showUnclassified = ref(false)
 const searchQuery = ref('')
-const timeRange = ref<string>('')
-const customStartDate = ref('')
-const customEndDate = ref('')
+const initialTimeRange = props.anchorDate ? `custom:${props.anchorDate}:${props.anchorDate}` : ''
+const timeRange = ref<string>(initialTimeRange)
+const customStartDate = ref(props.anchorDate ?? '')
+const customEndDate = ref(props.anchorDate ?? '')
 const showCustomRange = ref(false)
+
+watch(() => props.anchorDate, (newDate) => {
+  if (newDate) {
+    timeRange.value = `custom:${newDate}:${newDate}`
+    customStartDate.value = newDate
+    customEndDate.value = newDate
+  }
+})
 
 const watchedTagIds = ref<Set<number>>(new Set())
 
@@ -78,12 +88,23 @@ const filteredNodes = computed(() => {
   return filterTree(nodes.value)
 })
 
+function hasWatchedDescendant(node: TagHierarchyNode): boolean {
+  if (watchedTagIds.value.has(node.id)) return true
+  return node.children.some(c => hasWatchedDescendant(c))
+}
+
 function sortNodesByActivity(list: TagHierarchyNode[]): TagHierarchyNode[] {
   return [...list].sort((a, b) => {
+    const aWatched = hasWatchedDescendant(a)
+    const bWatched = hasWatchedDescendant(b)
+    if (aWatched !== bWatched) return aWatched ? -1 : 1
     const aActive = a.isActive !== false
     const bActive = b.isActive !== false
     if (aActive !== bActive) return aActive ? -1 : 1
-    return 0
+    const aScore = a.qualityScore ?? 0
+    const bScore = b.qualityScore ?? 0
+    if (bScore !== aScore) return bScore - aScore
+    return (b.feedCount ?? 0) - (a.feedCount ?? 0)
   }).map(node => ({
     ...node,
     children: sortNodesByActivity(node.children),
