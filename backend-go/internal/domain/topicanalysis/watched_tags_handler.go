@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 	"my-robot-backend/internal/platform/database"
 )
 
@@ -29,7 +30,11 @@ func WatchTagHandler(c *gin.Context) {
 
 	tag, err := WatchTag(database.DB, uint(tagID))
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "tag not found or is merged"})
+		if err == gorm.ErrRecordNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "tag not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		}
 		return
 	}
 
@@ -53,7 +58,11 @@ func UnwatchTagHandler(c *gin.Context) {
 
 	tag, err := UnwatchTag(database.DB, uint(tagID))
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "tag not found"})
+		if err == gorm.ErrRecordNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "tag not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		}
 		return
 	}
 
