@@ -11,6 +11,7 @@ import { useArticlePagination } from '~/features/articles/composables/useArticle
 import AISummariesList from '~/features/summaries/components/AISummariesListView.vue'
 import AISummaryDetail from '~/features/summaries/components/AISummaryDetailView.vue'
 import { SIDEBAR_DEFAULT_WIDTH, MAX_POLLING_TIME, REFRESH_POLLING_INTERVAL } from '~/utils/constants'
+import type { WatchedTag } from '~/api/watchedTags'
 
 const apiStore = useApiStore()
 const feedsStore = useFeedsStore()
@@ -55,6 +56,9 @@ const showRefreshMessage = ref(false)
 
 const globalUnreadCount = ref(0)
 
+const watchedTags = ref<WatchedTag[]>([])
+const selectedWatchedTagId = ref<string | null>(null)
+
 const editingCategory = computed(() =>
   editCategoryId.value ? feedsStore.categories.find(c => c.id === editCategoryId.value) : null
 )
@@ -66,6 +70,15 @@ async function fetchGlobalUnreadCount() {
   const response = await apiStore.fetchArticlesStats()
   if (response.success && response.data) {
     globalUnreadCount.value = (response.data as any).unread || 0
+  }
+}
+
+async function loadWatchedTags() {
+  const { useWatchedTagsApi } = await import('~/api/watchedTags')
+  const api = useWatchedTagsApi()
+  const res = await api.listWatchedTags()
+  if (res.success && res.data) {
+    watchedTags.value = res.data as WatchedTag[]
   }
 }
 
@@ -81,7 +94,15 @@ async function fetchFeeds() {
 
 function buildArticleFilters() {
   const filters: any = {}
-  if (selectedFeed.value) {
+  if (selectedCategory.value === 'watched-tags') {
+    if (selectedWatchedTagId.value) {
+      filters.watched_tag_ids = selectedWatchedTagId.value
+      filters.sort_by = 'date'
+    } else if (watchedTags.value.length > 0) {
+      filters.watched_tag_ids = watchedTags.value.map(t => t.id).join(',')
+      filters.sort_by = 'relevance'
+    }
+  } else if (selectedFeed.value) {
     filters.feed_id = parseInt(selectedFeed.value)
   } else if (selectedCategory.value === 'uncategorized') {
     filters.uncategorized = true
@@ -107,6 +128,7 @@ onMounted(async () => {
   await fetchFeeds()
   await loadArticles()
   await fetchGlobalUnreadCount()
+  await loadWatchedTags()
 })
 
 onUnmounted(() => {
@@ -174,6 +196,7 @@ const handleCategoryClick = async (categoryId: string) => {
   selectedFeed.value = null
   showAISummaries.value = false
   selectedSummary.value = null
+  selectedWatchedTagId.value = null
   startDate.value = ''
   endDate.value = ''
 
@@ -186,6 +209,7 @@ async function handleFeedClick(feedId: string) {
   selectedFeed.value = feedId
   showAISummaries.value = false
   selectedSummary.value = null
+  selectedWatchedTagId.value = null
   startDate.value = ''
   endDate.value = ''
 
@@ -216,6 +240,7 @@ async function handleFavoritesClick() {
   selectedFeed.value = null
   showAISummaries.value = false
   selectedSummary.value = null
+  selectedWatchedTagId.value = null
   startDate.value = ''
   endDate.value = ''
 
@@ -227,6 +252,7 @@ async function handleAllArticlesClick() {
   selectedFeed.value = null
   showAISummaries.value = false
   selectedSummary.value = null
+  selectedWatchedTagId.value = null
   startDate.value = ''
   endDate.value = ''
 
@@ -254,7 +280,32 @@ function handleTopicGraphClick() {
   selectedFeed.value = null
   showAISummaries.value = false
   selectedSummary.value = null
+  selectedWatchedTagId.value = null
   navigateTo('/topics')
+}
+
+async function handleWatchedTagsClick() {
+  selectedCategory.value = 'watched-tags'
+  selectedFeed.value = null
+  showAISummaries.value = false
+  selectedSummary.value = null
+  selectedWatchedTagId.value = null
+  startDate.value = ''
+  endDate.value = ''
+  await loadWatchedTags()
+  await loadArticles()
+}
+
+async function handleWatchedTagClick(tagId: string) {
+  selectedCategory.value = 'watched-tags'
+  selectedFeed.value = null
+  showAISummaries.value = false
+  selectedSummary.value = null
+  selectedWatchedTagId.value = tagId
+  startDate.value = ''
+  endDate.value = ''
+  await loadWatchedTags()
+  await loadArticles()
 }
 
 function handleSummarySelect(summary: any) {
@@ -446,6 +497,8 @@ import '~/components/FeedLayout.css'
         :selected-category="selectedCategory"
         :selected-feed="selectedFeed"
         :global-unread-count="globalUnreadCount"
+        :watched-tags="watchedTags"
+        :selected-watched-tag-id="selectedWatchedTagId"
         @toggle-sidebar="toggleSidebar"
         @category-click="handleCategoryClick"
         @feed-click="handleFeedClick"
@@ -457,6 +510,8 @@ import '~/components/FeedLayout.css'
         @edit-category="handleEditCategory"
         @edit-feed="handleEditFeed"
         @delete-category="handleDeleteCategory"
+        @watched-tags-click="handleWatchedTagsClick"
+        @watched-tag-click="handleWatchedTagClick"
       />
 
 <!-- 文章列表 -->
