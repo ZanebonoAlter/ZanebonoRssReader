@@ -54,6 +54,7 @@ type TopicTag struct {
 	MergedIntoID *uint      `gorm:"index" json:"merged_into_id,omitempty"`                                               // points to target tag when merged
 	IsWatched    bool       `gorm:"default:false" json:"is_watched"`                                                     // user-watched tag for feed filtering
 	WatchedAt    *time.Time `json:"watched_at,omitempty"`                                                                // when the tag was watched
+	QualityScore float64    `gorm:"default:0" json:"quality_score"`
 	CreatedAt    time.Time  `json:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`
 

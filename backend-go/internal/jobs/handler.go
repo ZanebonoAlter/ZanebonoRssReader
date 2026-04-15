@@ -107,6 +107,14 @@ func schedulerDescriptors() []schedulerDescriptor {
 				return runtimeinfo.AutoTagMergeSchedulerInterface
 			},
 		},
+		{
+			Name:        "tag_quality_score",
+			DisplayName: "Tag Quality Score",
+			Description: "Recompute persistent quality scores for topic tags",
+			Get: func() interface{} {
+				return runtimeinfo.TagQualityScoreSchedulerInterface
+			},
+		},
 	}
 }
 

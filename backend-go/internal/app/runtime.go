@@ -24,6 +24,7 @@ type Runtime struct {
 	Digest                 *digest.DigestScheduler
 	BlockedArticleRecovery *jobs.BlockedArticleRecoveryScheduler
 	AutoTagMerge           *jobs.AutoTagMergeScheduler
+	TagQualityScore        *jobs.TagQualityScoreScheduler
 }
 
 func StartRuntime() *Runtime {
@@ -111,6 +112,13 @@ func StartRuntime() *Runtime {
 		logging.Infoln("Auto tag merge scheduler started successfully")
 	}
 
+	runtime.TagQualityScore = jobs.NewTagQualityScoreScheduler(3600)
+	if err := runtime.TagQualityScore.Start(); err != nil {
+		logging.Warnf("Failed to start tag quality score scheduler: %v", err)
+	} else {
+		logging.Infoln("Tag quality score scheduler started successfully")
+	}
+
 	runtimeinfo.AutoRefreshSchedulerInterface = runtime.AutoRefresh
 	runtimeinfo.AutoSummarySchedulerInterface = runtime.AutoSummary
 	runtimeinfo.PreferenceUpdateSchedulerInterface = runtime.PreferenceUpdate
@@ -118,6 +126,7 @@ func StartRuntime() *Runtime {
 	runtimeinfo.FirecrawlSchedulerInterface = runtime.Firecrawl
 	runtimeinfo.DigestSchedulerInterface = runtime.Digest
 	runtimeinfo.AutoTagMergeSchedulerInterface = runtime.AutoTagMerge
+	runtimeinfo.TagQualityScoreSchedulerInterface = runtime.TagQualityScore
 
 	return runtime
 }
@@ -179,6 +188,11 @@ func SetupGracefulShutdown(runtime *Runtime) {
 			if runtime.AutoTagMerge != nil {
 				logging.Infoln("Stopping auto tag merge scheduler...")
 				runtime.AutoTagMerge.Stop()
+			}
+
+			if runtime.TagQualityScore != nil {
+				logging.Infoln("Stopping tag quality score scheduler...")
+				runtime.TagQualityScore.Stop()
 			}
 
 			close(done)

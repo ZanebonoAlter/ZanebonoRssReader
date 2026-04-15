@@ -7,3 +7,4 @@ var AISummarySchedulerInterface interface{}
 var FirecrawlSchedulerInterface interface{}
 var DigestSchedulerInterface interface{}
 var AutoTagMergeSchedulerInterface interface{}
+var TagQualityScoreSchedulerInterface interface{}
