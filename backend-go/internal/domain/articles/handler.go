@@ -1,6 +1,7 @@
 package articles
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -246,7 +247,9 @@ func parseAndExpandWatchedTagIDs(raw string) ([]uint, []uint, error) {
 
 	// Find child tags of abstract watched tags (parents in topic_tag_relations)
 	var relations []models.TopicTagRelation
-	database.DB.Where("parent_id IN ?", ids).Find(&relations)
+	if err := database.DB.Where("parent_id IN ?", ids).Find(&relations).Error; err != nil {
+		return nil, nil, fmt.Errorf("query tag relations for expansion: %w", err)
+	}
 
 	childIDs := make([]uint, 0)
 	for _, rel := range relations {

@@ -157,7 +157,9 @@ func GetWatchedTagIDsExpanded(db *gorm.DB) ([]uint, []uint, error) {
 
 	// Find child IDs for abstract watched tags
 	var relations []models.TopicTagRelation
-	db.Where("parent_id IN ?", watchedIDs).Find(&relations)
+	if err := db.Where("parent_id IN ?", watchedIDs).Find(&relations).Error; err != nil {
+		return nil, nil, fmt.Errorf("query tag relations for expansion: %w", err)
+	}
 
 	childTagIDs := make([]uint, 0)
 	for _, rel := range relations {
