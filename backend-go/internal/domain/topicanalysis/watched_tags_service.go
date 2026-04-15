@@ -1,6 +1,7 @@
 package topicanalysis
 
 import (
+	"fmt"
 	"time"
 
 	"gorm.io/gorm"
@@ -26,7 +27,7 @@ func WatchTag(db *gorm.DB, tagID uint) (*models.TopicTag, error) {
 		return nil, err
 	}
 	if tag.Status == "merged" {
-		return nil, gorm.ErrRecordNotFound
+		return nil, fmt.Errorf("tag %d is merged and cannot be watched", tagID)
 	}
 
 	now := time.Now()
