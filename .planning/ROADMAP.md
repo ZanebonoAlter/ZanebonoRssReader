@@ -73,8 +73,8 @@ Plans:
 **Plans:** 2 plans in 2 waves
 
 Plans:
-- [ ] 02-01-PLAN.md — 后端: TopicTag 模型扩展 + 关注 CRUD API + GetArticles 关注标签筛选 (WATCH-01~03, FEED-01~03)
-- [ ] 02-02-PLAN.md — 前端: 关注标签 API + 心形图标 + 侧边栏分组 + 文章筛选 (WATCH-01, FEED-01~03)
+- [x] 02-01-PLAN.md — 后端: TopicTag 模型扩展 + 关注 CRUD API + GetArticles 关注标签筛选 (WATCH-01~03, FEED-01~03)
+- [x] 02-02-PLAN.md — 前端: 关注标签 API + 心形图标 + 侧边栏分组 + 文章筛选 (WATCH-01, FEED-01~03)
 
 **Files affected:**
 - `backend-go/internal/domain/models/topic_graph.go` (新增 is_watched/watched_at 字段)
