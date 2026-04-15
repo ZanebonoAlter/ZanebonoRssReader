@@ -28,7 +28,12 @@ export interface TopicTag {
   kind?: TopicKind
   icon?: string
   aliases?: string[]
+  description?: string
   score: number
+  quality_score?: number
+  is_low_quality?: boolean
+  is_abstract?: boolean
+  child_slugs?: string[]
 }
 
 export interface AggregatedTopicTag {

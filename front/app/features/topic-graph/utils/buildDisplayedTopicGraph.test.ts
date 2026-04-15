@@ -5,10 +5,10 @@ import type { TopicGraphSceneEdge, TopicGraphSceneNode } from './buildTopicGraph
 
 function createGraph() {
   const nodes: TopicGraphSceneNode[] = [
-    { id: 'topic-a', label: 'Topic A', slug: 'topic-a', kind: 'topic', category: 'keyword', weight: 4, article_count: 2, size: 16, accent: '#111', isAbstract: false },
-    { id: 'topic-b', label: 'Topic B', slug: 'topic-b', kind: 'topic', category: 'event', weight: 3.8, article_count: 2, size: 15, accent: '#222', isAbstract: false },
-    { id: 'topic-c', label: 'Topic C', slug: 'topic-c', kind: 'topic', category: 'person', weight: 3.5, article_count: 1, size: 14, accent: '#333', isAbstract: false },
-    { id: 'feed-1', label: 'Feed 1', kind: 'feed', weight: 1.2, size: 8, accent: '#444', color: '#444', feed_name: 'Feed 1', category_name: 'News', isAbstract: false },
+    { id: 'topic-a', label: 'Topic A', slug: 'topic-a', kind: 'topic', category: 'keyword', weight: 4, article_count: 2, size: 16, opacity: 0.9, accent: '#111', isAbstract: false },
+    { id: 'topic-b', label: 'Topic B', slug: 'topic-b', kind: 'topic', category: 'event', weight: 3.8, article_count: 2, size: 15, opacity: 0.82, accent: '#222', isAbstract: false },
+    { id: 'topic-c', label: 'Topic C', slug: 'topic-c', kind: 'topic', category: 'person', weight: 3.5, article_count: 1, size: 14, opacity: 0.76, accent: '#333', isAbstract: false },
+    { id: 'feed-1', label: 'Feed 1', kind: 'feed', weight: 1.2, size: 8, opacity: 0.98, accent: '#444', color: '#444', feed_name: 'Feed 1', category_name: 'News', isAbstract: false },
   ]
 
   const edges: TopicGraphSceneEdge[] = [

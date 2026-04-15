@@ -253,8 +253,8 @@ function buildNodeObject(node: TopicGraphSceneNode) {
     radius *= 0.6 // Peripheral nodes shrink
   }
 
-// Opacity: uniform for all nodes
-  const opacity = 0.98
+// Opacity: quality-aware for topic nodes
+  const opacity = node.opacity ?? 0.98
 
   const sphere = new THREE.Mesh(
     new THREE.SphereGeometry(radius, 24, 24),

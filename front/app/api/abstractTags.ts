@@ -9,8 +9,11 @@ interface RawTagHierarchyNode {
   category: string
   icon: string
   feed_count: number
+  article_count: number
   similarity_score?: number
   is_active: boolean
+  quality_score?: number
+  is_low_quality?: boolean
   children: RawTagHierarchyNode[]
 }
 
@@ -27,8 +30,11 @@ function mapNode(raw: RawTagHierarchyNode): TagHierarchyNode {
     category: raw.category,
     icon: raw.icon,
     feedCount: raw.feed_count,
+    articleCount: raw.article_count || 0,
     similarityScore: raw.similarity_score,
     isActive: raw.is_active,
+    qualityScore: raw.quality_score,
+    isLowQuality: raw.is_low_quality,
     children: raw.children ? raw.children.map(mapNode) : [],
   }
 }

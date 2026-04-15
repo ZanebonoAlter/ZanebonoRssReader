@@ -208,8 +208,40 @@ function filterTopics(topics: any[], query: string) {
   )
 }
 
-function sortTopicsByFrequency<T extends { score: number }>(topics: T[]) {
-  return [...topics].sort((left, right) => right.score - left.score)
+function isDefaultVisibleTopic(topic: { is_low_quality?: boolean; is_abstract?: boolean }) {
+  return topic.is_abstract || !topic.is_low_quality
+}
+
+function sortTopicsByFrequency<T extends { score: number; quality_score?: number }>(topics: T[]) {
+  return [...topics].sort((left, right) => {
+    const leftQuality = left.quality_score ?? left.score ?? 0
+    const rightQuality = right.quality_score ?? right.score ?? 0
+    if (rightQuality === leftQuality) {
+      return (right.score ?? 0) - (left.score ?? 0)
+    }
+    return rightQuality - leftQuality
+  })
+}
+
+function buildCategoryTopicState(category: TopicCategory, query: string, showAll: boolean) {
+  const categoryTopics = category === 'event'
+    ? hotspotData.value?.events
+    : category === 'person'
+      ? hotspotData.value?.people
+      : hotspotData.value?.keywords
+  const sourceTopics = sortTopicsByFrequency(categoryTopics || buildFallbackTopics(category))
+  const filteredTopics = filterTopics(sourceTopics, query || '')
+  const defaultTopics = filteredTopics.filter(isDefaultVisibleTopic)
+  const displayTopics = showAll ? filteredTopics : defaultTopics.slice(0, 8)
+
+  return {
+    topics: showAll ? filteredTopics : defaultTopics,
+    filteredTopics,
+    displayTopics,
+    hasMore: filteredTopics.length > displayTopics.length,
+    hiddenLowQualityCount: filteredTopics.filter(topic => topic.is_low_quality && !topic.is_abstract).length,
+    showAll,
+  }
 }
 
 function buildFallbackTopics(category: TopicCategory) {
@@ -260,39 +292,21 @@ const hotspotCategories = computed(() => ([
     label: '事件',
     icon: 'mdi:calendar-alert-outline',
     headerClass: 'topic-category-header--event',
-    topics: sortTopicsByFrequency(hotspotData.value?.events || buildFallbackTopics('event')),
-    filteredTopics: filterTopics(sortTopicsByFrequency(hotspotData.value?.events || buildFallbackTopics('event')), hotspotSearchQueries.value.event || ''),
-    displayTopics: hotspotShowAll.value.event 
-      ? filterTopics(sortTopicsByFrequency(hotspotData.value?.events || buildFallbackTopics('event')), hotspotSearchQueries.value.event || '')
-      : filterTopics(sortTopicsByFrequency(hotspotData.value?.events || buildFallbackTopics('event')), hotspotSearchQueries.value.event || '').slice(0, 8),
-    hasMore: filterTopics(sortTopicsByFrequency(hotspotData.value?.events || buildFallbackTopics('event')), hotspotSearchQueries.value.event || '').length > 8,
-    showAll: hotspotShowAll.value.event,
+    ...buildCategoryTopicState('event', hotspotSearchQueries.value.event || '', !!hotspotShowAll.value.event),
   },
   {
     key: 'person',
     label: '人物',
     icon: 'mdi:account-voice-outline',
     headerClass: 'topic-category-header--person',
-    topics: sortTopicsByFrequency(hotspotData.value?.people || buildFallbackTopics('person')),
-    filteredTopics: filterTopics(sortTopicsByFrequency(hotspotData.value?.people || buildFallbackTopics('person')), hotspotSearchQueries.value.person || ''),
-    displayTopics: hotspotShowAll.value.person
-      ? filterTopics(sortTopicsByFrequency(hotspotData.value?.people || buildFallbackTopics('person')), hotspotSearchQueries.value.person || '')
-      : filterTopics(sortTopicsByFrequency(hotspotData.value?.people || buildFallbackTopics('person')), hotspotSearchQueries.value.person || '').slice(0, 8),
-    hasMore: filterTopics(sortTopicsByFrequency(hotspotData.value?.people || buildFallbackTopics('person')), hotspotSearchQueries.value.person || '').length > 8,
-    showAll: hotspotShowAll.value.person,
+    ...buildCategoryTopicState('person', hotspotSearchQueries.value.person || '', !!hotspotShowAll.value.person),
   },
   {
     key: 'keyword',
     label: '关键词',
     icon: 'mdi:key-variant',
     headerClass: 'topic-category-header--keyword',
-    topics: sortTopicsByFrequency(hotspotData.value?.keywords || buildFallbackTopics('keyword')),
-    filteredTopics: filterTopics(sortTopicsByFrequency(hotspotData.value?.keywords || buildFallbackTopics('keyword')), hotspotSearchQueries.value.keyword || ''),
-    displayTopics: hotspotShowAll.value.keyword
-      ? filterTopics(sortTopicsByFrequency(hotspotData.value?.keywords || buildFallbackTopics('keyword')), hotspotSearchQueries.value.keyword || '')
-      : filterTopics(sortTopicsByFrequency(hotspotData.value?.keywords || buildFallbackTopics('keyword')), hotspotSearchQueries.value.keyword || '').slice(0, 8),
-    hasMore: filterTopics(sortTopicsByFrequency(hotspotData.value?.keywords || buildFallbackTopics('keyword')), hotspotSearchQueries.value.keyword || '').length > 8,
-    showAll: hotspotShowAll.value.keyword,
+    ...buildCategoryTopicState('keyword', hotspotSearchQueries.value.keyword || '', !!hotspotShowAll.value.keyword),
   },
 ]))
 const defaultGraphTopicSlugs = computed(() => {
@@ -996,6 +1010,8 @@ await loadGraph()
                                 class="topic-graph-toggle"
                                 :class="{ 'topic-graph-toggle--active': isTopicShownInGraph(topic.slug) }"
                                 :aria-label="isTopicShownInGraph(topic.slug) ? `从拓扑图隐藏 ${topic.label}` : `在拓扑图展示 ${topic.label}`"
+                                <span v-if="topic.is_abstract" class="ml-1 text-[10px] text-amber-400/60">({{ topic.child_slugs?.length ?? 0 }})</span>
+                                <span v-else-if="topic.is_low_quality" class="ml-1 text-[10px] text-white/35">低质量</span>
                                 :title="isTopicShownInGraph(topic.slug) ? '从拓扑图隐藏' : '在拓扑图展示'"
                                 @click.stop="toggleTopicGraphVisibility(topic.slug)"
                               >
@@ -1009,7 +1025,7 @@ await loadGraph()
                             @click="toggleShowAll(category.key)"
                           >
                             <Icon :icon="category.showAll ? 'mdi:chevron-up' : 'mdi:chevron-down'" width="16" />
-                            {{ category.showAll ? '收起' : `显示全部 (${category.filteredTopics.length})` }}
+                            {{ category.showAll ? '恢复默认筛选' : `显示全部标签 (${category.filteredTopics.length})` }}
                           </button>
                         </div>
 
@@ -1055,6 +1071,8 @@ await loadGraph()
                             :class="{ 'topic-badge-toggle--active': isTopicShownInGraph(topic.slug) }"
                             :aria-label="isTopicShownInGraph(topic.slug) ? `从拓扑图隐藏 ${topic.label}` : `在拓扑图展示 ${topic.label}`"
                             :title="isTopicShownInGraph(topic.slug) ? '从拓扑图隐藏' : '在拓扑图展示'"
+                            <span v-if="topic.is_abstract" class="ml-1 text-[10px] text-amber-400/60">({{ topic.child_slugs?.length ?? 0 }})</span>
+                            <span v-else-if="topic.is_low_quality" class="ml-1 text-[10px] text-white/35">低质量</span>
                             @click.stop="toggleTopicGraphVisibility(topic.slug)"
                           >
                             <Icon :icon="isTopicShownInGraph(topic.slug) ? 'mdi:eye-outline' : 'mdi:eye-off-outline'" width="14" />

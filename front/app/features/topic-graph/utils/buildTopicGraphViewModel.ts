@@ -3,6 +3,7 @@ import { normalizeTopicCategory } from './normalizeTopicCategory'
 
 export interface TopicGraphSceneNode extends GraphNode {
   size: number
+  opacity: number
   accent: string
   isAbstract: boolean
   x?: number
@@ -49,18 +50,29 @@ const TOPIC_CATEGORY_ACCENTS: Record<TopicCategory, string> = {
 }
 
 export function buildTopicGraphViewModel(payload: TopicGraphPayload): TopicGraphViewModel {
-  const topTopics = [...payload.top_topics].sort((left, right) => right.score - left.score)
+  const topTopics = [...payload.top_topics].sort((left, right) => {
+    const rightQuality = right.quality_score ?? right.score ?? 0
+    const leftQuality = left.quality_score ?? left.score ?? 0
+    if (rightQuality === leftQuality) {
+      return (right.score ?? 0) - (left.score ?? 0)
+    }
+    return rightQuality - leftQuality
+  })
   const topicCategoryBySlug = new Map(topTopics.map(topic => [topic.slug, normalizeTopicCategory(topic.category, topic.kind)] as const))
   const topicCategoryByLabel = new Map(topTopics.map(topic => [topic.label, normalizeTopicCategory(topic.category, topic.kind)] as const))
+  const topicQualityBySlug = new Map(topTopics.map(topic => [topic.slug, topic.quality_score] as const))
+  const topicQualityByLabel = new Map(topTopics.map(topic => [topic.label, topic.quality_score] as const))
   const nodes = payload.nodes.map((node) => {
     const normalizedNode = {
       ...node,
       category: resolveTopicCategory(node, topicCategoryBySlug, topicCategoryByLabel),
     }
+    const resolvedQuality = resolveNodeQuality(normalizedNode, topicQualityBySlug, topicQualityByLabel)
 
     return {
       ...normalizedNode,
-      size: buildNodeSize(normalizedNode),
+      size: buildNodeSize(normalizedNode, resolvedQuality),
+      opacity: buildNodeOpacity(normalizedNode, resolvedQuality),
       accent: resolveNodeAccent(normalizedNode),
       isAbstract: normalizedNode.is_abstract ?? false,
     }
@@ -139,9 +151,20 @@ export function buildTopicGraphViewModel(payload: TopicGraphPayload): TopicGraph
   }
 }
 
-function buildNodeSize(node: GraphNode) {
+function buildNodeSize(node: GraphNode, qualityScore?: number) {
   const base = node.kind === 'feed' ? 5 : 8
+  if (node.kind === 'topic' && qualityScore !== undefined) {
+    return Math.max(base - 2, Math.round(base + qualityScore * 7))
+  }
   return Math.max(base, Math.round(base + node.weight * 2.2))
+}
+
+function buildNodeOpacity(node: GraphNode, qualityScore?: number) {
+  if (node.kind === 'topic' && qualityScore !== undefined) {
+    return Math.max(0.35, Math.min(0.98, 0.35 + qualityScore * 0.63))
+  }
+
+  return 0.98
 }
 
 function resolveNodeAccent(node: GraphNode) {
@@ -169,4 +192,14 @@ function resolveTopicCategory(
   }
 
   return categoryByLabel.get(node.label)
+}
+
+function resolveNodeQuality(
+  node: GraphNode,
+  qualityBySlug: Map<string, number | undefined>,
+  qualityByLabel: Map<string, number | undefined>,
+) {
+  if (node.kind !== 'topic') return undefined
+  if (node.slug && qualityBySlug.has(node.slug)) return qualityBySlug.get(node.slug)
+  return qualityByLabel.get(node.label)
 }

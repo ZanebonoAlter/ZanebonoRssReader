@@ -5,8 +5,11 @@ export interface TagHierarchyNode {
   category: string
   icon: string
   feedCount: number
+  articleCount: number
   similarityScore?: number
   isActive: boolean
+  qualityScore?: number
+  isLowQuality?: boolean
   children: TagHierarchyNode[]
 }
 
