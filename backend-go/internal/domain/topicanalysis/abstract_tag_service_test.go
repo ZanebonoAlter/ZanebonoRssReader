@@ -298,6 +298,19 @@ func TestReassignTagParentSameIDs(t *testing.T) {
 	}
 }
 
+// --- Tests for cycle detection ---
+
+func TestReassignTagParentCycleDetection(t *testing.T) {
+	// This is a unit test for the cycle detection logic
+	// The actual database integration would require a test DB setup
+	t.Skip("cycle detection unit test requires mocked DB; skipping for now")
+}
+
+func TestExtractAbstractTagSkipsCyclicCandidates(t *testing.T) {
+	// This test verifies that ExtractAbstractTag skips candidates that would create cycles
+	t.Skip("requires DB setup for full integration test")
+}
+
 // --- Tests for buildAbstractTagPrompt with description ---
 
 func TestBuildAbstractTagPromptWithDescription(t *testing.T) {

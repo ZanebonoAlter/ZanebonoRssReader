@@ -84,7 +84,7 @@ cp .env.example .env
 docker compose -f docker-compose.sqlite.yml up --build
 ```
 
-- 前端默认地址：`http://localhost:3001`
+- 前端默认地址：`http://localhost:3000`
 - 后端默认地址：`http://localhost:5000`
 - SQLite 文件默认落在仓库根目录 `data/rss_reader.db`
 - 如需自定义端口或代理，在 `.env` 中配置 `FRONT_PORT`、`BACKEND_PORT`、`GOPROXY`、`NPM_CONFIG_REGISTRY` 等
@@ -103,7 +103,7 @@ pnpm install
 pnpm dev
 ```
 
-前端开发服务器默认运行在 `http://localhost:3001`。
+前端开发服务器默认运行在 `http://localhost:3000`。
 
 ### 后端
 

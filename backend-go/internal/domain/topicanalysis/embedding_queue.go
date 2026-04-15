@@ -38,9 +38,8 @@ func NewEmbeddingQueueService(logger *zap.Logger) *EmbeddingQueueService {
 
 // Enqueue creates a new embedding queue task for the given tag.
 // Skips if there is already a pending/processing task for the same tag,
-// or if the tag already has an embedding.
+// or if the tag already has an embedding with a matching text hash.
 func (s *EmbeddingQueueService) Enqueue(tagID uint) error {
-	// Check for existing pending/processing task
 	var activeCount int64
 	err := s.db.Model(&models.EmbeddingQueue{}).
 		Where("tag_id = ? AND status IN ?", tagID, []string{
@@ -51,18 +50,21 @@ func (s *EmbeddingQueueService) Enqueue(tagID uint) error {
 		return err
 	}
 	if activeCount > 0 {
-		return nil // already queued
+		return nil
 	}
 
-	// Check if tag already has an embedding
-	var embeddingCount int64
-	if err := s.db.Model(&models.TopicTagEmbedding{}).
-		Where("topic_tag_id = ?", tagID).
-		Count(&embeddingCount).Error; err != nil {
+	var tag models.TopicTag
+	if err := s.db.First(&tag, tagID).Error; err != nil {
 		return err
 	}
-	if embeddingCount > 0 {
-		return nil // already has embedding
+
+	var existing models.TopicTagEmbedding
+	err = s.db.Where("topic_tag_id = ?", tagID).First(&existing).Error
+	if err == nil {
+		currentHash := hashText(buildTagEmbeddingText(&tag))
+		if existing.TextHash == currentHash {
+			return nil
+		}
 	}
 
 	task := models.EmbeddingQueue{

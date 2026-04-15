@@ -16,7 +16,7 @@ These environment variables override values from `backend-go/configs/config.yaml
 | `SERVER_MODE` | No | `"debug"` | Gin mode: `"debug"`, `"release"`, or `"test"` |
 | `DATABASE_DRIVER` | No | `"postgres"` | Database driver: `"sqlite"` (only in `sqlite` branch) or `"postgres"` |
 | `DATABASE_DSN` | No | `"host=postgres user=postgres password=postgres dbname=rss_reader port=5432 sslmode=disable TimeZone=Asia/Shanghai"` | Data source name. For SQLite: file path. For Postgres: connection string |
-| `CORS_ORIGINS` | No | `"http://localhost:3001,http://localhost:3000"` | Comma-separated list of allowed CORS origins |
+| `CORS_ORIGINS` | No | `"http://localhost:3000,http://localhost:3000"` | Comma-separated list of allowed CORS origins |
 | `CRAWL_SERVICE_URL` | No | `"http://localhost:11235"` | URL for the crawl/content-completion service |
 | `REDIS_URL` | No | *(empty)* | Redis URL for the topic analysis job queue. When set, the queue uses Redis as a persistent backend; otherwise falls back to in-memory |
 
@@ -47,7 +47,7 @@ These variables are used by the Docker Compose files and have no effect outside 
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `FRONT_PORT` | No | `"3001"` (SQLite compose), `"3000"` (internal) | Host port mapped to the frontend container |
+| `FRONT_PORT` | No | `"3000"` (SQLite compose), `"3000"` (internal) | Host port mapped to the frontend container |
 | `BACKEND_PORT` | No | `"5000"` | Host port mapped to the backend container |
 | `SQLITE_DB_FILE` | No | `"rss_reader.db"` | SQLite database filename (mounted volume) |
 | `POSTGRES_DB` | No | `"rss_reader"` | PostgreSQL database name |
@@ -117,7 +117,7 @@ The only scenario that causes a startup failure is an invalid or unreachable dat
 | Postgres max open conns | `25` | `viper.SetDefault` in `config.go` |
 | Postgres conn max lifetime | `60` min | `viper.SetDefault` in `config.go` |
 | Postgres conn max idle time | `10` min | `viper.SetDefault` in `config.go` |
-| CORS origins | `localhost:3001`, `localhost:3000` | `viper.SetDefault` in `config.go` |
+| CORS origins | `localhost:3000`, `localhost:3000` | `viper.SetDefault` in `config.go` |
 | CORS methods | `GET, POST, PUT, DELETE, OPTIONS` | `viper.SetDefault` in `config.go` |
 | CORS headers | `Content-Type, Authorization` | `viper.SetDefault` in `config.go` |
 | Crawl service URL | `"http://localhost:11235"` | `runtime.go` fallback |
@@ -143,7 +143,7 @@ The only scenario that causes a startup failure is an invalid or unreachable dat
 For local development, the defaults work out of the box:
 
 - Backend runs on `http://localhost:5000` with SQLite.
-- Frontend dev server (`pnpm dev`) runs on `http://localhost:3001`.
+- Frontend dev server (`pnpm dev`) runs on `http://localhost:3000`.
 - No config file or `.env` file is required.
 
 To switch the backend to PostgreSQL locally, create or edit `backend-go/configs/config.yaml` and set `database.driver: "postgres"` with the appropriate DSN.

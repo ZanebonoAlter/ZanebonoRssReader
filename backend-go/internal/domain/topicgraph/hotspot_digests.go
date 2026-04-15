@@ -11,6 +11,31 @@ import (
 	"my-robot-backend/internal/platform/database"
 )
 
+// collectAllChildTagIDs recursively collects all child tag IDs for a given parent tag
+// from the topic_tag_relations table. Returns a set of tag IDs including the parent itself.
+func collectAllChildTagIDs(parentTagID uint) map[uint]bool {
+	result := map[uint]bool{parentTagID: true}
+	queue := []uint{parentTagID}
+
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+
+		var relations []models.TopicTagRelation
+		database.DB.Where("parent_id = ? AND relation_type = ?", current, "abstract").
+			Find(&relations)
+
+		for _, r := range relations {
+			if !result[r.ChildID] {
+				result[r.ChildID] = true
+				queue = append(queue, r.ChildID)
+			}
+		}
+	}
+
+	return result
+}
+
 // HotspotDigestCard represents a digest summary for hotspot display
 // Returned when tracing from article tag back to containing digests
 type HotspotDigestCard struct {
@@ -52,13 +77,19 @@ func GetDigestsByArticleTag(tagSlug string, kind string, anchor time.Time, limit
 		return nil, fmt.Errorf("topic tag not found: %w", err)
 	}
 
-	// Step 2: Get articles with this tag in the time window
+	// Step 2: Get articles with this tag (and all child tags if abstract) in the time window
+	tagIDSet := collectAllChildTagIDs(topicTag.ID)
+	tagIDs := make([]uint, 0, len(tagIDSet))
+	for id := range tagIDSet {
+		tagIDs = append(tagIDs, id)
+	}
+
 	var articleIDs []uint
 	err = database.DB.Model(&models.ArticleTopicTag{}).
 		Joins("JOIN articles ON articles.id = article_topic_tags.article_id").
-		Where("article_topic_tags.topic_tag_id = ?", topicTag.ID).
+		Where("article_topic_tags.topic_tag_id IN ?", tagIDs).
 		Where("articles.created_at >= ? AND articles.created_at < ?", windowStart, windowEnd).
-		Pluck("articles.id", &articleIDs).Error
+		Pluck("DISTINCT articles.id", &articleIDs).Error
 	if err != nil {
 		return nil, fmt.Errorf("failed to get articles: %w", err)
 	}
@@ -69,7 +100,7 @@ func GetDigestsByArticleTag(tagSlug string, kind string, anchor time.Time, limit
 
 	// Step 2.5: Fetch article details with feed info
 	var articles []models.Article
-	err = database.DB.Preload("Feed").Where("id IN ?", articleIDs).Find(&articles).Error
+	err = database.DB.Omit("tag_count", "relevance_score").Preload("Feed").Where("id IN ?", articleIDs).Find(&articles).Error
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch article details: %w", err)
 	}

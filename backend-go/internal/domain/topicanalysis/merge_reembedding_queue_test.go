@@ -30,6 +30,7 @@ func setupMergeReembeddingTestDB(t *testing.T) *gorm.DB {
 	if err := db.AutoMigrate(
 		&models.TopicTag{},
 		&models.TopicTagEmbedding{},
+		&models.TopicTagRelation{},
 		&models.EmbeddingConfig{},
 		&models.MergeReembeddingQueue{},
 		&models.Article{},

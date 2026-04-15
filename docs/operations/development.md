@@ -35,9 +35,9 @@ pnpm install
 pnpm dev
 ```
 
-前端开发服务器运行在 `http://localhost:3001`。
+前端开发服务器运行在 `http://localhost:3000`。
 
-3. **验证联调** — 打开 `http://localhost:3001`，确认前端能连接到 `http://localhost:5000/api`。
+3. **验证联调** — 打开 `http://localhost:3000`，确认前端能连接到 `http://localhost:5000/api`。
 
 ### 一键启动
 
@@ -75,7 +75,7 @@ AI 相关设置（LLM、Firecrawl、Digest）通过 Web UI 的设置页面配置
 | 命令 | 说明 |
 |------|------|
 | `pnpm install` | 安装依赖 |
-| `pnpm dev` | 启动开发服务器（`http://localhost:3001`） |
+| `pnpm dev` | 启动开发服务器（`http://localhost:3000`） |
 | `pnpm build` | 生产构建 |
 | `pnpm generate` | 静态站点生成 |
 | `pnpm preview` | 预览生产构建 |

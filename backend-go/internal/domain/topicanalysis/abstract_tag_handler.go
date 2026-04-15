@@ -50,9 +50,9 @@ func GetTagHierarchyHandler(c *gin.Context) {
 }
 
 // UpdateAbstractTagNameHandler renames an abstract tag.
-// PUT /api/topic-tags/:id/abstract-name
+// PUT /api/topic-tags/:tag_id/abstract-name
 func UpdateAbstractTagNameHandler(c *gin.Context) {
-	tagIDStr := c.Param("id")
+	tagIDStr := c.Param("tag_id")
 	tagID, err := strconv.ParseUint(tagIDStr, 10, 32)
 	if err != nil || tagID == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid tag id"})
@@ -99,9 +99,9 @@ func UpdateAbstractTagNameHandler(c *gin.Context) {
 }
 
 // DetachChildTagHandler removes a child tag from its abstract parent.
-// POST /api/topic-tags/:id/detach
+// POST /api/topic-tags/:tag_id/detach
 func DetachChildTagHandler(c *gin.Context) {
-	parentIDStr := c.Param("id")
+	parentIDStr := c.Param("tag_id")
 	parentID, err := strconv.ParseUint(parentIDStr, 10, 32)
 	if err != nil || parentID == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid parent tag id"})
@@ -137,9 +137,9 @@ func DetachChildTagHandler(c *gin.Context) {
 }
 
 // ReassignTagHandler moves a tag to a new abstract parent.
-// POST /api/topic-tags/:id/reassign
+// POST /api/topic-tags/:tag_id/reassign
 func ReassignTagHandler(c *gin.Context) {
-	tagIDStr := c.Param("id")
+	tagIDStr := c.Param("tag_id")
 	tagID, err := strconv.ParseUint(tagIDStr, 10, 32)
 	if err != nil || tagID == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid tag id"})
@@ -179,8 +179,8 @@ func RegisterAbstractTagRoutes(rg *gin.RouterGroup) {
 	tags := rg.Group("/topic-tags")
 	{
 		tags.GET("/hierarchy", GetTagHierarchyHandler)
-		tags.PUT("/:id/abstract-name", UpdateAbstractTagNameHandler)
-		tags.POST("/:id/detach", DetachChildTagHandler)
-		tags.POST("/:id/reassign", ReassignTagHandler)
+		tags.PUT("/:tag_id/abstract-name", UpdateAbstractTagNameHandler)
+		tags.POST("/:tag_id/detach", DetachChildTagHandler)
+		tags.POST("/:tag_id/reassign", ReassignTagHandler)
 	}
 }

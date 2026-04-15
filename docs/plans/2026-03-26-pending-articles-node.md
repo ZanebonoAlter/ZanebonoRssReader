@@ -768,7 +768,7 @@ Run: `cd front && pnpm dev`
 
 **Step 3: 手动测试**
 
-1. 打开 `http://localhost:3001/topics`
+1. 打开 `http://localhost:3000/topics`
 2. 点击一个热点标签
 3. 验证 timeline 最前面出现"正在整理"节点
 4. 点击节点，验证右侧展示待整理文章列表

@@ -611,7 +611,7 @@ cd front
 # 安装依赖
 pnpm install
 
-# 启动开发服务器 (port 3001)
+# 启动开发服务器 (port 3000)
 pnpm dev
 
 # 生产构建
@@ -632,7 +632,7 @@ pnpm preview
 ```bash
 # 方式 1: 分别启动
 cd backend && python app.py    # 后端: port 5000
-cd front && pnpm dev           # 前端: port 3001
+cd front && pnpm dev           # 前端: port 3000
 
 # 方式 2: 同时启动 (Windows)
 start-all.bat

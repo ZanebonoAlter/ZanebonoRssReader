@@ -94,8 +94,8 @@ func TagSummary(summary *models.AISummary) error {
 		}
 		// Limit to first 200 chars
 		summaryText := summary.Summary
-		if len(summaryText) > 200 {
-			summaryText = summaryText[:200]
+		if len([]rune(summaryText)) > 200 {
+			summaryText = string([]rune(summaryText)[:200])
 		}
 		articleContext += summaryText
 	}
@@ -162,11 +162,13 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 			// Embedding unavailable — fall back to exact match
 			fmt.Printf("[WARN] TagMatch failed, falling back to exact match: %v\n", err)
 		} else {
+			matchedTag := matchResult.ExistingTag
+			isAbstract := matchedTag != nil && matchedTag.Source == "abstract"
+
 			switch matchResult.MatchType {
 			case "exact":
-				// Exact match — update label/aliases/icon and return
-				if matchResult.ExistingTag != nil {
-					existing := matchResult.ExistingTag
+				if matchedTag != nil {
+					existing := matchedTag
 					existing.Label = tag.Label
 					existing.Category = category
 					existing.Source = source
@@ -181,52 +183,65 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 					if err := database.DB.Save(existing).Error; err != nil {
 						return nil, err
 					}
-					// Backfill embedding if missing (tags created before pgvector migration)
 					go ensureTagEmbedding(es, existing.ID)
 					return existing, nil
 				}
 
 			case "high_similarity":
-				// High similarity — auto-reuse existing tag (per CONV-01)
-				if matchResult.ExistingTag != nil {
-					existing := matchResult.ExistingTag
-					// Optionally update aliases if new tag has new aliases
-					if len(tag.Aliases) > 0 {
-						aJSON, _ := json.Marshal(tag.Aliases)
-						existing.Aliases = string(aJSON)
-						if err := database.DB.Save(existing).Error; err != nil {
-							fmt.Printf("[WARN] Failed to update aliases for tag %d: %v\n", existing.ID, err)
-						}
-					}
-					// Backfill embedding if missing
-					go ensureTagEmbedding(es, existing.ID)
-					return existing, nil
+				if matchedTag == nil {
+					break
 				}
+				if isAbstract {
+					newTag, err := createChildOfAbstract(ctx, es, tag, category, kind, source, articleContext, string(aliasesJSON), matchedTag)
+					if err != nil {
+						break
+					}
+					return newTag, nil
+				}
+				if len(tag.Aliases) > 0 {
+					aJSON, _ := json.Marshal(tag.Aliases)
+					matchedTag.Aliases = string(aJSON)
+					if err := database.DB.Save(matchedTag).Error; err != nil {
+						fmt.Printf("[WARN] Failed to update aliases for tag %d: %v\n", matchedTag.ID, err)
+					}
+				}
+				return matchedTag, nil
 
 			case "ai_judgment":
-				// Middle band (0.78-0.97) — attempt abstract tag extraction (per Phase 07 D-02)
+				if matchedTag == nil {
+					break
+				}
+				if isAbstract {
+					newTag, err := createChildOfAbstract(ctx, es, tag, category, kind, source, articleContext, string(aliasesJSON), matchedTag)
+					if err != nil {
+						break
+					}
+					return newTag, nil
+				}
 				fmt.Printf("[INFO] Middle-band similarity %.2f for tag '%s', attempting abstract tag extraction\n", matchResult.Similarity, tag.Label)
-				abstractTag, abstractErr := topicanalysis.ExtractAbstractTag(ctx, matchResult.Candidates, tag.Label, category)
+				var validCandidates []topicanalysis.TagCandidate
+				for _, c := range matchResult.Candidates {
+					if c.Tag != nil && c.Similarity >= es.GetThresholds().LowSimilarity {
+						validCandidates = append(validCandidates, c)
+					}
+				}
+				if len(validCandidates) == 0 {
+					validCandidates = matchResult.Candidates[:1]
+				}
+				abstractTag, abstractErr := topicanalysis.ExtractAbstractTag(ctx, validCandidates, tag.Label, category)
 				if abstractErr != nil || abstractTag == nil {
 					fmt.Printf("[WARN] Abstract tag extraction failed for '%s', falling back to new tag creation: %v\n", tag.Label, abstractErr)
-					// Fall through to creation below
-				} else {
-					// Abstract tag created/reused — return the highest-similarity child tag (per D-03)
-					// Articles should associate with child tags, not abstract tags
-					if len(matchResult.Candidates) > 0 && matchResult.Candidates[0].Tag != nil {
-						childTag := matchResult.Candidates[0].Tag
-						// Backfill embedding if missing
-						go ensureTagEmbedding(es, childTag.ID)
-						return childTag, nil
-					}
-					// No candidate tags available — associate with abstract tag itself
-					go ensureTagEmbedding(es, abstractTag.ID)
-					return abstractTag, nil
+					break
 				}
+				if delErr := topicanalysis.DeleteTagEmbedding(matchedTag.ID); delErr != nil {
+					fmt.Printf("[WARN] Failed to delete embedding for child tag %d: %v\n", matchedTag.ID, delErr)
+				}
+				if validCandidates[0].Tag != nil {
+					return validCandidates[0].Tag, nil
+				}
+				return abstractTag, nil
 
 			case "low_similarity", "no_match":
-				// Low similarity or no match — create new tag
-				// Fall through to creation below
 			}
 		}
 	}
@@ -273,14 +288,45 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 		return nil, err
 	}
 
-	// Generate embedding asynchronously for the new tag
-	if es != nil {
+	if articleContext != "" {
+		go generateTagDescription(newTag.ID, tag.Label, category, articleContext)
+	} else if es != nil {
 		go generateAndSaveEmbedding(es, &newTag)
 	}
 
-	// Generate description asynchronously via LLM
-	if articleContext != "" {
-		go generateTagDescription(newTag.ID, tag.Label, category, articleContext)
+	return &newTag, nil
+}
+
+// createChildOfAbstract creates a new tag as a child of an abstract parent,
+// then deletes the new tag's embedding to prevent it from appearing in future matches.
+func createChildOfAbstract(ctx context.Context, es *topicanalysis.EmbeddingService, tag topictypes.TopicTag, category, kind, source, articleContext, aliasesJSON string, abstractParent *models.TopicTag) (*models.TopicTag, error) {
+	slug := topictypes.Slugify(tag.Label)
+	newTag := models.TopicTag{
+		Slug:        slug,
+		Label:       tag.Label,
+		Category:    category,
+		Kind:        kind,
+		Icon:        tag.Icon,
+		Aliases:     aliasesJSON,
+		IsCanonical: true,
+		Source:      source,
+	}
+	if err := database.DB.Create(&newTag).Error; err != nil {
+		return nil, fmt.Errorf("create child tag of abstract %d: %w", abstractParent.ID, err)
+	}
+
+	relation := models.TopicTagRelation{
+		ParentID:     abstractParent.ID,
+		ChildID:      newTag.ID,
+		RelationType: "abstract",
+	}
+	if err := database.DB.Create(&relation).Error; err != nil {
+		fmt.Printf("[WARN] Failed to create parent-child relation: abstract %d -> child %d: %v\n", abstractParent.ID, newTag.ID, err)
+		if es != nil {
+			go generateAndSaveEmbedding(es, &newTag)
+		}
+	} else {
+		fmt.Printf("[INFO] Child tag '%s' (id=%d) linked to abstract '%s' (id=%d)\n", newTag.Label, newTag.ID, abstractParent.Label, abstractParent.ID)
 	}
 
 	return &newTag, nil
@@ -329,12 +375,18 @@ Respond with JSON: {"description": "your answer"}`, label, category, articleCont
 
 	// Truncate to 500 chars (threat model T-08-01)
 	desc := parsed.Description
-	if len(desc) > 500 {
-		desc = desc[:500]
+	if len([]rune(desc)) > 500 {
+		desc = string([]rune(desc)[:500])
 	}
 
 	if err := database.DB.Model(&models.TopicTag{}).Where("id = ?", tagID).Update("description", desc).Error; err != nil {
 		log.Printf("[WARN] Failed to save description for tag %d: %v", tagID, err)
+		return
+	}
+
+	qs := getEmbeddingQueueService()
+	if err := qs.Enqueue(tagID); err != nil {
+		log.Printf("[WARN] Failed to enqueue re-embedding after description update for tag %d: %v", tagID, err)
 	}
 }
 

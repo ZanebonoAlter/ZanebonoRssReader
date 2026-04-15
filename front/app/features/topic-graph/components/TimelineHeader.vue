@@ -6,6 +6,7 @@ interface TopicInfo {
   slug: string
   label: string
   category: TopicCategory
+  description?: string
 }
 
 interface Props {
@@ -26,14 +27,17 @@ const categoryLabels: Record<TopicCategory, string> = {
   <header class="timeline-header">
     <div class="timeline-header__topic">
       <template v-if="topic">
-        <h2 class="timeline-header__title">{{ topic.label }}</h2>
-        <span class="timeline-header__category" :class="`timeline-header__category--${topic.category}`">
-          {{ categoryLabels[topic.category] }}
-        </span>
-        <span class="timeline-header__count">
-          <Icon icon="mdi:file-document-outline" width="14" />
-          {{ totalCount }} 篇日报
-        </span>
+        <div class="timeline-header__main">
+          <h2 class="timeline-header__title">{{ topic.label }}</h2>
+          <span class="timeline-header__category" :class="`timeline-header__category--${topic.category}`">
+            {{ categoryLabels[topic.category] }}
+          </span>
+          <span class="timeline-header__count">
+            <Icon icon="mdi:file-document-outline" width="14" />
+            {{ totalCount }} 篇日报
+          </span>
+        </div>
+        <p v-if="topic.description" class="timeline-header__description">{{ topic.description }}</p>
       </template>
       <template v-else>
         <h2 class="timeline-header__title timeline-header__title--placeholder">选择题材查看日报</h2>
@@ -52,6 +56,12 @@ const categoryLabels: Record<TopicCategory, string> = {
 }
 
 .timeline-header__topic {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.timeline-header__main {
   display: flex;
   align-items: center;
   gap: 0.75rem;
@@ -108,6 +118,14 @@ const categoryLabels: Record<TopicCategory, string> = {
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+.timeline-header__description {
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.5);
+  margin: 0;
+  padding-left: 0.1rem;
+}
+
 @media (max-width: 640px) {
   .timeline-header {
     padding: 0.85rem 1rem;
@@ -115,6 +133,10 @@ const categoryLabels: Record<TopicCategory, string> = {
 
   .timeline-header__title {
     font-size: 1.15rem;
+  }
+
+  .timeline-header__description {
+    font-size: 0.78rem;
   }
 }
 </style>

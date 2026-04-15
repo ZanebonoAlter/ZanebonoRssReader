@@ -351,22 +351,28 @@ func (te *TagExtractor) extractWithHeuristic(input topictypes.ExtractionInput, o
 // Helper functions
 
 func buildExtractionSystemPrompt() string {
-	return `你是一个专业的新闻分析助手，负责从新闻摘要中提取结构化标签。
+	return `你是一个专业的新闻分析助手，负责从新闻摘要中提取有信息量的结构化标签。
 
 标签分为三类：
 1. event（事件）：完整描述的新闻事件名词短语，必须具备语义完整性
    - 正确示例："苹果WWDC 2024发布会"、"央行禁止比特币交易"、"某景区门票涨价风波"
    - 错误示例："3月30"（裸日期）、"禁止交易"（无主体动作）、"门票涨价"（无归属状态）、"北京中关村"（裸地名）、"AI体验活动"（泛化活动名）
-   
+    
 2. person（人物）：具体的个人姓名
    - 正确示例："Sam Altman"、"Elon Musk"
    - 错误示例："CEO"（泛称）、"发言人"（角色而非具体人）
 
-3. keyword（关键词）：其他所有概念，包括组织、产品、技术、地点、主题、泛化活动等
-   - 示例："苹果公司"、"ChatGPT"、"中关村"、"人工智能"、"AI体验活动"
+3. keyword（关键词）：专业术语、技术概念、产品名称、组织机构等有辨识度的实体
+   - 正确示例："Transformer架构"、"RAG检索增强生成"、"PostgreSQL"、"Kubernetes"、"苹果公司"、"ChatGPT"
+   - 错误示例："2026"、"Q3"、"星期二"（时间词）、"公司"（泛称）、"技术"（过于宽泛）、"发展"（无具体含义）
 
 提取规则：
-- 提取3-8个标签
+- 宁缺毋滥，只提取1-5个真正有信息量的标签，不需要每篇都凑够数量
+- 必须拒绝以下无意义标签：
+  * 纯年份/日期/时间词（如"2026"、"2024年"、"Q3"、"上半年"）
+  * 过于宽泛的通用词（如"技术"、"发展"、"创新"、"行业"、"未来"、"趋势"、"市场"、"影响"）
+  * 文章中未展开讨论的附带提及词
+- 优先提取专业术语和技术概念，而非泛化描述词
 - event类标签必须是语义完整的名词短语，能独立传达事件内容
 - 拒绝语义片段：不要把裸日期、无主体动作、无归属状态、裸地名、泛化活动名当作event，应归入keyword
 - 无法判断语义完整性时，优先归入keyword类别
@@ -606,7 +612,7 @@ func tagExtractionSchema() *airouter.JSONSchema {
 			Properties: map[string]airouter.SchemaProperty{
 				"label":      {Type: "string", Description: "标签名称"},
 				"category":   {Type: "string", Description: "event, person 或 keyword"},
-				"confidence": {Type: "number", Description: "置信度 0.0-1.0"},
+				"confidence": {Type: "number", Description: "置信度 0.0-1.0，仅提取有信息量的标签，宁缺毋滥"},
 				"aliases":    {Type: "array", Items: &airouter.SchemaProperty{Type: "string"}},
 				"evidence":   {Type: "string", Description: "提取依据"},
 			},

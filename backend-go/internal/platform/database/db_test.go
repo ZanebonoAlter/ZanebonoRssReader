@@ -65,15 +65,15 @@ func TestPostgresMigrationsDocumentStagedEmbeddingCutover(t *testing.T) {
 		t.Fatalf("postgres migrations count = %d, want at least 3", len(migrations))
 	}
 
-	last := migrations[len(migrations)-1]
-	if !strings.Contains(strings.ToLower(last.Description), "staged") {
-		t.Fatalf("expected staged rollout description, got %q", last.Description)
+	migration := mustFindMigration(t, migrations, "20260403_0003")
+	if !strings.Contains(strings.ToLower(migration.Description), "staged") {
+		t.Fatalf("expected staged rollout description, got %q", migration.Description)
 	}
-	if !strings.Contains(strings.ToLower(last.Description), "vector") {
-		t.Fatalf("expected vector column description, got %q", last.Description)
+	if !strings.Contains(strings.ToLower(migration.Description), "vector") {
+		t.Fatalf("expected vector column description, got %q", migration.Description)
 	}
-	if !strings.Contains(strings.ToLower(last.Description), "json") {
-		t.Fatalf("expected runtime json note, got %q", last.Description)
+	if !strings.Contains(strings.ToLower(migration.Description), "json") {
+		t.Fatalf("expected runtime json note, got %q", migration.Description)
 	}
 }
 

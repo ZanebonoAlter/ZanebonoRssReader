@@ -24,7 +24,7 @@ Vitest runs with `happy-dom` as the DOM environment. Configuration lives in `fro
 
 ### Frontend E2E (Playwright)
 
-Playwright is configured in `front/playwright.config.ts`. It starts the Nuxt dev server on `http://localhost:3001`, then runs browser tests against it. Tests are serialized (`fullyParallel: false`, `workers: 1`) for cold-startup stability.
+Playwright is configured in `front/playwright.config.ts`. It starts the Nuxt dev server on `http://localhost:3000`, then runs browser tests against it. Tests are serialized (`fullyParallel: false`, `workers: 1`) for cold-startup stability.
 
 ### Integration (pytest)
 

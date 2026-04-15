@@ -14,8 +14,8 @@ type ReadingBehavior struct {
 	ScrollDepth int       `gorm:"default:0" json:"scroll_depth"`
 	ReadingTime int       `gorm:"default:0" json:"reading_time"`
 	CreatedAt   time.Time `gorm:"index" json:"created_at"`
-	Article     Article   `gorm:"foreignKey:ArticleID" json:"article,omitempty"`
-	Feed        Feed      `gorm:"foreignKey:FeedID" json:"feed,omitempty"`
+	Article     Article   `gorm:"foreignKey:ArticleID;constraint:OnDelete:CASCADE" json:"article,omitempty"`
+	Feed        Feed      `gorm:"foreignKey:FeedID;constraint:OnDelete:CASCADE" json:"feed,omitempty"`
 }
 
 func (r *ReadingBehavior) ToDict() map[string]interface{} {

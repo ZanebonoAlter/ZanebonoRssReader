@@ -42,10 +42,10 @@ This starts three services:
 
 - **postgres**: PostgreSQL 17 with pgvector extension on port 5432, data persisted via `pgdata` volume.
 - **backend**: Go API server on port 5000, connects to postgres service internally.
-- **front**: Nuxt SSR server on internal port 3000, mapped to a host port via `${FRONT_PORT:-3000}` (the `.env.example` sets `FRONT_PORT=3001`). Proxies API calls to the backend container internally via `http://backend:5000/api`.
+- **front**: Nuxt SSR server on internal port 3000, mapped to a host port via `${FRONT_PORT:-3000}` (the `.env.example` sets `FRONT_PORT=3000`). Proxies API calls to the backend container internally via `http://backend:5000/api`.
 
 After startup (with default `.env.example`):
-- Frontend: `http://localhost:3001`
+- Frontend: `http://localhost:3000`
 - Backend API: `http://localhost:5000/api`
 
 ### Docker Compose (SQLite)
@@ -58,10 +58,10 @@ docker compose -f docker-compose.sqlite.yml up --build -d
 This starts two services:
 
 - **backend**: Go API server on port 5000, SQLite data at `/app/data/` inside the container, mounted from `./data/` on the host.
-- **front**: Nuxt SSR server on internal port 3000, mapped to a host port via `${FRONT_PORT:-3000}` (the `.env.example` sets `FRONT_PORT=3001`). Proxies API calls to the backend container internally via `http://backend:5000/api`.
+- **front**: Nuxt SSR server on internal port 3000, mapped to a host port via `${FRONT_PORT:-3000}` (the `.env.example` sets `FRONT_PORT=3000`). Proxies API calls to the backend container internally via `http://backend:5000/api`.
 
 After startup (with default `.env.example`):
-- Frontend: `http://localhost:3001`
+- Frontend: `http://localhost:3000`
 - Backend API: `http://localhost:5000/api`
 
 ```bash
@@ -91,7 +91,7 @@ See [configuration.md](configuration.md) for the full list of environment variab
 The `.env.example` file contains three variables:
 
 ```bash
-FRONT_PORT=3001
+FRONT_PORT=3000
 BACKEND_PORT=5000
 SQLITE_DB_FILE=rss_reader.db
 ```
@@ -105,7 +105,7 @@ For a production deployment, review these settings:
 | Variable | Why it matters |
 |---|---|
 | `SERVER_MODE` | Set to `"release"` in Docker Compose to suppress Gin debug output. Defaults to `"debug"` outside Docker. |
-| `CORS_ORIGINS` | Must include the origin where users access the frontend (e.g., `http://your-host:3001`). |
+| `CORS_ORIGINS` | Must include the origin where users access the frontend (e.g., `http://your-host:3000`). |
 | `POSTGRES_PASSWORD` | Change from the default `"postgres"` if using the PostgreSQL compose file. |
 | `NUXT_PUBLIC_API_ORIGIN` | Must match the externally reachable backend URL. |
 | `NUXT_PUBLIC_API_BASE` | Must match the externally reachable API URL. |

@@ -365,7 +365,7 @@ func (q *SummaryQueue) generateSummaryForFeed(feedID *uint, categoryID *uint, fe
 
 	var articles []models.Article
 	if feedID != nil {
-		database.DB.Where("feed_id = ? AND created_at >= ?", *feedID, timeThreshold).
+		database.DB.Omit("tag_count", "relevance_score").Where("feed_id = ? AND created_at >= ? AND feed_summary_generated_at IS NULL", *feedID, timeThreshold).
 			Order("created_at DESC").
 			Find(&articles)
 	} else {
@@ -407,6 +407,9 @@ func (q *SummaryQueue) generateSummaryForFeed(feedID *uint, categoryID *uint, fe
 		}
 		if existingSummary != nil {
 			log.Printf("Skipping existing queue summary for feed %d batch %d/%d (ID: %d)", *feedID, batchNum, totalBatches, existingSummary.ID)
+			if err := MarkArticlesWithFeedSummary(batchArticleIDs, existingSummary); err != nil {
+				log.Printf("[WARN] Failed to mark articles with existing summary %d: %v", existingSummary.ID, err)
+			}
 			if err := topicextraction.TagSummary(existingSummary); err != nil {
 				log.Printf("[WARN] Failed to backfill tags for existing summary %d: %v", existingSummary.ID, err)
 			}
@@ -458,7 +461,9 @@ func (q *SummaryQueue) generateSummaryForFeed(feedID *uint, categoryID *uint, fe
 		if err := database.DB.Create(&aiSummary).Error; err != nil {
 			return nil, &SummaryError{Code: "DB_ERROR", Message: "保存总结失败: " + err.Error()}
 		}
-
+		if err := MarkArticlesWithFeedSummary(batchArticleIDs, &aiSummary); err != nil {
+			log.Printf("[WARN] Failed to mark articles with summary %d: %v", aiSummary.ID, err)
+		}
 		if err := topicextraction.TagSummary(&aiSummary); err != nil {
 			log.Printf("[WARN] Failed to tag summary %d: %v", aiSummary.ID, err)
 		}

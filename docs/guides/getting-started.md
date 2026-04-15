@@ -44,11 +44,11 @@ pnpm install
 pnpm dev
 ```
 
-The frontend dev server starts on `http://localhost:3001`.
+The frontend dev server starts on `http://localhost:3000`.
 
 ### 4. Verify the connection
 
-Open `http://localhost:3001` in a browser. The frontend should load and connect to the backend at `http://localhost:5000/api`. You can begin adding RSS feeds immediately.
+Open `http://localhost:3000` in a browser. The frontend should load and connect to the backend at `http://localhost:5000/api`. You can begin adding RSS feeds immediately.
 
 ## Docker Compose (Alternative)
 
@@ -62,12 +62,12 @@ docker compose -f docker-compose.sqlite.yml up --build
 The `.env.example` file contains the minimal set of variables:
 
 ```
-FRONT_PORT=3001
+FRONT_PORT=3000
 BACKEND_PORT=5000
 SQLITE_DB_FILE=rss_reader.db
 ```
 
-- Frontend: `http://localhost:3001`
+- Frontend: `http://localhost:3000`
 - Backend: `http://localhost:5000`
 - SQLite database persisted in `./data/rss_reader.db`
 
@@ -83,7 +83,7 @@ Port mappings and other Docker settings can be customized via the `.env` file �
 
 Once both services are running:
 
-1. Open `http://localhost:3001` in your browser.
+1. Open `http://localhost:3000` in your browser.
 2. Add an RSS feed via the subscription management panel.
 3. The feed will be fetched and articles will appear in the three-pane reading layout.
 4. (Optional) Configure AI features — LLM API key, Firecrawl, and digest settings — through the web UI Settings page. These are stored in the database and don't require config file edits.
@@ -92,7 +92,7 @@ Once both services are running:
 
 ### Port already in use
 
-If `http://localhost:5000` or `http://localhost:3001` is occupied, set the ports via environment variables:
+If `http://localhost:5000` or `http://localhost:3000` is occupied, set the ports via environment variables:
 
 - Backend: set `SERVER_PORT` before running `go run cmd/server/main.go`.
 - Frontend: set the `NUXT_PUBLIC_API_BASE` environment variable if the backend runs on a non-default port.

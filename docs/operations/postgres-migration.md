@@ -74,6 +74,14 @@ go run cmd/server/main.go
 | 1 | `20260403_0001` | 启用 pgvector 扩展（`CREATE EXTENSION IF NOT EXISTS vector`） |
 | 2 | `20260403_0002` | 创建全部基础表结构（GORM AutoMigrate 20 个模型表 + 列类型调整 + 10 个性能索引） |
 | 3 | `20260403_0003` | 为 `topic_tag_embeddings` 表添加 `embedding vector(1536)` 列 |
+| 4 | `20260413_0001` | 为 `topic_tag_embeddings.embedding` 创建 HNSW 向量索引 |
+| 5 | `20260413_0002` | 创建 `embedding_config` 表并写入默认配置 |
+| 6 | `20260413_0003` | 为 `topic_tags` 增加 `status`、`merged_into_id` 字段与索引 |
+| 7 | `20260413_0004` | 创建 `embedding_queues` 表 |
+| 8 | `20260413_0005` | 创建 `merge_reembedding_queues` 表 |
+| 9 | `20260414_0001` | 为 `topic_tags` 增加 `description` 字段 |
+| 10 | `20260414_0002` | 创建 `topic_tag_relations` 表 |
+| 11 | `20260414_0003` | 为 `articles` 增加 feed summary 标记字段和索引，避免重复聚合旧文章 |
 
 迁移记录写入 `schema_migrations` 表，每个版本只会执行一次。
 

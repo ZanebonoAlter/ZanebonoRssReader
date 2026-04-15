@@ -4,7 +4,7 @@ import { test, expect } from '@playwright/test'
  * Baseline e2e test for topic-graph verification.
  * 
  * This test verifies:
- * 1. Playwright can connect to the dev server at localhost:3001
+ * 1. Playwright can connect to the dev server at localhost:3000
  * 2. The /topics page loads without crash
  * 
  * Note: Full selector-based verification requires Task 1 markers.

@@ -142,7 +142,7 @@ func (s *FeedService) updateFeedError(feed *models.Feed, err error) {
 
 func (s *FeedService) cleanupOldArticles(feed *models.Feed) {
 	var articles []models.Article
-	if err := database.DB.Omit("tag_count").Where("feed_id = ?", feed.ID).Order("pub_date DESC").Find(&articles).Error; err != nil {
+	if err := database.DB.Omit("tag_count", "relevance_score").Where("feed_id = ?", feed.ID).Order("pub_date DESC").Find(&articles).Error; err != nil {
 		return
 	}
 
@@ -161,6 +161,7 @@ func (s *FeedService) cleanupOldArticles(feed *models.Feed) {
 			continue
 		}
 
+		database.DB.Where("article_id = ?", article.ID).Delete(&models.ReadingBehavior{})
 		database.DB.Delete(&article)
 		articlesToDelete--
 	}

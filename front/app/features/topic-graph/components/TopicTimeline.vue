@@ -10,6 +10,7 @@ interface TopicInfo {
   slug: string
   label: string
   category: TopicCategory
+  description?: string
 }
 
 interface Props {

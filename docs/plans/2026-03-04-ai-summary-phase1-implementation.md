@@ -1162,7 +1162,7 @@ cd front
 pnpm dev
 ```
 
-访问 http://localhost:3001，验证侧边栏显示"日报周报"菜单
+访问 http://localhost:3000，验证侧边栏显示"日报周报"菜单
 
 **Step 3: 提交**
 
@@ -1285,7 +1285,7 @@ import DigestList from '~/components/digest/DigestList.vue'
 
 **Step 4: 测试页面**
 
-访问 http://localhost:3001/digest
+访问 http://localhost:3000/digest
 
 **Step 5: 提交**
 
@@ -1614,7 +1614,7 @@ const showSettings = ref(false)
 
 **Step 3: 测试配置功能**
 
-访问 http://localhost:3001/digest，点击"设置"按钮
+访问 http://localhost:3000/digest，点击"设置"按钮
 
 **Step 4: 提交**
 
@@ -1725,7 +1725,7 @@ onMounted(async () => {
 
 **Step 3: 测试详情页**
 
-访问 http://localhost:3001/digest/1
+访问 http://localhost:3000/digest/1
 
 **Step 4: 提交**
 

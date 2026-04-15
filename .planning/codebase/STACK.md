@@ -135,7 +135,7 @@
 
 **生产部署:**
 - 单用户部署，无需认证系统
-- 默认前端: `localhost:3001`
+- 默认前端: `localhost:3000`
 - 默认后端 API: `localhost:5000/api`
 - WebSocket: `ws://localhost:5000/ws`
 

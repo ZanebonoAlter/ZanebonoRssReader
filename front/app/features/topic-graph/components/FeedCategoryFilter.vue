@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { Icon } from '@iconify/vue'
 import { useFeedsStore } from '~/stores/feeds'
 import type { RssFeed } from '~/types/feed'
@@ -22,6 +22,24 @@ const expandedCategoryId = ref<string | null>(null)
 
 const categories = computed<Category[]>(() => feedsStore.categories)
 const feeds = computed<RssFeed[]>(() => feedsStore.feeds)
+
+function autoSelectFirstCategory() {
+  if (!props.selectedCategoryId && !props.selectedFeedId && categories.value.length > 0) {
+    const first = categories.value[0]
+    if (first) {
+      emit('update:selectedCategoryId', first.id)
+      expandedCategoryId.value = first.id
+    }
+  }
+}
+
+onMounted(() => {
+  autoSelectFirstCategory()
+})
+
+watch(categories, () => {
+  autoSelectFirstCategory()
+})
 
 const feedsByCategory = computed(() => {
   const grouped = new Map<string, RssFeed[]>()

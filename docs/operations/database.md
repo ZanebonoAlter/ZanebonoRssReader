@@ -44,6 +44,12 @@
 - 核心表和补充字段保证逻辑在 `backend-go/internal/platform/database/db.go`
 - digest 相关表迁移在 `backend-go/internal/digest/`
 
+## 最近数据库变更记录
+
+| 版本号 | 变更 | 目的 |
+|------|------|------|
+| `20260414_0003` | 给 `articles` 表新增 `feed_summary_id`、`feed_summary_generated_at` 及对应索引 | 在文章级记录已参与过的订阅源总结，避免 auto summary / summary queue 反复把同一批旧文章重新聚合 |
+
 ## Topic 相关表说明
 
 数据库里以 `topic_` 开头的表，主要服务于 Topic Graph、热点标签、主题分析这条链路。它们不是孤立功能，而是围绕 `topic_tags` 这份主题主数据逐层展开。

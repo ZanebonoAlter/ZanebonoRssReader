@@ -185,7 +185,7 @@ func (s *FirecrawlScheduler) runCrawlCycle(batchID string) {
 		job := jobs[i]
 
 		var art models.Article
-		if err := database.DB.Omit("tag_count").First(&art, job.ArticleID).Error; err != nil {
+		if err := database.DB.Omit("tag_count", "relevance_score").First(&art, job.ArticleID).Error; err != nil {
 			failed++
 			_ = s.queue.MarkFailed(job, err.Error(), time.Minute)
 			continue

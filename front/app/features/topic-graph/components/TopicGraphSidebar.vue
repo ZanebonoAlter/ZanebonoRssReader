@@ -19,6 +19,7 @@ interface Props {
   pendingArticles?: PendingArticle[]
   selectedPendingNode?: boolean
   abstractNodeSlug?: string | null
+  abstractNodeLabel?: string | null
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -31,12 +32,15 @@ const props = withDefaults(defineProps<Props>(), {
   pendingArticles: () => [],
   selectedPendingNode: false,
   abstractNodeSlug: null,
+  abstractNodeLabel: null,
 })
 
 const emit = defineEmits<{
   openArticle: [articleId: number]
   highlightKeyword: [keywordSlug: string | null]
   tagMerged: []
+  selectChildTag: [slug: string, label: string]
+  selectAbstractTag: [slug: string]
 }>()
 
 // Internal selected keyword state (for toggle behavior)
@@ -144,22 +148,9 @@ let mergeSearchTimer: ReturnType<typeof setTimeout> | null = null
 const abstractTagApi = useAbstractTagApi()
 const abstractChildren = ref<TagHierarchyNode[]>([])
 const abstractLoading = ref(false)
-const abstractFilterChildSlug = ref<string | null>(null)
-
-// Filtered articles based on selected child tag
-const abstractFilteredArticles = computed(() => {
-  if (!props.detail?.articles) return []
-  if (!abstractFilterChildSlug.value) return props.detail.articles
-
-  // When a child tag is selected, filter articles to only show those matching
-  // Since we don't have per-article tag data in the detail response, show all
-  // and let the parent page handle filtering via the tag slug
-  return props.detail.articles
-})
 
 // Load child tags when abstractNodeSlug changes
 watch(() => props.abstractNodeSlug, async (slug) => {
-  abstractFilterChildSlug.value = null
   if (!slug) {
     abstractChildren.value = []
     return
@@ -188,8 +179,14 @@ watch(() => props.abstractNodeSlug, async (slug) => {
   }
 }, { immediate: true })
 
-function filterTimeline(childSlug: string) {
-  abstractFilterChildSlug.value = abstractFilterChildSlug.value === childSlug ? null : childSlug
+function handleChildTagClick(child: TagHierarchyNode) {
+  emit('selectChildTag', child.slug, child.label)
+}
+
+function handleAbstractTagClick() {
+  if (props.abstractNodeSlug) {
+    emit('selectAbstractTag', props.abstractNodeSlug)
+  }
 }
 
 function openMergeDialog() {
@@ -375,40 +372,31 @@ async function doMerge(targetTagId: number, targetLabel: string) {
         <div class="mt-3">
           <h4 class="text-xs font-medium text-[var(--topic-ink-soft)]">子标签</h4>
           <div class="mt-2 grid gap-1.5">
+            <!-- Abstract tag itself (returns to parent) -->
             <button
-              v-for="child in abstractChildren"
-              :key="child.slug"
               type="button"
-              class="flex items-center gap-2 rounded-xl px-2.5 py-1.5 text-left transition-all"
-              :class="abstractFilterChildSlug === child.slug
-                ? 'bg-[rgba(240,138,75,0.15)] border border-[rgba(240,138,75,0.3)]'
-                : 'bg-[rgba(10,16,23,0.56)] border border-[var(--topic-border)] hover:border-[rgba(240,138,75,0.2)]'"
-              @click="filterTimeline(child.slug)"
+              class="flex items-center gap-2 rounded-xl px-2.5 py-1.5 text-left transition-all hover:border-[rgba(240,138,75,0.2)]"
+              :class="'bg-[rgba(10,16,23,0.56)] border border-[rgba(240,138,75,0.3)]'"
+              @click="handleAbstractTagClick"
             >
+              <span class="w-2 h-2 rounded-full shrink-0 bg-[rgba(240,138,75,0.8)]"></span>
+              <span class="text-sm text-[var(--topic-ink-strong)] truncate">{{ props.abstractNodeLabel || '全部' }}</span>
+              <span class="ml-auto text-xs text-[rgba(240,138,75,0.7)] shrink-0">全部</span>
+            </button>
+            <!-- Child tags -->
+            <button
+                v-for="child in abstractChildren"
+                :key="child.slug"
+                type="button"
+                class="flex items-center gap-2 rounded-xl px-2.5 py-1.5 text-left transition-all hover:border-[rgba(240,138,75,0.2)]"
+                :class="'bg-[rgba(10,16,23,0.56)] border border-[var(--topic-border)]'"
+                @click="handleChildTagClick(child)"
+              >
               <span class="w-2 h-2 rounded-full shrink-0" :class="`bg-[#6366f1]`"></span>
               <span class="text-sm text-[var(--topic-ink-strong)] truncate">{{ child.label }}</span>
-              <span class="ml-auto text-xs text-[var(--topic-ink-soft)] shrink-0">{{ child.feedCount }}</span>
+              <span class="ml-auto text-xs text-[var(--topic-ink-soft)] shrink-0">{{ child.articleCount }} 篇</span>
             </button>
           </div>
-        </div>
-
-        <!-- Article Timeline (filtered by child tag) -->
-        <div class="mt-4">
-          <h4 class="text-xs font-medium text-[var(--topic-ink-soft)]">
-            {{ abstractFilterChildSlug ? '筛选时间线' : '文章时间线' }}
-          </h4>
-          <div v-if="abstractFilteredArticles.length" class="mt-2 grid gap-1.5">
-            <button
-              v-for="article in abstractFilteredArticles.slice(0, 12)"
-              :key="article.id"
-              class="topic-related-card"
-              type="button"
-              @click="emit('openArticle', article.id)"
-            >
-              <h3 class="topic-related-card__title text-sm">{{ article.title }}</h3>
-            </button>
-          </div>
-          <div v-else class="mt-2 text-sm text-[var(--topic-ink-soft)]">暂无关联文章</div>
         </div>
       </section>
     </div>

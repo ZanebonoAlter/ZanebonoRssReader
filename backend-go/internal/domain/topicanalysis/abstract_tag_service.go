@@ -27,12 +27,13 @@ type TagHierarchyNode struct {
 	Label           string             `json:"label"`
 	Slug            string             `json:"slug"`
 	Category        string             `json:"category"`
-	QualityScore    float64            `json:"quality_score,omitempty"`
-	IsLowQuality    bool               `json:"is_low_quality,omitempty"`
 	Icon            string             `json:"icon"`
 	FeedCount       int                `json:"feed_count"`
+	ArticleCount    int                `json:"article_count"`
 	SimilarityScore float64            `json:"similarity_score,omitempty"`
 	IsActive        bool               `json:"is_active"`
+	QualityScore    float64            `json:"quality_score,omitempty"`
+	IsLowQuality    bool               `json:"is_low_quality,omitempty"`
 	Children        []TagHierarchyNode `json:"children"`
 }
 
@@ -40,8 +41,8 @@ type TagHierarchyNode struct {
 // If LLM succeeds, creates an abstract tag + parent-child relations.
 // Returns the abstract tag on success, nil on failure (caller should fall back to creating a normal tag).
 func ExtractAbstractTag(ctx context.Context, candidates []TagCandidate, newLabel string, category string) (*models.TopicTag, error) {
-	if len(candidates) == 0 {
-		return nil, fmt.Errorf("no candidates provided for abstract tag extraction")
+	if len(candidates) < 2 {
+		return nil, fmt.Errorf("need at least 2 candidates for abstract tag extraction, got %d", len(candidates))
 	}
 
 	// Call LLM to extract abstract name and description
@@ -100,7 +101,9 @@ func ExtractAbstractTag(ctx context.Context, candidates []TagCandidate, newLabel
 				emb.TopicTagID = tagID
 				if saveErr := es.SaveEmbedding(emb); saveErr != nil {
 					log.Printf("[WARN] Failed to save embedding for abstract tag %d: %v", tagID, saveErr)
+					return
 				}
+				MatchAbstractTagHierarchy(context.Background(), tagID)
 			}(abstractTag.ID)
 		}
 
@@ -114,6 +117,16 @@ func ExtractAbstractTag(ctx context.Context, candidates []TagCandidate, newLabel
 				continue
 			}
 
+			// Check if this would create a cycle
+			wouldCycle, err := wouldCreateCycle(tx, abstractTag.ID, candidate.Tag.ID)
+			if err != nil {
+				return fmt.Errorf("check cycle for candidate %d: %w", candidate.Tag.ID, err)
+			}
+			if wouldCycle {
+				log.Printf("[WARN] Skipping cyclic relation: abstract tag %d -> candidate %d", abstractTag.ID, candidate.Tag.ID)
+				continue
+			}
+
 			// Check if relation already exists
 			var count int64
 			tx.Model(&models.TopicTagRelation{}).
@@ -121,6 +134,16 @@ func ExtractAbstractTag(ctx context.Context, candidates []TagCandidate, newLabel
 				Count(&count)
 			if count > 0 {
 				continue // Relation already exists
+			}
+
+			// One-parent rule: skip if candidate already has a different abstract parent
+			var existingParentCount int64
+			tx.Model(&models.TopicTagRelation{}).
+				Where("child_id = ? AND parent_id != ?", candidate.Tag.ID, abstractTag.ID).
+				Count(&existingParentCount)
+			if existingParentCount > 0 {
+				log.Printf("[INFO] Skipping candidate %d (%s): already has an abstract parent", candidate.Tag.ID, candidate.Tag.Label)
+				continue
 			}
 
 			relation := models.TopicTagRelation{
@@ -207,6 +230,16 @@ func GetTagHierarchy(category string, scopeFeedID uint, scopeCategoryID uint, ti
 		tagMap[tags[i].ID] = &tags[i]
 	}
 
+	// Calculate article count for each tag
+	articleCounts := make(map[uint]int)
+	for _, tagID := range tagIDs {
+		var count int64
+		database.DB.Model(&models.ArticleTopicTag{}).
+			Where("topic_tag_id = ?", tagID).
+			Count(&count)
+		articleCounts[tagID] = int(count)
+	}
+
 	if category != "" {
 		// Only include trees where the root parent matches the category
 		filteredRelations := make([]models.TopicTagRelation, 0, len(relations))
@@ -220,8 +253,6 @@ func GetTagHierarchy(category string, scopeFeedID uint, scopeCategoryID uint, ti
 			// Also keep relations for children that are themselves parents in this category
 		}
 		relations = filteredRelations
-			QualityScore:    child.QualityScore,
-			IsLowQuality:    child.Source != "abstract" && child.QualityScore < 0.3,
 	}
 
 	// Resolve active tag IDs based on time range
@@ -242,15 +273,17 @@ func GetTagHierarchy(category string, scopeFeedID uint, scopeCategoryID uint, ti
 			Category:        child.Category,
 			Icon:            child.Icon,
 			FeedCount:       child.FeedCount,
+			ArticleCount:    articleCounts[child.ID],
 			SimilarityScore: r.SimilarityScore,
 			IsActive:        activeTagIDs[child.ID],
+			QualityScore:    child.QualityScore,
+			IsLowQuality:    child.Source != "abstract" && child.QualityScore < 0.3,
 			Children:        []TagHierarchyNode{},
 		})
 		parentSet[r.ParentID] = true
 	}
 
 	// Find root parents (tags that are parents but not children in any relation in this set)
-			QualityScore: parent.QualityScore,
 	childSet := make(map[uint]bool)
 	for _, r := range relations {
 		childSet[r.ChildID] = true
@@ -269,14 +302,16 @@ func GetTagHierarchy(category string, scopeFeedID uint, scopeCategoryID uint, ti
 		}
 		children := buildHierarchy(childrenMap, parentID)
 		roots = append(roots, TagHierarchyNode{
-			ID:        parent.ID,
-			Label:     parent.Label,
-			Slug:      parent.Slug,
-			Category:  parent.Category,
-			Icon:      parent.Icon,
-			FeedCount: parent.FeedCount,
-			IsActive:  activeTagIDs[parent.ID],
-			Children:  children,
+			ID:           parent.ID,
+			Label:        parent.Label,
+			Slug:         parent.Slug,
+			Category:     parent.Category,
+			Icon:         parent.Icon,
+			FeedCount:    parent.FeedCount,
+			ArticleCount: articleCounts[parent.ID],
+			IsActive:     activeTagIDs[parent.ID],
+			QualityScore: parent.QualityScore,
+			Children:     children,
 		})
 	}
 
@@ -285,15 +320,28 @@ func GetTagHierarchy(category string, scopeFeedID uint, scopeCategoryID uint, ti
 
 // buildHierarchy recursively builds the tree from the childrenMap
 func buildHierarchy(childrenMap map[uint][]TagHierarchyNode, parentID uint) []TagHierarchyNode {
+	return buildHierarchyWithVisited(childrenMap, parentID, make(map[uint]bool))
+}
+
+// buildHierarchyWithVisited recursively builds the tree with visited tracking to prevent cycles
+func buildHierarchyWithVisited(childrenMap map[uint][]TagHierarchyNode, parentID uint, visited map[uint]bool) []TagHierarchyNode {
+	if visited[parentID] {
+		return []TagHierarchyNode{}
+	}
+	visited[parentID] = true
+	defer delete(visited, parentID)
+
 	children, ok := childrenMap[parentID]
 	if !ok {
 		return []TagHierarchyNode{}
 	}
+	result := make([]TagHierarchyNode, len(children))
 	for i, child := range children {
-		grandChildren := buildHierarchy(childrenMap, child.ID)
-		children[i].Children = grandChildren
+		result[i] = child
+		grandChildren := buildHierarchyWithVisited(childrenMap, child.ID, visited)
+		result[i].Children = grandChildren
 	}
-	return children
+	return result
 }
 
 // UpdateAbstractTagName updates the name and slug of an abstract tag.
@@ -411,10 +459,19 @@ func ReassignTagParent(tagID, newParentID uint) error {
 			return fmt.Errorf("cannot reassign an abstract tag that has children")
 		}
 
-		// 3. Remove from current parent (if any)
+		// 3. Check if this would create a cycle
+		wouldCycle, err := wouldCreateCycle(tx, newParentID, tagID)
+		if err != nil {
+			return fmt.Errorf("check cycle for reassignment: %w", err)
+		}
+		if wouldCycle {
+			return fmt.Errorf("reassigning tag %d to parent %d would create a cycle", tagID, newParentID)
+		}
+
+		// 4. Remove from current parent (if any)
 		tx.Where("child_id = ?", tagID).Delete(&models.TopicTagRelation{})
 
-		// 4. Create new relation
+		// 5. Create new relation
 		relation := models.TopicTagRelation{
 			ParentID:     newParentID,
 			ChildID:      tagID,
@@ -429,6 +486,39 @@ func ReassignTagParent(tagID, newParentID uint) error {
 }
 
 // --- Internal helpers ---
+
+// wouldCreateCycle checks if adding a parent-child relation would create a cycle.
+// Returns true if adding parentID -> childID would create a cycle.
+func wouldCreateCycle(tx *gorm.DB, parentID, childID uint) (bool, error) {
+	// Use BFS to check if parentID is reachable from childID (which would create a cycle)
+	visited := make(map[uint]bool)
+	queue := []uint{childID}
+	visited[childID] = true
+
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+
+		if current == parentID {
+			return true, nil
+		}
+
+		// Find all parents of current node
+		var relations []models.TopicTagRelation
+		if err := tx.Where("child_id = ? AND relation_type = ?", current, "abstract").Find(&relations).Error; err != nil {
+			return false, fmt.Errorf("query relations for cycle check: %w", err)
+		}
+
+		for _, r := range relations {
+			if !visited[r.ParentID] {
+				visited[r.ParentID] = true
+				queue = append(queue, r.ParentID)
+			}
+		}
+	}
+
+	return false, nil
+}
 
 // callLLMForAbstractName calls the LLM to extract a common abstract concept and description from candidates.
 func callLLMForAbstractName(ctx context.Context, candidates []TagCandidate, newLabel string) (string, string, error) {
@@ -552,6 +642,13 @@ func resolveActiveTagIDs(timeRange string, candidateIDs map[uint]bool) map[uint]
 
 	var activeIDs []uint
 	switch {
+	case timeRange == "1d":
+		since := time.Now().AddDate(0, 0, -1)
+		database.DB.Model(&models.ArticleTopicTag{}).
+			Joins("JOIN articles ON articles.id = article_topic_tags.article_id").
+			Where("articles.pub_date >= ?", since).
+			Where("article_topic_tags.topic_tag_id IN ?", candidateIDSetToSlice(candidateIDs)).
+			Pluck("DISTINCT article_topic_tags.topic_tag_id", &activeIDs)
 	case timeRange == "7d":
 		since := time.Now().AddDate(0, 0, -7)
 		database.DB.Model(&models.ArticleTopicTag{}).
@@ -722,17 +819,173 @@ func GetUnclassifiedTags(category string, scopeFeedID uint, scopeCategoryID uint
 	nodes := make([]TagHierarchyNode, 0, len(tags))
 	for _, tag := range tags {
 		nodes = append(nodes, TagHierarchyNode{
-			ID:        tag.ID,
-			Label:     tag.Label,
+			ID:           tag.ID,
+			Label:        tag.Label,
+			Slug:         tag.Slug,
+			Category:     tag.Category,
+			Icon:         tag.Icon,
+			FeedCount:    tag.FeedCount,
+			IsActive:     activeTagIDs[tag.ID],
 			QualityScore: tag.QualityScore,
 			IsLowQuality: tag.Source != "abstract" && tag.QualityScore < 0.3,
-			Slug:      tag.Slug,
-			Category:  tag.Category,
-			Icon:      tag.Icon,
-			FeedCount: tag.FeedCount,
-			IsActive:  activeTagIDs[tag.ID],
-			Children:  []TagHierarchyNode{},
+			Children:     []TagHierarchyNode{},
 		})
 	}
 	return nodes, nil
+}
+
+// MatchAbstractTagHierarchy searches for similar abstract tags after a new abstract tag is created,
+// and establishes parent-child relationships for multi-level hierarchy.
+func MatchAbstractTagHierarchy(ctx context.Context, abstractTagID uint) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[WARN] MatchAbstractTagHierarchy panic for tag %d: %v", abstractTagID, r)
+		}
+	}()
+
+	var abstractTag models.TopicTag
+	if err := database.DB.First(&abstractTag, abstractTagID).Error; err != nil {
+		log.Printf("[WARN] MatchAbstractTagHierarchy: tag %d not found: %v", abstractTagID, err)
+		return
+	}
+
+	es := NewEmbeddingService()
+	candidates, err := es.FindSimilarAbstractTags(ctx, abstractTagID, abstractTag.Category, 5)
+	if err != nil {
+		log.Printf("[WARN] MatchAbstractTagHierarchy: failed to find similar abstract tags for %d: %v", abstractTagID, err)
+		return
+	}
+	if len(candidates) == 0 {
+		return
+	}
+
+	best := candidates[0]
+	thresholds := es.GetThresholds()
+
+	if best.Similarity >= thresholds.HighSimilarity {
+		if err := linkAbstractParentChild(abstractTagID, best.Tag.ID); err != nil {
+			log.Printf("[WARN] MatchAbstractTagHierarchy: failed to link %d under %d: %v", abstractTagID, best.Tag.ID, err)
+			return
+		}
+		if delErr := DeleteTagEmbedding(abstractTagID); delErr != nil {
+			log.Printf("[WARN] MatchAbstractTagHierarchy: failed to delete embedding for child abstract %d: %v", abstractTagID, delErr)
+		}
+		log.Printf("[INFO] Abstract tag %d linked under existing abstract %d (similarity=%.4f)", abstractTagID, best.Tag.ID, best.Similarity)
+		return
+	}
+
+	if best.Similarity >= thresholds.LowSimilarity {
+		parentID, childID, err := aiJudgeAbstractHierarchy(ctx, abstractTagID, best.Tag.ID)
+		if err != nil {
+			log.Printf("[WARN] MatchAbstractTagHierarchy: AI judgment failed for %d vs %d: %v", abstractTagID, best.Tag.ID, err)
+			return
+		}
+		if err := linkAbstractParentChild(childID, parentID); err != nil {
+			log.Printf("[WARN] MatchAbstractTagHierarchy: failed to link %d under %d: %v", childID, parentID, err)
+			return
+		}
+		if delErr := DeleteTagEmbedding(childID); delErr != nil {
+			log.Printf("[WARN] MatchAbstractTagHierarchy: failed to delete embedding for child abstract %d: %v", childID, delErr)
+		}
+		log.Printf("[INFO] Abstract hierarchy: %d is child of %d (AI judged, similarity=%.4f)", childID, parentID, best.Similarity)
+	}
+}
+
+// linkAbstractParentChild creates a parent-child relation between two abstract tags.
+// Prevents a child from being adopted by multiple parents (one-parent rule).
+func linkAbstractParentChild(childID, parentID uint) error {
+	return database.DB.Transaction(func(tx *gorm.DB) error {
+		wouldCycle, err := wouldCreateCycle(tx, parentID, childID)
+		if err != nil {
+			return fmt.Errorf("cycle check: %w", err)
+		}
+		if wouldCycle {
+			return fmt.Errorf("would create cycle: parent=%d, child=%d", parentID, childID)
+		}
+
+		var count int64
+		tx.Model(&models.TopicTagRelation{}).
+			Where("parent_id = ? AND child_id = ?", parentID, childID).
+			Count(&count)
+		if count > 0 {
+			return nil
+		}
+
+		var existingParentCount int64
+		tx.Model(&models.TopicTagRelation{}).
+			Where("child_id = ? AND parent_id != ?", childID, parentID).
+			Count(&existingParentCount)
+		if existingParentCount > 0 {
+			return fmt.Errorf("child %d already has an abstract parent, skipping", childID)
+		}
+
+		relation := models.TopicTagRelation{
+			ParentID:     parentID,
+			ChildID:      childID,
+			RelationType: "abstract",
+		}
+		return tx.Create(&relation).Error
+	})
+}
+
+// aiJudgeAbstractHierarchy uses LLM to determine which abstract tag is broader (parent) vs more specific (child).
+func aiJudgeAbstractHierarchy(ctx context.Context, tag1ID, tag2ID uint) (parentID, childID uint, err error) {
+	var tag1, tag2 models.TopicTag
+	if err := database.DB.First(&tag1, tag1ID).Error; err != nil {
+		return 0, 0, fmt.Errorf("load tag %d: %w", tag1ID, err)
+	}
+	if err := database.DB.First(&tag2, tag2ID).Error; err != nil {
+		return 0, 0, fmt.Errorf("load tag %d: %w", tag2ID, err)
+	}
+
+	router := airouter.NewRouter()
+	prompt := fmt.Sprintf(`Given two abstract topic tags, determine which concept is broader (more general) and which is more specific.
+
+Tag A: %q (description: %s)
+Tag B: %q (description: %s)
+
+Respond with JSON:
+{"parent": "A" or "B", "reason": "brief explanation"}
+
+Rules:
+- The parent should be the more general/broader concept
+- If they are equally broad, choose the one with a shorter/more concise label as parent
+- If unclear, default to "A" as parent`, tag1.Label, truncateStr(tag1.Description, 200), tag2.Label, truncateStr(tag2.Description, 200))
+
+	req := airouter.ChatRequest{
+		Capability: airouter.CapabilityTopicTagging,
+		Messages: []airouter.Message{
+			{Role: "system", Content: "You are a tag taxonomy assistant. Respond only with valid JSON."},
+			{Role: "user", Content: prompt},
+		},
+		JSONMode:    true,
+		Temperature: func() *float64 { f := 0.3; return &f }(),
+	}
+
+	result, err := router.Chat(ctx, req)
+	if err != nil {
+		return 0, 0, fmt.Errorf("LLM call failed: %w", err)
+	}
+
+	var parsed struct {
+		Parent string `json:"parent"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(result.Content), &parsed); err != nil {
+		return 0, 0, fmt.Errorf("parse LLM response: %w", err)
+	}
+
+	if strings.ToUpper(parsed.Parent) == "B" {
+		return tag2ID, tag1ID, nil
+	}
+	return tag1ID, tag2ID, nil
+}
+
+// truncateStr truncates a string to maxLen characters.
+func truncateStr(s string, maxLen int) string {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
+		return s
+	}
+	return string(runes[:maxLen])
 }

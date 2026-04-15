@@ -370,7 +370,7 @@ func (s *AutoSummaryScheduler) generateSummaryForFeed(feed *models.Feed) (bool, 
 	log.Printf("Using time range: %d minutes (threshold: %s)", timeRange, timeThreshold.Format("2006-01-02 15:04:05"))
 
 	var articles []models.Article
-	if err := database.DB.Omit("tag_count").Where("feed_id = ? AND created_at >= ?", feed.ID, timeThreshold).
+	if err := database.DB.Omit("tag_count", "relevance_score").Where("feed_id = ? AND created_at >= ? AND feed_summary_generated_at IS NULL", feed.ID, timeThreshold).
 		Order("created_at DESC").
 		Find(&articles).Error; err != nil {
 		return false, fmt.Errorf("failed to fetch articles: %w", err)
@@ -418,6 +418,9 @@ func (s *AutoSummaryScheduler) generateSummaryForFeed(feed *models.Feed) (bool, 
 		if existingSummary != nil {
 			allArticleIDs = append(allArticleIDs, batchArticleIDs...)
 			log.Printf("Skipping existing summary for feed %d batch %d/%d (ID: %d)", feed.ID, batchNum, totalBatches, existingSummary.ID)
+			if err := summaries.MarkArticlesWithFeedSummary(batchArticleIDs, existingSummary); err != nil {
+				log.Printf("[WARN] Failed to mark articles with existing summary %d: %v", existingSummary.ID, err)
+			}
 			if err := topicextraction.TagSummary(existingSummary); err != nil {
 				log.Printf("[WARN] Failed to backfill tags for existing auto summary %d: %v", existingSummary.ID, err)
 			}
@@ -475,7 +478,9 @@ func (s *AutoSummaryScheduler) generateSummaryForFeed(feed *models.Feed) (bool, 
 		if err := database.DB.Create(&aiSummary).Error; err != nil {
 			return false, fmt.Errorf("failed to save summary: %w", err)
 		}
-
+		if err := summaries.MarkArticlesWithFeedSummary(batchArticleIDs, &aiSummary); err != nil {
+			log.Printf("[WARN] Failed to mark articles with summary %d: %v", aiSummary.ID, err)
+		}
 		if err := topicextraction.TagSummary(&aiSummary); err != nil {
 			log.Printf("[WARN] Failed to tag auto summary %d: %v", aiSummary.ID, err)
 		}

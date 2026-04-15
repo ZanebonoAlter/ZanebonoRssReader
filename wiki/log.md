@@ -27,3 +27,7 @@
 ## [2026-04-13] ingest | Quick task 260413-p2t 后端队列 Tab 与标签合并重算队列
 - 新增 `phases/260413-p2t-backend-queues-and-merge-reembedding.md`
 - 记录 MergeTags 提交后 target-tag 重算入队、独立 merge re-embedding worker/API，以及设置页“后端队列”Tab 的双队列可视化
+
+## [2026-04-14] ingest | Quick task Summary 文章级去重标记
+- 新增 `phases/260414-summary-article-markers.md`
+- 记录 `articles.feed_summary_id` / `feed_summary_generated_at` 两个字段，以及 summary 命中旧批次时的文章回填逻辑

@@ -210,4 +210,96 @@ func TestGenerateSummaryForFeedSkipsExistingBatchAndLogsMetadata(t *testing.T) {
 	if !strings.Contains(logs[0].RequestMeta, `"article_ids":[`) {
 		t.Fatalf("request_meta missing article_ids: %s", logs[0].RequestMeta)
 	}
+
+	var refreshedArticles []models.Article
+	if err := database.DB.Order("id ASC").Find(&refreshedArticles).Error; err != nil {
+		t.Fatalf("load articles: %v", err)
+	}
+	for i := 0; i < 20; i++ {
+		if refreshedArticles[i].FeedSummaryID == nil || *refreshedArticles[i].FeedSummaryID != existing.ID {
+			t.Fatalf("article %d feed_summary_id = %v, want %d", refreshedArticles[i].ID, refreshedArticles[i].FeedSummaryID, existing.ID)
+		}
+		if refreshedArticles[i].FeedSummaryGeneratedAt == nil {
+			t.Fatalf("article %d feed_summary_generated_at is nil", refreshedArticles[i].ID)
+		}
+	}
+	if refreshedArticles[20].FeedSummaryID == nil || *refreshedArticles[20].FeedSummaryID != summaries[1].ID {
+		t.Fatalf("new article feed_summary_id = %v, want %d", refreshedArticles[20].FeedSummaryID, summaries[1].ID)
+	}
+	if refreshedArticles[20].FeedSummaryGeneratedAt == nil {
+		t.Fatal("new article feed_summary_generated_at is nil")
+	}
+}
+
+func TestGenerateSummaryForFeedOnlyUsesUnmarkedArticles(t *testing.T) {
+	setupSchedulersTestDB(t)
+	if err := database.DB.AutoMigrate(&models.Category{}, &models.UserPreference{}, &models.AISummary{}, &models.TopicTag{}, &models.AISummaryTopic{}, &models.ArticleTopicTag{}, &models.AIProvider{}, &models.AIRoute{}, &models.AIRouteProvider{}, &models.AICallLog{}); err != nil {
+		t.Fatalf("extra migrate: %v", err)
+	}
+
+	aiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"summary body"}}]}`))
+	}))
+	defer aiServer.Close()
+
+	provider := models.AIProvider{Name: "summary-primary", ProviderType: airouter.ProviderTypeOpenAICompatible, BaseURL: aiServer.URL, APIKey: "token", Model: "test-model", Enabled: true}
+	if err := database.DB.Create(&provider).Error; err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+	route := models.AIRoute{Name: airouter.DefaultRouteName, Capability: string(airouter.CapabilitySummary), Enabled: true, Strategy: "ordered_failover"}
+	if err := database.DB.Create(&route).Error; err != nil {
+		t.Fatalf("create route: %v", err)
+	}
+	if err := database.DB.Create(&models.AIRouteProvider{RouteID: route.ID, ProviderID: provider.ID, Priority: 1, Enabled: true}).Error; err != nil {
+		t.Fatalf("create route provider: %v", err)
+	}
+
+	feed := models.Feed{Title: "Feed", URL: "https://example.com/feed", AISummaryEnabled: true}
+	if err := database.DB.Create(&feed).Error; err != nil {
+		t.Fatalf("create feed: %v", err)
+	}
+
+	now := time.Now()
+	articles := []models.Article{
+		{FeedID: feed.ID, Title: "Old", Link: "https://example.com/old", Content: "rss body", PubDate: &now},
+		{FeedID: feed.ID, Title: "New", Link: "https://example.com/new", Content: "rss body", PubDate: &now},
+	}
+	if err := database.DB.Create(&articles).Error; err != nil {
+		t.Fatalf("create articles: %v", err)
+	}
+
+	existingIDsJSON, _ := json.Marshal([]uint{articles[0].ID})
+	existing := models.AISummary{FeedID: &feed.ID, Title: "Existing batch", Summary: "saved", Articles: string(existingIDsJSON), ArticleCount: 1, TimeRange: 180}
+	if err := database.DB.Create(&existing).Error; err != nil {
+		t.Fatalf("create existing summary: %v", err)
+	}
+	if err := database.DB.Model(&models.Article{}).Where("id = ?", articles[0].ID).Updates(map[string]any{
+		"feed_summary_id":           existing.ID,
+		"feed_summary_generated_at": now,
+	}).Error; err != nil {
+		t.Fatalf("mark existing article: %v", err)
+	}
+
+	scheduler := NewAutoSummaryScheduler(60)
+	scheduler.aiConfig = &AIConfig{TimeRange: 180}
+
+	generated, err := scheduler.generateSummaryForFeed(&feed)
+	if err != nil {
+		t.Fatalf("generate summary: %v", err)
+	}
+	if !generated {
+		t.Fatal("expected generateSummaryForFeed to generate summary for new article")
+	}
+
+	var summaries []models.AISummary
+	if err := database.DB.Order("id ASC").Find(&summaries).Error; err != nil {
+		t.Fatalf("load summaries: %v", err)
+	}
+	if len(summaries) != 2 {
+		t.Fatalf("summary count = %d, want 2", len(summaries))
+	}
+	if summaries[1].Articles != fmt.Sprintf("[%d]", articles[1].ID) {
+		t.Fatalf("new summary articles = %s, want [%d]", summaries[1].Articles, articles[1].ID)
+	}
 }

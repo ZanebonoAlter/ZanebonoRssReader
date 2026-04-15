@@ -90,11 +90,18 @@ func tagArticle(article *models.Article, feedName, categoryName string, options 
 	}
 
 	// Process each tag
+	seenTagIDs := make(map[uint]struct{})
 	for _, tag := range dedupeTagsWithCategory(tags) {
 		dbTag, err := findOrCreateTag(context.Background(), tag, source, articleContext)
 		if err != nil {
 			continue // Skip on error, don't fail the whole operation
 		}
+
+		// Skip if we already added this tag ID (prevents duplicate key violations)
+		if _, alreadyAdded := seenTagIDs[dbTag.ID]; alreadyAdded {
+			continue
+		}
+		seenTagIDs[dbTag.ID] = struct{}{}
 
 		// Create the association
 		link := models.ArticleTopicTag{
@@ -296,7 +303,7 @@ func GetArticlesByTag(slug, category string, limit int) ([]models.Article, error
 	}
 
 	err := query.
-		Omit("tag_count").
+		Omit("tag_count", "relevance_score").
 		Order("articles.pub_date DESC").
 		Limit(limit).
 		Find(&articles).Error

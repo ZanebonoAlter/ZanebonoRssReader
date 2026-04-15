@@ -83,6 +83,11 @@ func NewEmbeddingServiceWithThresholds(thresholds EmbeddingMatchThresholds) *Emb
 	}
 }
 
+// GetThresholds returns the configured match thresholds for this service.
+func (s *EmbeddingService) GetThresholds() EmbeddingMatchThresholds {
+	return s.thresholds
+}
+
 // GenerateEmbedding generates an embedding for a tag's text representation
 func (s *EmbeddingService) GenerateEmbedding(ctx context.Context, tag *models.TopicTag) (*models.TopicTagEmbedding, error) {
 	// Build text for embedding: label + aliases + category
@@ -125,14 +130,7 @@ func (s *EmbeddingService) GenerateEmbedding(ctx context.Context, tag *models.To
 
 // FindSimilarTags finds existing tags with similar embeddings using pgvector SQL
 func (s *EmbeddingService) FindSimilarTags(ctx context.Context, tag *models.TopicTag, category string, limit int) ([]TagCandidate, error) {
-	// Generate embedding for the new tag
-	tagWithText := &models.TopicTag{
-		Label:    tag.Label,
-		Category: category,
-		Aliases:  tag.Aliases,
-	}
-
-	embedding, err := s.GenerateEmbedding(ctx, tagWithText)
+	embedding, err := s.GenerateEmbedding(ctx, tag)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate embedding: %w", err)
 	}
@@ -289,6 +287,82 @@ func (s *EmbeddingService) TagMatch(ctx context.Context, label, category string,
 	}, nil
 }
 
+// FindSimilarAbstractTags finds existing abstract tags with similar embeddings using pgvector SQL.
+// Only considers tags where source = 'abstract'.
+// Excludes tags that already have a parent-child relation with tagID (in either direction).
+func (s *EmbeddingService) FindSimilarAbstractTags(ctx context.Context, tagID uint, category string, limit int) ([]TagCandidate, error) {
+	var existing models.TopicTagEmbedding
+	if err := database.DB.Where("topic_tag_id = ?", tagID).First(&existing).Error; err != nil {
+		return nil, fmt.Errorf("no embedding for tag %d: %w", tagID, err)
+	}
+
+	pgVecStr := existing.EmbeddingVec
+
+	type simRow struct {
+		TagID    uint    `gorm:"column:tag_id"`
+		Distance float64 `gorm:"column:distance"`
+	}
+	var rows []simRow
+	args := []interface{}{pgVecStr, tagID, tagID, tagID, pgVecStr}
+	sqlQuery := `
+		SELECT t.id AS tag_id, e.embedding <=> ?::vector AS distance
+		FROM topic_tag_embeddings e
+		JOIN topic_tags t ON t.id = e.topic_tag_id
+		WHERE t.source = 'abstract'
+		  AND (t.status = 'active' OR t.status = '' OR t.status IS NULL)
+		  AND t.id != ?
+		  AND e.embedding IS NOT NULL
+		  AND NOT EXISTS (
+		    SELECT 1 FROM topic_tag_relations r
+		    WHERE (r.parent_id = ? AND r.child_id = t.id)
+		       OR (r.child_id = ? AND r.parent_id = t.id)
+		  )
+	`
+	if category != "" {
+		sqlQuery += "  AND t.category = ?\n"
+		args = append(args, category)
+	}
+	sqlQuery += `
+		ORDER BY e.embedding <=> ?::vector
+		LIMIT ?
+	`
+	args = append(args, limit)
+	if err := database.DB.Raw(sqlQuery, args...).Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("failed to query similar abstract tags: %w", err)
+	}
+
+	if len(rows) == 0 {
+		return nil, nil
+	}
+
+	tagIDs := make([]uint, len(rows))
+	for i, r := range rows {
+		tagIDs[i] = r.TagID
+	}
+	var tags []models.TopicTag
+	if err := database.DB.Where("id IN ?", tagIDs).Find(&tags).Error; err != nil {
+		return nil, fmt.Errorf("failed to load abstract tags: %w", err)
+	}
+	tagMap := make(map[uint]*models.TopicTag, len(tags))
+	for i := range tags {
+		tagMap[tags[i].ID] = &tags[i]
+	}
+
+	candidates := make([]TagCandidate, 0, len(rows))
+	for _, r := range rows {
+		t, ok := tagMap[r.TagID]
+		if !ok {
+			continue
+		}
+		candidates = append(candidates, TagCandidate{
+			Tag:        t,
+			Similarity: 1.0 - r.Distance,
+		})
+	}
+
+	return candidates, nil
+}
+
 // activeTagFilter returns a GORM scope that filters to only active (non-merged) tags.
 // Used by query functions to exclude merged tags from match candidates.
 // Includes empty-string status check for rows created before the migration ran.
@@ -382,7 +456,12 @@ func MergeTags(sourceTagID, targetTagID uint) error {
 			return fmt.Errorf("mark source tag as merged: %w", err)
 		}
 
-		// Step 4: Delete source tag's embedding (stale after merge)
+		// Step 4: Migrate topic_tag_relations for abstract hierarchy
+		if err := migrateTagRelations(tx, sourceTagID, targetTagID); err != nil {
+			return fmt.Errorf("migrate tag relations: %w", err)
+		}
+
+		// Step 5: Delete source tag's embedding (stale after merge)
 		if err := tx.Where("topic_tag_id = ?", sourceTagID).Delete(&models.TopicTagEmbedding{}).Error; err != nil {
 			return fmt.Errorf("delete source tag embedding: %w", err)
 		}
@@ -409,6 +488,78 @@ func MergeTags(sourceTagID, targetTagID uint) error {
 	}
 
 	return nil
+}
+
+// migrateTagRelations migrates all topic_tag_relations involving sourceTagID to targetTagID.
+// Handles both parent and child roles, deduplicates, and removes self-references.
+func migrateTagRelations(tx *gorm.DB, sourceTagID, targetTagID uint) error {
+	// Source as parent: relations where parent_id = source
+	var parentRelations []models.TopicTagRelation
+	if err := tx.Where("parent_id = ?", sourceTagID).Find(&parentRelations).Error; err != nil {
+		return fmt.Errorf("find source parent relations: %w", err)
+	}
+	for _, rel := range parentRelations {
+		childID := rel.ChildID
+		if childID == targetTagID {
+			if err := tx.Delete(&rel).Error; err != nil {
+				return fmt.Errorf("delete self-referencing parent relation %d: %w", rel.ID, err)
+			}
+			continue
+		}
+		var existing int64
+		tx.Model(&models.TopicTagRelation{}).
+			Where("parent_id = ? AND child_id = ?", targetTagID, childID).
+			Count(&existing)
+		if existing > 0 {
+			if err := tx.Delete(&rel).Error; err != nil {
+				return fmt.Errorf("delete duplicate parent relation %d: %w", rel.ID, err)
+			}
+		} else {
+			if err := tx.Model(&rel).Update("parent_id", targetTagID).Error; err != nil {
+				return fmt.Errorf("migrate parent relation %d: %w", rel.ID, err)
+			}
+		}
+	}
+
+	// Source as child: relations where child_id = source
+	var childRelations []models.TopicTagRelation
+	if err := tx.Where("child_id = ?", sourceTagID).Find(&childRelations).Error; err != nil {
+		return fmt.Errorf("find source child relations: %w", err)
+	}
+	for _, rel := range childRelations {
+		parentID := rel.ParentID
+		if parentID == targetTagID {
+			if err := tx.Delete(&rel).Error; err != nil {
+				return fmt.Errorf("delete self-referencing child relation %d: %w", rel.ID, err)
+			}
+			continue
+		}
+		var existing int64
+		tx.Model(&models.TopicTagRelation{}).
+			Where("parent_id = ? AND child_id = ?", parentID, targetTagID).
+			Count(&existing)
+		if existing > 0 {
+			if err := tx.Delete(&rel).Error; err != nil {
+				return fmt.Errorf("delete duplicate child relation %d: %w", rel.ID, err)
+			}
+		} else {
+			if err := tx.Model(&rel).Update("child_id", targetTagID).Error; err != nil {
+				return fmt.Errorf("migrate child relation %d: %w", rel.ID, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// DeleteTagEmbedding removes the embedding row for a given tag ID.
+// Used after establishing parent-child relationships to prevent child tags
+// from appearing in future embedding similarity matches.
+func DeleteTagEmbedding(tagID uint) error {
+	if tagID == 0 {
+		return nil
+	}
+	return database.DB.Where("topic_tag_id = ?", tagID).Delete(&models.TopicTagEmbedding{}).Error
 }
 
 // SaveEmbedding saves or updates a tag's embedding in the database.
@@ -489,6 +640,10 @@ func (s *EmbeddingService) GetEmbedding(tagID uint) (*models.TopicTagEmbedding, 
 func buildTagEmbeddingText(tag *models.TopicTag) string {
 	text := tag.Label
 
+	if tag.Description != "" {
+		text += ". " + tag.Description
+	}
+
 	if tag.Aliases != "" {
 		var aliases []string
 		if err := json.Unmarshal([]byte(tag.Aliases), &aliases); err == nil {
@@ -496,7 +651,6 @@ func buildTagEmbeddingText(tag *models.TopicTag) string {
 				text += " " + alias
 			}
 		} else {
-			// Legacy: comma-separated
 			text += " " + tag.Aliases
 		}
 	}
