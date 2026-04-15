@@ -122,6 +122,7 @@ Topic Graph 当前的状态主源放在 `TopicGraphPage.vue`，不是 Pinia。
 - `hotspotDigests`
 - `selectedDigestId`
 - `previewDigestId`
+- `showLowQualityTags`
 
 ### 文章预览
 
@@ -148,6 +149,7 @@ Topic Graph 当前的状态主源放在 `TopicGraphPage.vue`，不是 Pinia。
 
 - 归一化 topic category
 - 给节点补 `size` 和 `accent`
+- 优先根据 `quality_score` 推导节点大小和透明度，质量分缺失时再回退旧的 `weight`
 - 过滤掉权重过低的 edge（`weight < 0.35`）
 - 推导 `featuredNodeIds`
 - 推导 trunk / branch / peripheral 三层视觉层级
@@ -189,10 +191,14 @@ Topic Graph 当前的状态主源放在 `TopicGraphPage.vue`，不是 Pinia。
 
 这里的 digest tags 现在不是 digest 自己的 summary topics，而是 digest 覆盖 article 的 `aggregated_tags`。
 
+补充：热点标签分组和 fallback topic 列表现在都优先按 `quality_score` 排序。普通标签如果带 `is_low_quality: true`，默认会被隐藏；抽象标签不受这个默认过滤影响，用户可以通过页面开关显式显示全部标签。
+
 所以热点标签点击后，页面会同时切换两套内容：
 
 - 右侧还是 topic detail
 - 中下区域则优先展示“包含这个标签文章的 digest 列表”
+
+补充：标签层级视图里的 tag row 现在也会复用同一条 `handleTagSelect(slug, category)` 链路，所以从层级树里点标签时，也会同步驱动右侧详情栏和下方 timeline，而不是只停留在层级视图内部。
 
 ### 用例 3：选择 digest，再打开文章预览
 

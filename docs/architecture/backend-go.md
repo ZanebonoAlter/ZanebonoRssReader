@@ -131,6 +131,7 @@ backend-go/
 - `auto_summary.go`：按 feed 聚合近时间窗文章并生成 `ai_summaries`
 - `content_completion.go`：对 `firecrawl completed + summary incomplete` 的文章做内容补全
 - `firecrawl.go`：轮询待抓取文章并执行 Firecrawl
+- `tag_quality_score.go`：每小时重算 `topic_tags.quality_score`，支持统一 scheduler 状态查询和手动触发
 - `preference_update.go`：阅读偏好更新任务
 - `handler.go`：部分 scheduler 状态查询与手动触发 API
 
@@ -214,6 +215,7 @@ topictypes
 - `scheduler_tasks`：scheduler 最近执行状态、耗时、错误、结果摘要
 - `digest_configs`：digest 配置
 - 主题图谱相关模型：`topic_tags`、`topic_tag_analyses`、`topic_tag_embeddings` 等
+  - `topic_tags.quality_score`：按频率、共现、来源分散度、语义默认分得到的客观质量分，普通标签先算，抽象标签再按 child 加权平均
 
 ## 真实 API 面
 
