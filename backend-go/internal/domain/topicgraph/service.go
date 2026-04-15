@@ -111,7 +111,7 @@ func BuildTopicDetail(kind string, slug string, anchor time.Time, categoryID, fe
 	}
 
 	if canonical.Slug == "" {
-		canonical = topictypes.TopicTag{ID: topic.ID, Label: topic.Label, Slug: topic.Slug, Category: topictypes.NormalizeDisplayCategory(topic.Kind, topic.Category), Icon: topic.Icon, Kind: topictypes.NormalizeTopicKind(topic.Kind, topic.Category), Score: 0}
+		canonical = topictypes.TopicTag{ID: topic.ID, Label: topic.Label, Slug: topic.Slug, Category: topictypes.NormalizeDisplayCategory(topic.Kind, topic.Category), Icon: topic.Icon, Kind: topictypes.NormalizeTopicKind(topic.Kind, topic.Category), Description: topic.Description, Score: 0}
 	}
 
 	articlesBySummary := topictypes.FetchArticlesForSummaries(matchedSourceSummaries)
@@ -195,7 +195,7 @@ func getTopicArticles(topicID uint, startDate, endDate time.Time, page, pageSize
 		Order("articles.created_at DESC").
 		Offset(offset).
 		Limit(pageSize).
-		Omit("tag_count").
+		Omit("tag_count", "relevance_score").
 		Find(&articles).Error
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to query articles: %w", err)
@@ -209,7 +209,7 @@ func getTopicArticles(topicID uint, startDate, endDate time.Time, page, pageSize
 		Order("articles.created_at DESC").
 		Offset(offset).
 		Limit(pageSize).
-		Omit("tag_count").
+		Omit("tag_count", "relevance_score").
 		Find(&articles).Error
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to query articles: %w", err)
@@ -455,14 +455,15 @@ func summaryTopics(summary models.AISummary) []topictypes.TopicTag {
 				continue
 			}
 			result = append(result, topictypes.TopicTag{
-				ID:       link.TopicTag.ID,
-				Label:    link.TopicTag.Label,
-				Slug:     link.TopicTag.Slug,
-				Category: topictypes.NormalizeDisplayCategory(link.TopicTag.Kind, link.TopicTag.Category),
-				Icon:     link.TopicTag.Icon,
-				Aliases:  parseAliasesFromJSON(link.TopicTag.Aliases),
-				Kind:     topictypes.NormalizeTopicKind(link.TopicTag.Kind, link.TopicTag.Category),
-				Score:    link.Score,
+				ID:          link.TopicTag.ID,
+				Label:       link.TopicTag.Label,
+				Slug:        link.TopicTag.Slug,
+				Category:    topictypes.NormalizeDisplayCategory(link.TopicTag.Kind, link.TopicTag.Category),
+				Icon:        link.TopicTag.Icon,
+				Aliases:     parseAliasesFromJSON(link.TopicTag.Aliases),
+				Kind:        topictypes.NormalizeTopicKind(link.TopicTag.Kind, link.TopicTag.Category),
+				Description: link.TopicTag.Description,
+				Score:       link.Score,
 			})
 		}
 		if len(result) > 0 {
@@ -633,13 +634,16 @@ func BuildTopicsByCategory(kind string, anchor time.Time, categoryID, feedID *ui
 		}
 
 		tag := topictypes.TopicTag{
-			ID:       at.TopicTag.ID,
-			Label:    at.TopicTag.Label,
-			Slug:     at.TopicTag.Slug,
-			Category: topictypes.NormalizeDisplayCategory(at.TopicTag.Kind, at.TopicTag.Category),
-			Icon:     at.TopicTag.Icon,
-			Kind:     topictypes.NormalizeTopicKind(at.TopicTag.Kind, at.TopicTag.Category),
-			Score:    at.Score,
+			ID:           at.TopicTag.ID,
+			Label:        at.TopicTag.Label,
+			Slug:         at.TopicTag.Slug,
+			Category:     topictypes.NormalizeDisplayCategory(at.TopicTag.Kind, at.TopicTag.Category),
+			Icon:         at.TopicTag.Icon,
+			Kind:         topictypes.NormalizeTopicKind(at.TopicTag.Kind, at.TopicTag.Category),
+			Description:  at.TopicTag.Description,
+			Score:        at.Score,
+			QualityScore: at.TopicTag.QualityScore,
+			IsLowQuality: at.TopicTag.Source != "abstract" && at.TopicTag.QualityScore < 0.3,
 		}
 
 		switch tag.Category {
@@ -664,7 +668,9 @@ func BuildTopicsByCategory(kind string, anchor time.Time, categoryID, feedID *ui
 		}
 	}
 
-	// Convert maps to slices and sort by score
+	enrichAbstractTags(database.DB, eventScores, personScores, keywordScores)
+	finalizeTopicTagQuality(eventScores, personScores, keywordScores)
+
 	result := &topictypes.TopicsByCategoryResult{
 		Events:   sortTagsByScoreMap(eventScores),
 		People:   sortTagsByScoreMap(personScores),
@@ -682,13 +688,24 @@ func sortTagsByScoreMap(tagMap map[string]*topictypes.TopicTag) []topictypes.Top
 	}
 
 	sort.SliceStable(result, func(i, j int) bool {
-		if result[i].Score == result[j].Score {
-			return result[i].Label < result[j].Label
+		if result[i].QualityScore == result[j].QualityScore {
+			if result[i].Score == result[j].Score {
+				return result[i].Label < result[j].Label
+			}
+			return result[i].Score > result[j].Score
 		}
-		return result[i].Score > result[j].Score
+		return result[i].QualityScore > result[j].QualityScore
 	})
 
 	return result
+}
+
+func finalizeTopicTagQuality(tagMaps ...map[string]*topictypes.TopicTag) {
+	for _, tagMap := range tagMaps {
+		for _, tag := range tagMap {
+			tag.IsLowQuality = !tag.IsAbstract && tag.QualityScore < 0.3
+		}
+	}
 }
 
 // ArticleTagData represents aggregated data from article_topic_tags for graph building
@@ -800,13 +817,15 @@ func buildGraphPayloadFromArticles(db *gorm.DB, data []ArticleTagData) ([]topict
 		merged := topicScores[topicSlug]
 		if merged.Label == "" || merged.Score < item.Score {
 			topicScores[topicSlug] = topictypes.TopicTag{
-				ID:       item.TopicTag.ID,
-				Label:    topicLabel,
-				Slug:     topicSlug,
-				Category: topicCategory,
-				Icon:     item.TopicTag.Icon,
-				Kind:     topictypes.NormalizeTopicKind(item.TopicTag.Kind, item.TopicTag.Category),
-				Score:    item.Score,
+				ID:           item.TopicTag.ID,
+				Label:        topicLabel,
+				Slug:         topicSlug,
+				Category:     topicCategory,
+				Icon:         item.TopicTag.Icon,
+				Kind:         topictypes.NormalizeTopicKind(item.TopicTag.Kind, item.TopicTag.Category),
+				Score:        item.Score,
+				QualityScore: item.TopicTag.QualityScore,
+				IsLowQuality: item.TopicTag.Source != "abstract" && item.TopicTag.QualityScore < 0.3,
 			}
 		}
 
@@ -869,14 +888,24 @@ func buildGraphPayloadFromArticles(db *gorm.DB, data []ArticleTagData) ([]topict
 		topic.Score = topicNodes[topic.Slug].Weight
 		topTopics = append(topTopics, topic)
 	}
+	markTopicTagsQuality(topTopics)
 	sort.SliceStable(topTopics, func(i, j int) bool {
-		if topTopics[i].Score == topTopics[j].Score {
-			return topTopics[i].Label < topTopics[j].Label
+		if topTopics[i].QualityScore == topTopics[j].QualityScore {
+			if topTopics[i].Score == topTopics[j].Score {
+				return topTopics[i].Label < topTopics[j].Label
+			}
+			return topTopics[i].Score > topTopics[j].Score
 		}
-		return topTopics[i].Score > topTopics[j].Score
+		return topTopics[i].QualityScore > topTopics[j].QualityScore
 	})
 
 	return nodes, edges, topTopics, len(articleSet)
+}
+
+func markTopicTagsQuality(tags []topictypes.TopicTag) {
+	for i := range tags {
+		tags[i].IsLowQuality = !tags[i].IsAbstract && tags[i].QualityScore < 0.3
+	}
 }
 
 // GetPendingArticlesByTag retrieves articles that have the given tag but are not in any digest
@@ -893,14 +922,21 @@ func GetPendingArticlesByTag(tagSlug string, kind string, anchor time.Time) (*to
 		return nil, fmt.Errorf("topic tag not found: %w", err)
 	}
 
-	// Step 2: Get articles with this tag in the time window
+	// Step 2: Get articles with this tag (and all child tags if abstract) in the time window
+	tagIDSet := collectAllChildTagIDs(topicTag.ID)
+	tagIDs := make([]uint, 0, len(tagIDSet))
+	for id := range tagIDSet {
+		tagIDs = append(tagIDs, id)
+	}
+
 	var taggedArticles []models.Article
 	err = database.DB.
 		Joins("JOIN article_topic_tags ON articles.id = article_topic_tags.article_id").
-		Where("article_topic_tags.topic_tag_id = ?", topicTag.ID).
+		Where("article_topic_tags.topic_tag_id IN ?", tagIDs).
 		Where("articles.created_at >= ? AND articles.created_at < ?", windowStart, windowEnd).
 		Preload("Feed").
-		Omit("tag_count").
+		Omit("tag_count", "relevance_score").
+		Distinct().
 		Find(&taggedArticles).Error
 	if err != nil {
 		return nil, fmt.Errorf("failed to get tagged articles: %w", err)
@@ -987,5 +1023,62 @@ func findAbstractSlugs(db *gorm.DB, topicNodes map[string]*topictypes.GraphNode)
 		if abstractSlugs[slug] {
 			node.IsAbstract = true
 		}
+	}
+}
+
+// enrichAbstractTags queries topic_tag_relations and enriches tags in the category maps
+// with IsAbstract flag and ChildSlugs for parent tags.
+func enrichAbstractTags(db *gorm.DB, tagMaps ...map[string]*topictypes.TopicTag) {
+	var relations []models.TopicTagRelation
+	db.Preload("Parent").Preload("Child").Find(&relations)
+	if len(relations) == 0 {
+		return
+	}
+
+	parentToChildren := make(map[uint][]string)
+	parentByID := make(map[uint]*models.TopicTag)
+	for _, rel := range relations {
+		if rel.Parent != nil && rel.Child != nil {
+			parentToChildren[rel.ParentID] = append(parentToChildren[rel.ParentID], rel.Child.Slug)
+			parentByID[rel.ParentID] = rel.Parent
+		}
+	}
+
+	childToParents := make(map[uint]uint)
+	for _, rel := range relations {
+		childToParents[rel.ChildID] = rel.ParentID
+	}
+
+	abstractSlugs := make(map[string]bool, len(parentByID))
+	for _, parent := range parentByID {
+		abstractSlugs[parent.Slug] = true
+	}
+
+	for _, m := range tagMaps {
+		for slug, tag := range m {
+			if abstractSlugs[slug] {
+				tag.IsAbstract = true
+			}
+		}
+	}
+
+	allSlugs := make(map[string]*topictypes.TopicTag)
+	for _, m := range tagMaps {
+		for slug, tag := range m {
+			allSlugs[slug] = tag
+		}
+	}
+
+	for parentID, childSlugs := range parentToChildren {
+		parent, ok := parentByID[parentID]
+		if !ok {
+			continue
+		}
+		tag, exists := allSlugs[parent.Slug]
+		if !exists {
+			continue
+		}
+		tag.IsAbstract = true
+		tag.ChildSlugs = childSlugs
 	}
 }

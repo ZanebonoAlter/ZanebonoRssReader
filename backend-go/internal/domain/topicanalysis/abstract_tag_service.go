@@ -27,6 +27,8 @@ type TagHierarchyNode struct {
 	Label           string             `json:"label"`
 	Slug            string             `json:"slug"`
 	Category        string             `json:"category"`
+	QualityScore    float64            `json:"quality_score,omitempty"`
+	IsLowQuality    bool               `json:"is_low_quality,omitempty"`
 	Icon            string             `json:"icon"`
 	FeedCount       int                `json:"feed_count"`
 	SimilarityScore float64            `json:"similarity_score,omitempty"`
@@ -218,6 +220,8 @@ func GetTagHierarchy(category string, scopeFeedID uint, scopeCategoryID uint, ti
 			// Also keep relations for children that are themselves parents in this category
 		}
 		relations = filteredRelations
+			QualityScore:    child.QualityScore,
+			IsLowQuality:    child.Source != "abstract" && child.QualityScore < 0.3,
 	}
 
 	// Resolve active tag IDs based on time range
@@ -246,6 +250,7 @@ func GetTagHierarchy(category string, scopeFeedID uint, scopeCategoryID uint, ti
 	}
 
 	// Find root parents (tags that are parents but not children in any relation in this set)
+			QualityScore: parent.QualityScore,
 	childSet := make(map[uint]bool)
 	for _, r := range relations {
 		childSet[r.ChildID] = true
@@ -703,7 +708,7 @@ func GetUnclassifiedTags(category string, scopeFeedID uint, scopeCategoryID uint
 	}
 
 	var tags []models.TopicTag
-	if err := query.Order("feed_count DESC").Limit(200).Find(&tags).Error; err != nil {
+	if err := query.Order("quality_score DESC, feed_count DESC, label ASC").Limit(200).Find(&tags).Error; err != nil {
 		return nil, fmt.Errorf("query unclassified tags: %w", err)
 	}
 
@@ -719,6 +724,8 @@ func GetUnclassifiedTags(category string, scopeFeedID uint, scopeCategoryID uint
 		nodes = append(nodes, TagHierarchyNode{
 			ID:        tag.ID,
 			Label:     tag.Label,
+			QualityScore: tag.QualityScore,
+			IsLowQuality: tag.Source != "abstract" && tag.QualityScore < 0.3,
 			Slug:      tag.Slug,
 			Category:  tag.Category,
 			Icon:      tag.Icon,
