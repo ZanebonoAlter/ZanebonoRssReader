@@ -17,8 +17,7 @@ func loadArticleWithTagCount(articleID uint) (*models.Article, error) {
 	var article models.Article
 	if err := database.DB.Model(&models.Article{}).
 		Joins("LEFT JOIN feeds ON articles.feed_id = feeds.id").
-		Joins("LEFT JOIN (SELECT article_id, COUNT(*) AS tag_count FROM article_topic_tags GROUP BY article_id) tag_stats ON tag_stats.article_id = articles.id").
-		Select("articles.*, feeds.category_id AS category_id, COALESCE(tag_stats.tag_count, 0) AS tag_count").
+		Select("articles.*, feeds.category_id AS category_id, (SELECT COUNT(*) FROM article_topic_tags att_cnt WHERE att_cnt.article_id = articles.id) AS tag_count").
 		First(&article, articleID).Error; err != nil {
 		return nil, err
 	}
@@ -95,8 +94,7 @@ func GetArticles(c *gin.Context) {
 
 	// Build base query with standard joins
 	query := database.DB.Model(&models.Article{}).
-		Joins("LEFT JOIN feeds ON articles.feed_id = feeds.id").
-		Joins("LEFT JOIN (SELECT article_id, COUNT(*) AS tag_count FROM article_topic_tags GROUP BY article_id) tag_stats ON tag_stats.article_id = articles.id")
+		Joins("LEFT JOIN feeds ON articles.feed_id = feeds.id")
 
 	// Apply watched tag filter via JOIN
 	if usingWatchedTags {
@@ -105,16 +103,15 @@ func GetArticles(c *gin.Context) {
 
 	// Select fields — vary by watched tags mode and sort
 	if usingWatchedTags && sortBy == "relevance" {
-		// Relevance: abstract tag children (childTagIDs) weight 2, direct tags weight 1
 		query = query.
-			Select("articles.*, feeds.category_id AS category_id, COALESCE(tag_stats.tag_count, 0) AS tag_count, (SELECT COALESCE(SUM(CASE WHEN att2.topic_tag_id IN ? THEN 2.0 ELSE 1.0 END), 0) FROM article_topic_tags att2 WHERE att2.article_id = articles.id AND att2.topic_tag_id IN ?) AS relevance_score", childTagIDs, expandedTagIDs).
+			Select("articles.*, feeds.category_id AS category_id, (SELECT COUNT(*) FROM article_topic_tags att_cnt WHERE att_cnt.article_id = articles.id) AS tag_count, (SELECT COALESCE(SUM(CASE WHEN att2.topic_tag_id IN ? THEN 2.0 ELSE 1.0 END), 0) FROM article_topic_tags att2 WHERE att2.article_id = articles.id AND att2.topic_tag_id IN ?) AS relevance_score", childTagIDs, expandedTagIDs).
 			Group("articles.id")
 	} else if usingWatchedTags {
 		query = query.
-			Select("DISTINCT articles.*, feeds.category_id AS category_id, COALESCE(tag_stats.tag_count, 0) AS tag_count")
+			Select("DISTINCT articles.*, feeds.category_id AS category_id, (SELECT COUNT(*) FROM article_topic_tags att_cnt WHERE att_cnt.article_id = articles.id) AS tag_count")
 	} else {
 		query = query.
-			Select("articles.*, feeds.category_id AS category_id, COALESCE(tag_stats.tag_count, 0) AS tag_count")
+			Select("articles.*, feeds.category_id AS category_id, (SELECT COUNT(*) FROM article_topic_tags att_cnt WHERE att_cnt.article_id = articles.id) AS tag_count")
 	}
 
 	if feedID > 0 {
@@ -413,8 +410,7 @@ func UpdateArticle(c *gin.Context) {
 
 	database.DB.Model(&models.Article{}).
 		Joins("LEFT JOIN feeds ON articles.feed_id = feeds.id").
-		Joins("LEFT JOIN (SELECT article_id, COUNT(*) AS tag_count FROM article_topic_tags GROUP BY article_id) tag_stats ON tag_stats.article_id = articles.id").
-		Select("articles.*, feeds.category_id AS category_id, COALESCE(tag_stats.tag_count, 0) AS tag_count").
+		Select("articles.*, feeds.category_id AS category_id, (SELECT COUNT(*) FROM article_topic_tags att_cnt WHERE att_cnt.article_id = articles.id) AS tag_count").
 		First(&article, uint(id))
 
 	c.JSON(http.StatusOK, gin.H{
