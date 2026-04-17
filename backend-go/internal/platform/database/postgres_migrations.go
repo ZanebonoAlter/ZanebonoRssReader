@@ -274,5 +274,36 @@ func postgresMigrations() []Migration {
 				return nil
 			},
 		},
+		{
+			Version:     "20260417_0002",
+			Description: "Add GIN index for article full-text search using tsvector.",
+			Up: func(db *gorm.DB) error {
+				stmts := []string{
+					`ALTER TABLE articles ADD COLUMN IF NOT EXISTS search_vector tsvector`,
+					`CREATE INDEX IF NOT EXISTS idx_articles_search_vector ON articles USING GIN (search_vector)`,
+					`CREATE OR REPLACE FUNCTION articles_search_vector_update() RETURNS trigger AS $$
+					BEGIN
+						NEW.search_vector :=
+							setweight(to_tsvector('simple', COALESCE(NEW.title, '')), 'A') ||
+							setweight(to_tsvector('simple', COALESCE(NEW.description, '')), 'B');
+						RETURN NEW;
+					END;
+					$$ LANGUAGE plpgsql`,
+					`DROP TRIGGER IF EXISTS articles_search_vector_trigger ON articles`,
+					`CREATE TRIGGER articles_search_vector_trigger
+						BEFORE INSERT OR UPDATE OF title, description ON articles
+						FOR EACH ROW EXECUTE FUNCTION articles_search_vector_update()`,
+					`UPDATE articles SET search_vector =
+						setweight(to_tsvector('simple', COALESCE(title, '')), 'A') ||
+						setweight(to_tsvector('simple', COALESCE(description, '')), 'B')`,
+				}
+				for _, s := range stmts {
+					if err := db.Exec(s).Error; err != nil {
+						return fmt.Errorf("full-text search migration: %w", err)
+					}
+				}
+				return nil
+			},
+		},
 	}
 }

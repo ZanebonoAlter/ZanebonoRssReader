@@ -40,18 +40,22 @@ type BulkUpdateArticlesRequest struct {
 }
 
 func GetArticlesStats(c *gin.Context) {
-	var total, unread, favorite int64
-
-	database.DB.Model(&models.Article{}).Count(&total)
-	database.DB.Model(&models.Article{}).Where("read = ?", false).Count(&unread)
-	database.DB.Model(&models.Article{}).Where("favorite = ?", true).Count(&favorite)
+	type StatsResult struct {
+		Total    int64
+		Unread   int64
+		Favorite int64
+	}
+	var result StatsResult
+	database.DB.Model(&models.Article{}).
+		Select("COUNT(*) as total, SUM(CASE WHEN NOT read THEN 1 ELSE 0 END) as unread, SUM(CASE WHEN favorite THEN 1 ELSE 0 END) as favorite").
+		Scan(&result)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
-			"total":    total,
-			"unread":   unread,
-			"favorite": favorite,
+			"total":    result.Total,
+			"unread":   result.Unread,
+			"favorite": result.Favorite,
 		},
 	})
 }
@@ -135,8 +139,12 @@ func GetArticles(c *gin.Context) {
 	}
 
 	if search != "" {
-		searchTerm := "%" + search + "%"
-		query = query.Where("articles.title LIKE ? OR articles.description LIKE ?", searchTerm, searchTerm)
+		if database.DB.Dialector.Name() == "postgres" {
+			query = query.Where("articles.search_vector @@ plainto_tsquery('simple', ?)", search)
+		} else {
+			searchTerm := "%" + search + "%"
+			query = query.Where("articles.title LIKE ? OR articles.description LIKE ?", searchTerm, searchTerm)
+		}
 	}
 
 	if startDate != "" {
@@ -175,8 +183,12 @@ func GetArticles(c *gin.Context) {
 			countQuery = countQuery.Where("articles.favorite = ?", favorite == "true")
 		}
 		if search != "" {
-			searchTerm := "%" + search + "%"
-			countQuery = countQuery.Where("articles.title LIKE ? OR articles.description LIKE ?", searchTerm, searchTerm)
+			if database.DB.Dialector.Name() == "postgres" {
+				countQuery = countQuery.Where("articles.search_vector @@ plainto_tsquery('simple', ?)", search)
+			} else {
+				searchTerm := "%" + search + "%"
+				countQuery = countQuery.Where("articles.title LIKE ? OR articles.description LIKE ?", searchTerm, searchTerm)
+			}
 		}
 		if startDate != "" {
 			countQuery = countQuery.Where("DATE(articles.pub_date) >= ?", startDate)
@@ -441,6 +453,14 @@ func BulkUpdateArticles(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
 			"error":   "At least one field (read or favorite) must be specified",
+		})
+		return
+	}
+
+	if len(req.IDs) == 0 && req.FeedID == nil && req.CategoryID == nil && (req.Uncategorized == nil || !*req.Uncategorized) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "Must specify a scope: ids, feed_id, category_id, or uncategorized",
 		})
 		return
 	}
