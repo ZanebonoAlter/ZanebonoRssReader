@@ -146,30 +146,53 @@ func (s *FeedService) updateFeedError(feed *models.Feed, err error) {
 }
 
 func (s *FeedService) cleanupOldArticles(feed *models.Feed) {
-	var articles []models.Article
-	if err := database.DB.Omit("tag_count", "relevance_score").Where("feed_id = ?", feed.ID).Order("pub_date DESC").Find(&articles).Error; err != nil {
+	var articleCount int64
+	database.DB.Model(&models.Article{}).Where("feed_id = ?", feed.ID).Count(&articleCount)
+
+	if int(articleCount) <= feed.MaxArticles {
 		return
 	}
 
-	if len(articles) <= feed.MaxArticles {
+	var allArticles []struct {
+		ID              uint
+		Favorite        bool
+		FirecrawlStatus string
+		SummaryStatus   string
+	}
+	database.DB.Model(&models.Article{}).
+		Select("id, favorite, firecrawl_status, summary_status").
+		Where("feed_id = ?", feed.ID).
+		Order("pub_date DESC").
+		Find(&allArticles)
+
+	keepIDs := make([]uint, 0)
+	candidates := make([]uint, 0)
+
+	for _, a := range allArticles {
+		isActive := a.FirecrawlStatus == "pending" || a.FirecrawlStatus == "processing" ||
+			a.SummaryStatus == "incomplete" || a.SummaryStatus == "pending"
+
+		if a.Favorite || isActive {
+			keepIDs = append(keepIDs, a.ID)
+		} else {
+			candidates = append(candidates, a.ID)
+		}
+	}
+
+	remaining := feed.MaxArticles - len(keepIDs)
+	if remaining > 0 {
+		keepFromCandidates := candidates
+		if len(candidates) > remaining {
+			keepFromCandidates = candidates[:remaining]
+		}
+		keepIDs = append(keepIDs, keepFromCandidates...)
+	}
+
+	if len(keepIDs) == 0 {
 		return
 	}
 
-	articlesToDelete := len(articles) - feed.MaxArticles
-	for i := len(articles) - 1; i >= 0 && articlesToDelete > 0; i-- {
-		article := articles[i]
-		if article.Favorite {
-			continue
-		}
-
-		if article.FirecrawlStatus == "pending" || article.FirecrawlStatus == "processing" || article.SummaryStatus == "incomplete" || article.SummaryStatus == "pending" {
-			continue
-		}
-
-		database.DB.Where("article_id = ?", article.ID).Delete(&models.ReadingBehavior{})
-		database.DB.Delete(&article)
-		articlesToDelete--
-	}
+	database.DB.Where("feed_id = ? AND id NOT IN ?", feed.ID, keepIDs).Delete(&models.Article{})
 }
 
 func (s *FeedService) FetchFeedPreview(feedURL string) (title, description string, err error) {
