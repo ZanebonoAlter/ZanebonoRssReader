@@ -2,10 +2,10 @@ package database
 
 import (
 	"fmt"
-	"log"
 
 	"gorm.io/gorm"
 	"my-robot-backend/internal/domain/models"
+	"my-robot-backend/internal/platform/logging"
 )
 
 func postgresMigrations() []Migration {
@@ -68,7 +68,7 @@ func postgresMigrations() []Migration {
 					var existing models.EmbeddingConfig
 					if err := db.Where("key = ?", d.Key).First(&existing).Error; err != nil {
 						if err := db.Create(&d).Error; err != nil {
-							log.Printf("Warning: failed to seed embedding_config key %s: %v", d.Key, err)
+							logging.Warnf("Warning: failed to seed embedding_config key %s: %v", d.Key, err)
 						}
 					}
 				}
@@ -212,6 +212,63 @@ func postgresMigrations() []Migration {
 				for _, s := range stmts {
 					if err := db.Exec(s).Error; err != nil {
 						return fmt.Errorf("add watched columns to topic_tags: %w", err)
+					}
+				}
+				return nil
+			},
+		},
+		{
+			Version:     "20260416_0001",
+			Description: "Create abstract_tag_update_queues table for refreshing abstract tag descriptions and embeddings.",
+			Up: func(db *gorm.DB) error {
+				stmts := []string{
+					`CREATE TABLE IF NOT EXISTS abstract_tag_update_queues (
+					id BIGSERIAL PRIMARY KEY,
+					abstract_tag_id BIGINT NOT NULL REFERENCES topic_tags(id) ON DELETE CASCADE,
+					trigger_reason VARCHAR(50) NOT NULL,
+					status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
+					error_message TEXT,
+					retry_count INTEGER NOT NULL DEFAULT 0,
+					created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+					started_at TIMESTAMP,
+					completed_at TIMESTAMP
+				)`,
+					"CREATE INDEX IF NOT EXISTS idx_abstract_tag_update_queues_status ON abstract_tag_update_queues(status)",
+					"CREATE INDEX IF NOT EXISTS idx_abstract_tag_update_queues_abstract_tag_id ON abstract_tag_update_queues(abstract_tag_id)",
+				}
+				for _, s := range stmts {
+					if err := db.Exec(s).Error; err != nil {
+						return fmt.Errorf("abstract_tag_update_queue migration: %w", err)
+					}
+				}
+				return nil
+			},
+		},
+		{
+			Version:     "20260416_0002",
+			Description: "Add metadata JSONB column to topic_tags for structured tag attributes.",
+			Up: func(db *gorm.DB) error {
+				if err := db.Exec("ALTER TABLE topic_tags ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb").Error; err != nil {
+					return fmt.Errorf("add metadata column to topic_tags: %w", err)
+				}
+				return nil
+			},
+		},
+		{
+			Version:     "20260417_0001",
+			Description: "Add missing indexes for CRUD performance optimization.",
+			Up: func(db *gorm.DB) error {
+				stmts := []string{
+					"CREATE INDEX IF NOT EXISTS idx_articles_read ON articles(read)",
+					"CREATE INDEX IF NOT EXISTS idx_articles_favorite ON articles(favorite)",
+					"CREATE INDEX IF NOT EXISTS idx_articles_feed_pub_date ON articles(feed_id, pub_date DESC)",
+					"CREATE INDEX IF NOT EXISTS idx_article_topic_tags_article_id ON article_topic_tags(article_id)",
+					"CREATE INDEX IF NOT EXISTS idx_feeds_category_id ON feeds(category_id)",
+					"CREATE INDEX IF NOT EXISTS idx_articles_feed_id_title ON articles(feed_id, title)",
+				}
+				for _, s := range stmts {
+					if err := db.Exec(s).Error; err != nil {
+						return fmt.Errorf("create index: %w", err)
 					}
 				}
 				return nil
