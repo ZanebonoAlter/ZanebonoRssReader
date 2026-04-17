@@ -3,7 +3,6 @@ package feeds
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -13,6 +12,7 @@ import (
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/domain/topicextraction"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/logging"
 )
 
 type FeedService struct {
@@ -74,19 +74,22 @@ func (s *FeedService) RefreshFeed(ctx context.Context, feedID uint) (err error) 
 		}
 	}
 
+	var existingTitles []string
+	database.DB.Model(&models.Article{}).
+		Where("feed_id = ?", feed.ID).
+		Pluck("title", &existingTitles)
+	titleSet := make(map[string]bool, len(existingTitles))
+	for _, t := range existingTitles {
+		titleSet[t] = true
+	}
+
 	articlesAdded := 0
 	for _, entry := range parsed.Entries {
 		if entry.Link == "" {
 			continue
 		}
 
-		var existingArticle models.Article
-		err := database.DB.Where("feed_id = ? AND title = ?", feed.ID, entry.Title).First(&existingArticle).Error
-		if err == nil {
-			continue
-		}
-
-		if err != gorm.ErrRecordNotFound {
+		if titleSet[entry.Title] {
 			continue
 		}
 
@@ -101,8 +104,10 @@ func (s *FeedService) RefreshFeed(ctx context.Context, feedID uint) (err error) 
 			continue
 		}
 
+		titleSet[entry.Title] = true
+
 		if err := s.enqueueArticleProcessing(feed, article); err != nil {
-			log.Printf("Error enqueueing processing for article %d (feed %d): %v", article.ID, feed.ID, err)
+			logging.Errorf("Error enqueueing processing for article %d (feed %d): %v", article.ID, feed.ID, err)
 		}
 
 		articlesAdded++
