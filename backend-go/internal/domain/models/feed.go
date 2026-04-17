@@ -32,7 +32,12 @@ func (Feed) TableName() string {
 	return "feeds"
 }
 
-func (f *Feed) ToDict(includeStats bool) map[string]interface{} {
+type FeedStats struct {
+	ArticleCount int
+	UnreadCount  int
+}
+
+func (f *Feed) ToDict(stats *FeedStats) map[string]interface{} {
 	data := map[string]interface{}{
 		"id":                      f.ID,
 		"title":                   f.Title,
@@ -55,16 +60,9 @@ func (f *Feed) ToDict(includeStats bool) map[string]interface{} {
 		"firecrawl_enabled":       f.FirecrawlEnabled,
 	}
 
-	if includeStats {
-		articleCount := len(f.Articles)
-		unreadCount := 0
-		for _, a := range f.Articles {
-			if !a.Read {
-				unreadCount++
-			}
-		}
-		data["article_count"] = articleCount
-		data["unread_count"] = unreadCount
+	if stats != nil {
+		data["article_count"] = stats.ArticleCount
+		data["unread_count"] = stats.UnreadCount
 	}
 
 	return data

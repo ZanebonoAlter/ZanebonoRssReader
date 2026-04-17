@@ -65,36 +65,7 @@ func GetFeeds(c *gin.Context) {
 	query.Count(&total)
 
 	var feeds []models.Feed
-	if perPage >= 10000 {
-		if err := query.Order("title ASC").Find(&feeds).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"success": false,
-				"error":   err.Error(),
-			})
-			return
-		}
-
-		data := make([]map[string]interface{}, len(feeds))
-		for i, feed := range feeds {
-			database.DB.Preload("Articles").First(&feed, feed.ID)
-			data[i] = feed.ToDict(true)
-		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"success": true,
-			"data":    data,
-			"pagination": gin.H{
-				"page":     1,
-				"per_page": len(feeds),
-				"total":    total,
-				"pages":    1,
-			},
-		})
-		return
-	}
-
-	offset := (page - 1) * perPage
-	if err := query.Order("title ASC").Offset(offset).Limit(perPage).Find(&feeds).Error; err != nil {
+	if err := query.Order("title ASC").Find(&feeds).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
 			"error":   err.Error(),
@@ -102,23 +73,75 @@ func GetFeeds(c *gin.Context) {
 		return
 	}
 
-	data := make([]map[string]interface{}, len(feeds))
-	for i, feed := range feeds {
-		database.DB.Preload("Articles").First(&feed, feed.ID)
-		data[i] = feed.ToDict(true)
+	feedIDs := make([]uint, len(feeds))
+	for i, f := range feeds {
+		feedIDs[i] = f.ID
 	}
 
-	pages := int(total) / perPage
-	if int(total)%perPage > 0 {
+	type FeedStatRow struct {
+		FeedID       uint
+		ArticleCount int
+		UnreadCount  int
+	}
+	var statRows []FeedStatRow
+	if len(feedIDs) > 0 {
+		database.DB.Model(&models.Article{}).
+			Select("feed_id, COUNT(*) as article_count, SUM(CASE WHEN NOT read THEN 1 ELSE 0 END) as unread_count").
+			Where("feed_id IN ?", feedIDs).
+			Group("feed_id").
+			Scan(&statRows)
+	}
+
+	statMap := make(map[uint]models.FeedStats, len(statRows))
+	for _, row := range statRows {
+		statMap[row.FeedID] = models.FeedStats{
+			ArticleCount: row.ArticleCount,
+			UnreadCount:  row.UnreadCount,
+		}
+	}
+
+	data := make([]map[string]interface{}, 0, len(feeds))
+	start := 0
+	if perPage < 10000 {
+		start = (page - 1) * perPage
+		if start >= len(feeds) {
+			start = len(feeds)
+		}
+	}
+	end := len(feeds)
+	if perPage < 10000 {
+		end = start + perPage
+		if end > len(feeds) {
+			end = len(feeds)
+		}
+	}
+
+	for i := start; i < end; i++ {
+		stats := statMap[feeds[i].ID]
+		data = append(data, feeds[i].ToDict(&stats))
+	}
+
+	resultPage := page
+	resultPerPage := perPage
+	if perPage >= 10000 {
+		resultPage = 1
+		resultPerPage = len(feeds)
+	}
+
+	pages := int(total) / resultPerPage
+	if int(total)%resultPerPage > 0 {
 		pages++
+	}
+	if perPage >= 10000 {
+		pages = 1
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data":    data,
 		"pagination": gin.H{
-			"page":     page,
-			"per_page": perPage,
+			"page":     resultPage,
+			"per_page": resultPerPage,
 			"total":    total,
 			"pages":    pages,
 		},
@@ -151,11 +174,16 @@ func GetFeed(c *gin.Context) {
 		return
 	}
 
-	database.DB.Preload("Articles").First(&feed, feed.ID)
+	var stats models.FeedStats
+	database.DB.Model(&models.Article{}).
+		Select("COUNT(*) as article_count, SUM(CASE WHEN NOT read THEN 1 ELSE 0 END) as unread_count").
+		Where("feed_id = ?", feed.ID).
+		Group("feed_id").
+		Scan(&stats)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"data":    feed.ToDict(true),
+		"data":    feed.ToDict(&stats),
 	})
 }
 
@@ -220,11 +248,9 @@ func CreateFeed(c *gin.Context) {
 		return
 	}
 
-	database.DB.Preload("Articles").First(&feed, feed.ID)
-
 	c.JSON(http.StatusCreated, gin.H{
 		"success": true,
-		"data":    feed.ToDict(true),
+		"data":    feed.ToDict(&models.FeedStats{}),
 		"message": "Feed created successfully",
 	})
 }
@@ -334,11 +360,16 @@ func UpdateFeed(c *gin.Context) {
 		return
 	}
 
-	database.DB.Preload("Articles").First(&feed, uint(id))
+	var stats models.FeedStats
+	database.DB.Model(&models.Article{}).
+		Select("COUNT(*) as article_count, SUM(CASE WHEN NOT read THEN 1 ELSE 0 END) as unread_count").
+		Where("feed_id = ?", feed.ID).
+		Group("feed_id").
+		Scan(&stats)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"data":    feed.ToDict(true),
+		"data":    feed.ToDict(&stats),
 	})
 }
 
