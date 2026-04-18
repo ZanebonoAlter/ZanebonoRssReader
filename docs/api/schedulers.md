@@ -20,6 +20,41 @@
 | `content_completion` | `ai_summary` | 文章内容补全 |
 | `firecrawl` | - | Firecrawl 全文抓取 |
 | `digest` | - | Digest 日报/周报 |
+| `auto_tag_merge` | - | 自动合并相似标签 |
+| `tag_quality_score` | - | 重算标签质量分数 |
+| `narrative_summary` | - | 生成每日叙事摘要 |
+
+### GET /api/schedulers/status
+
+返回所有已注册调度器的状态列表。每个调度器包含：
+
+```json
+{
+  "name": "content_completion",
+  "status": "running",
+  "check_interval": 300,
+  "next_run": 1710000000,
+  "is_executing": false,
+  "description": "Complete article content and generate article summaries",
+  "database_state": { ... },
+  "overview": { ... },
+  "last_run_summary": { ... }
+}
+```
+
+### GET /api/schedulers/:name/status
+
+返回单个调度器状态，同上结构。`404` 表示调度器不存在。
+
+### POST /api/schedulers/:name/trigger
+
+手动触发调度器。部分调度器支持 `?date=YYYY-MM-DD` 查询参数。
+
+触发成功时返回执行结果或任务状态；调度器正忙时返回 `409`。
+
+### POST /api/schedulers/:name/reset
+
+重置调度器的统计信息（执行次数、错误计数等）。
 
 ### PUT /api/schedulers/:name/interval
 
@@ -27,4 +62,4 @@
 { "interval": 30 }
 ```
 
-`interval`：正整数，单位取决于调度器。
+`interval`：正整数，单位取决于调度器（一般为秒）。返回更新后的 `name` 和 `check_interval`。

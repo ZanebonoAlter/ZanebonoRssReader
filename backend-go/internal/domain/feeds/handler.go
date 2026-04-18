@@ -363,6 +363,13 @@ func UpdateFeed(c *gin.Context) {
 		return
 	}
 
+	// Trigger cleanup if MaxArticles was updated
+	if req.MaxArticles > 0 {
+		database.DB.First(&feed, feed.ID)
+		feed.MaxArticles = req.MaxArticles
+		NewFeedService().CleanupOldArticles(&feed)
+	}
+
 	var stats models.FeedStats
 	database.DB.Model(&models.Article{}).
 		Select("COUNT(*) as article_count, SUM(CASE WHEN NOT read THEN 1 ELSE 0 END) as unread_count").

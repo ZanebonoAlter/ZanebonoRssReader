@@ -6,9 +6,30 @@
 
 ## 本地开发环境搭建
 
+### 前置条件
+
+- Go 1.22+
+- Node.js + pnpm
+- Docker（用于运行 PostgreSQL）
+- PostgreSQL with pgvector（通过 Docker 启动）
+
 ### 启动顺序
 
-1. **先启动后端** — 后端需要先初始化数据库和调度器：
+1. **先启动 PostgreSQL**（使用 Docker）：
+
+```bash
+docker run -d --name rss-postgres -p 5432:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=rss_reader pgvector/pgvector:pg18-trixie
+```
+
+或使用项目自带的 docker-compose：
+
+```bash
+docker compose up -d
+```
+
+> SQLite 版本已归档到 `sqlite` 分支，主分支不再支持。
+
+2. **再启动后端** — 后端需要先初始化数据库和调度器：
 
 ```bash
 cd backend-go
@@ -16,18 +37,11 @@ go mod tidy
 go run cmd/server/main.go
 ```
 
-后端默认运行在 `http://localhost:5000`，首次启动会自动连接 PostgreSQL 数据库并执行迁移。
+后端默认运行在 `http://localhost:5000`，首次启动会自动连接 PostgreSQL 数据库并执行版本化迁移。
 
 开发时日志现在按级别分流：常规运行日志和 warning 走 `stdout`，error / fatal / panic 走 `stderr`。如果你在 PowerShell、Docker 或 systemd 里单独收集错误输出，可以直接利用这条分流。
 
-> 本地开发需要先启动 PostgreSQL 服务，推荐使用 Docker 启动：
-> ```bash
-> docker run -d --name rss-postgres -p 5432:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=rss_reader pgvector/pgvector:pg18-trixie
-> ```
-> 
-> SQLite 版本已归档到 `sqlite` 分支，主分支不再支持。
-
-2. **再启动前端**（新终端）：
+3. **再启动前端**（新终端）：
 
 ```bash
 cd front
@@ -37,28 +51,24 @@ pnpm dev
 
 前端开发服务器运行在 `http://localhost:3000`。
 
-3. **验证联调** — 打开 `http://localhost:3000`，确认前端能连接到 `http://localhost:5000/api`。
-
-### 一键启动
-
-Windows 下可分别启动前后端（无一键脚本），或使用 Docker Compose 一键启动（见下文）。
+4. **验证联调** — 打开 `http://localhost:3000`，确认前端能连接到 `http://localhost:5000/api`。
 
 ### Docker Compose 启动
 
-使用 SQLite（推荐，开箱即用）：
+#### 仅启动 PostgreSQL 数据库（开发用）
+
+```bash
+docker compose up -d
+```
+
+这会启动一个 pgvector 容器，端口和数据目录可在 `.env` 中配置。
+
+#### SQLite 模式（已归档，仅供参考）
 
 ```bash
 cp .env.example .env
 docker compose -f docker-compose.sqlite.yml up --build
 ```
-
-如需 PostgreSQL（支持 pgvector 向量搜索），单独启动数据库：
-
-```bash
-docker compose up
-```
-
-这会启动一个 pgvector 容器，然后在本地运行后端并配置连接 PostgreSQL。端口和数据目录可在 `.env` 中配置，详见 [Configuration](../guides/configuration.md)。
 
 ### 配置说明
 
@@ -124,7 +134,7 @@ go test ./internal/domain/feeds -run TestBuildArticleFromEntryTracksOnlyRunnable
 | `go run cmd/migrate-digest/main.go` | `backend-go/` | Digest 数据迁移 |
 | `go run cmd/test-digest/main.go` | `backend-go/` | Digest 测试入口 |
 | `go run cmd/migrate-tags/main.go` | `backend-go/` | 标签数据迁移 |
-| `go run cmd/migrate-db/main.go` | `backend-go/` | 数据库通用迁移 |
+| `go run cmd/migrate-db/main.go` | `backend-go/` | SQLite → PostgreSQL 数据迁移 |
 
 ### Python 集成测试（在 `tests/workflow/` 目录执行）
 
@@ -282,6 +292,7 @@ go test ./...                 # 全量测试
 - `docs/architecture/data-flow.md`
 - `docs/guides/content-processing.md`
 - `docs/operations/database.md`
+- `docs/database/DATABASE_FIELDS.md`
 
 ## Branch 规范与 PR 流程
 
@@ -312,3 +323,4 @@ go test ./...                 # 全量测试
 - [Configuration](../guides/configuration.md) — 环境变量、配置文件、AI 设置
 - [Architecture Overview](../architecture/overview.md) — 系统架构、组件关系、数据流
 - [Troubleshooting](troubleshooting.md) — 常见问题排查
+- [Database Fields](../database/DATABASE_FIELDS.md) — 数据库字段详细说明

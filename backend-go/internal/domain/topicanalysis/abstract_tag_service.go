@@ -3,6 +3,7 @@ package topicanalysis
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -13,27 +14,43 @@ import (
 	"my-robot-backend/internal/platform/database"
 	"my-robot-backend/internal/platform/jsonutil"
 	"my-robot-backend/internal/platform/logging"
+	"my-robot-backend/internal/platform/ws"
 
 	"gorm.io/gorm"
 )
 
 const (
-	// maxAbstractNameLen limits LLM-returned abstract tag names to prevent abuse
 	maxAbstractNameLen = 160
-
-	ActionMerge    = "merge"
-	ActionAbstract = "abstract"
-	ActionNone     = "none"
 )
 
-// TagExtractionResult is the return type for ExtractAbstractTag,
-// supporting both "merge" (reuse existing tag) and "abstract" (create abstract parent) actions.
+var errInsufficientAbstractChildren = errors.New("abstract tag needs enough children")
+
+var (
+	findSimilarExistingAbstractFn = findSimilarExistingAbstract
+	aiJudgeNarrowerConceptFn      = aiJudgeNarrowerConcept
+)
+
+// TagExtractionResult is the return type for ExtractAbstractTag.
+// Merge and Abstract can both be set simultaneously.
 type TagExtractionResult struct {
-	Action      string           // "merge" or "abstract"
-	MergeTarget *models.TopicTag // for "merge": the existing tag to reuse
-	MergeLabel  string           // for "merge": LLM-recommended unified label
-	AbstractTag *models.TopicTag // for "abstract": the new abstract parent tag
+	Merge         *MergeResult       // if set: the new tag should merge into this target
+	Abstract      *AbstractResult    // if set: create/return abstract parent with children
+	MergeChildren []*models.TopicTag // additional candidates that should also merge into Merge.Target
 }
+
+type MergeResult struct {
+	Target *models.TopicTag
+	Label  string
+}
+
+type AbstractResult struct {
+	Tag      *models.TopicTag
+	Children []*models.TopicTag // candidates linked as children of this abstract tag
+}
+
+func (r *TagExtractionResult) HasMerge() bool    { return r != nil && r.Merge != nil }
+func (r *TagExtractionResult) HasAbstract() bool { return r != nil && r.Abstract != nil }
+func (r *TagExtractionResult) HasAction() bool   { return r.HasMerge() || r.HasAbstract() }
 
 // TagHierarchyNode represents a node in the tag hierarchy tree
 type TagHierarchyNode struct {
@@ -55,11 +72,18 @@ type ExtractAbstractTagOption func(*extractAbstractTagConfig)
 
 type extractAbstractTagConfig struct {
 	narrativeContext string
+	caller           string
 }
 
 func WithNarrativeContext(ctx string) ExtractAbstractTagOption {
 	return func(c *extractAbstractTagConfig) {
 		c.narrativeContext = ctx
+	}
+}
+
+func WithCaller(caller string) ExtractAbstractTagOption {
+	return func(c *extractAbstractTagConfig) {
+		c.caller = caller
 	}
 }
 
@@ -80,54 +104,65 @@ func ExtractAbstractTag(ctx context.Context, candidates []TagCandidate, newLabel
 		category = "keyword"
 	}
 
-	judgments, err := callLLMForTagJudgment(ctx, candidates, newLabel, category, cfg.narrativeContext)
+	judgment, err := callLLMForTagJudgment(ctx, candidates, newLabel, category, cfg.narrativeContext, cfg.caller)
 	if err != nil {
 		logging.Warnf("Tag judgment LLM call failed: %v", err)
 		return nil, err
 	}
 
-	return processJudgments(ctx, judgments, candidates, newLabel, category)
+	return processJudgment(ctx, judgment, candidates, newLabel, category)
 }
 
-func processJudgments(ctx context.Context, judgments []tagJudgment, candidates []TagCandidate, newLabel string, category string) (*TagExtractionResult, error) {
-	var mergeJudgments, abstractJudgments []tagJudgment
-	for _, j := range judgments {
-		switch j.Action {
-		case ActionMerge:
-			mergeJudgments = append(mergeJudgments, j)
-		case ActionAbstract:
-			abstractJudgments = append(abstractJudgments, j)
-		}
-	}
+func processJudgment(ctx context.Context, judgment *tagJudgment, candidates []TagCandidate, newLabel string, category string) (*TagExtractionResult, error) {
+	result := &TagExtractionResult{}
 
-	if len(mergeJudgments) > 0 {
-		bestMerge := mergeJudgments[0]
-		mergeTarget := selectMergeTarget(candidates, bestMerge.MergeTarget, bestMerge.MergeLabel)
+	if judgment.Merge != nil {
+		mergeTarget := selectMergeTarget(candidates, judgment.Merge.Target, judgment.Merge.Label)
 		if mergeTarget == nil {
-			return nil, fmt.Errorf("no suitable merge target found for label %q (target=%q)", bestMerge.MergeLabel, bestMerge.MergeTarget)
+			return nil, fmt.Errorf("no suitable merge target found for label %q (target=%q)", judgment.Merge.Label, judgment.Merge.Target)
 		}
-		logging.Infof("Tag judgment: merge into existing tag %q (id=%d), label=%q", mergeTarget.Label, mergeTarget.ID, bestMerge.MergeLabel)
-		return &TagExtractionResult{
-			Action:      ActionMerge,
-			MergeTarget: mergeTarget,
-			MergeLabel:  bestMerge.MergeLabel,
-		}, nil
+		logging.Infof("Tag judgment: merge into existing tag %q (id=%d), label=%q", mergeTarget.Label, mergeTarget.ID, judgment.Merge.Label)
+
+		result.Merge = &MergeResult{
+			Target: mergeTarget,
+			Label:  judgment.Merge.Label,
+		}
+
+		for _, childLabel := range judgment.Merge.Children {
+			for _, c := range candidates {
+				if c.Tag != nil && c.Tag.Label == childLabel && c.Tag.ID != mergeTarget.ID {
+					result.MergeChildren = append(result.MergeChildren, c.Tag)
+				}
+			}
+		}
 	}
 
-	if len(abstractJudgments) > 0 {
-		bestAbstract := abstractJudgments[0]
-		return processAbstractJudgment(ctx, candidates, bestAbstract, newLabel, category)
+	if judgment.Abstract != nil {
+		ensureNewLabelCandidateInAbstractJudgment(judgment, candidates, newLabel)
+		abstractResult, err := processAbstractJudgment(ctx, candidates, judgment.Abstract, newLabel, category)
+		if err != nil {
+			if result.HasMerge() {
+				logging.Warnf("Abstract judgment failed but merge succeeded, returning merge only: %v", err)
+				return result, nil
+			}
+			return nil, err
+		}
+		if abstractResult != nil {
+			result.Abstract = abstractResult
+		}
 	}
 
-	logging.Infof("Tag judgment: all candidates independent for %q", newLabel)
-	return &TagExtractionResult{
-		Action: ActionNone,
-	}, nil
+	if !result.HasAction() {
+		logging.Infof("Tag judgment: all candidates independent for %q", newLabel)
+	}
+
+	return result, nil
 }
 
-func processAbstractJudgment(ctx context.Context, candidates []TagCandidate, judgment tagJudgment, newLabel string, category string) (*TagExtractionResult, error) {
-	abstractName := judgment.AbstractName
+func processAbstractJudgment(ctx context.Context, candidates []TagCandidate, judgment *tagJudgmentAbstract, newLabel string, category string) (*AbstractResult, error) {
+	abstractName := judgment.Name
 	abstractDesc := judgment.Description
+	newLabelIsCandidate := candidateLabelForNewLabel(candidates, newLabel) != ""
 
 	slug := topictypes.Slugify(abstractName)
 	if slug == "" {
@@ -142,28 +177,34 @@ func processAbstractJudgment(ctx context.Context, candidates []TagCandidate, jud
 	}
 
 	if candidateSlugs[slug] {
-		logging.Infof("Abstract name %q (slug=%s) collides with a candidate tag, falling back to merge", abstractName, slug)
-		mergeTarget := selectMergeTarget(candidates, abstractName, judgment.MergeLabel)
-		if mergeTarget == nil {
-			return nil, fmt.Errorf("abstract name %q collides with candidate but no merge target found", abstractName)
-		}
-		return &TagExtractionResult{
-			Action:      ActionMerge,
-			MergeTarget: mergeTarget,
-			MergeLabel:  abstractName,
-		}, nil
+		logging.Infof("Abstract name %q (slug=%s) collides with a candidate tag, skipping abstract creation", abstractName, slug)
+		return nil, nil
 	}
 
 	var abstractTag *models.TopicTag
-	var addedAnyRelation bool
+	if existingAbstract := findSimilarExistingAbstractFn(ctx, abstractName, abstractDesc, category, candidates); existingAbstract != nil {
+		logging.Infof("processAbstractJudgment: reusing existing abstract tag %d (%q) instead of creating new %q",
+			existingAbstract.ID, existingAbstract.Label, abstractName)
+		abstractTag = existingAbstract
+	}
+
+	abstractChildSet := make(map[string]bool, len(judgment.Children))
+	for _, ch := range judgment.Children {
+		abstractChildSet[ch] = true
+	}
+
+	var createdNewAbstract bool
+	var abstractChildren []*models.TopicTag
 
 	err := database.DB.Transaction(func(tx *gorm.DB) error {
-		// Check if an abstract tag with this slug already exists (dedup per D-05)
-		var existing models.TopicTag
-		if err := tx.Where("slug = ? AND category = ? AND status = ?", slug, category, "active").First(&existing).Error; err == nil {
-			abstractTag = &existing
-		} else {
-			// Create new abstract tag
+		if abstractTag == nil {
+			var existing models.TopicTag
+			if err := tx.Where("slug = ? AND category = ? AND status = ?", slug, category, "active").First(&existing).Error; err == nil {
+				abstractTag = &existing
+			}
+		}
+
+		if abstractTag == nil {
 			abstractTag = &models.TopicTag{
 				Slug:        slug,
 				Label:       abstractName,
@@ -176,23 +217,25 @@ func processAbstractJudgment(ctx context.Context, candidates []TagCandidate, jud
 			if err := tx.Create(abstractTag).Error; err != nil {
 				return fmt.Errorf("create abstract tag: %w", err)
 			}
+			createdNewAbstract = true
 
-			// Generate embedding asynchronously
-			go func(tagID uint) {
+			go func(tagID uint, name, cat string) {
 				es := NewEmbeddingService()
-				tag := &models.TopicTag{ID: tagID, Label: abstractName, Category: category}
-				emb, genErr := es.GenerateEmbedding(context.Background(), tag)
-				if genErr != nil {
-					logging.Warnf("Failed to generate embedding for abstract tag %d: %v", tagID, genErr)
-					return
-				}
-				emb.TopicTagID = tagID
-				if saveErr := es.SaveEmbedding(emb); saveErr != nil {
-					logging.Warnf("Failed to save embedding for abstract tag %d: %v", tagID, saveErr)
-					return
+				tag := &models.TopicTag{ID: tagID, Label: name, Category: cat}
+				for _, embType := range []string{EmbeddingTypeIdentity, EmbeddingTypeSemantic} {
+					emb, genErr := es.GenerateEmbedding(context.Background(), tag, embType)
+					if genErr != nil {
+						logging.Warnf("Failed to generate %s embedding for abstract tag %d: %v", embType, tagID, genErr)
+						continue
+					}
+					emb.TopicTagID = tagID
+					if saveErr := es.SaveEmbedding(emb); saveErr != nil {
+						logging.Warnf("Failed to save %s embedding for abstract tag %d: %v", embType, tagID, saveErr)
+					}
 				}
 				MatchAbstractTagHierarchy(context.Background(), tagID)
-			}(abstractTag.ID)
+				adoptNarrowerAbstractChildren(context.Background(), tagID)
+			}(abstractTag.ID, abstractName, category)
 		}
 
 		for _, candidate := range candidates {
@@ -200,6 +243,9 @@ func processAbstractJudgment(ctx context.Context, candidates []TagCandidate, jud
 				continue
 			}
 			if candidate.Tag.ID == abstractTag.ID {
+				continue
+			}
+			if !abstractChildSet[candidate.Tag.Label] {
 				continue
 			}
 
@@ -217,6 +263,7 @@ func processAbstractJudgment(ctx context.Context, candidates []TagCandidate, jud
 				Where("parent_id = ? AND child_id = ? AND relation_type = ?", abstractTag.ID, candidate.Tag.ID, "abstract").
 				Count(&count)
 			if count > 0 {
+				abstractChildren = append(abstractChildren, candidate.Tag)
 				continue
 			}
 
@@ -238,27 +285,42 @@ func processAbstractJudgment(ctx context.Context, candidates []TagCandidate, jud
 			if err := tx.Create(&relation).Error; err != nil {
 				return fmt.Errorf("create tag relation: %w", err)
 			}
-			addedAnyRelation = true
+			abstractChildren = append(abstractChildren, candidate.Tag)
+		}
+
+		minChildren := 1
+		if newLabelIsCandidate {
+			minChildren = 2
+		}
+		if len(abstractChildren) < minChildren {
+			return errInsufficientAbstractChildren
 		}
 
 		return nil
 	})
 
 	if err != nil {
+		if errors.Is(err, errInsufficientAbstractChildren) {
+			logging.Infof("Skipping abstract tag %q: only %d child relation(s) could be linked", abstractName, len(abstractChildren))
+			return nil, nil
+		}
 		logging.Warnf("Abstract tag transaction failed: %v", err)
 		return nil, err
 	}
 
-	logging.Infof("Abstract tag extracted: %s (id=%d) from candidates [%s]",
-		abstractTag.Label, abstractTag.ID, candidateLabels(candidates))
+	logging.Infof("Abstract tag extracted: %s (id=%d) with children [%s]",
+		abstractTag.Label, abstractTag.ID, strings.Join(judgment.Children, ", "))
 
-	if addedAnyRelation {
+	if len(abstractChildren) > 0 {
+		if !createdNewAbstract && abstractTag.Source == "abstract" {
+			go adoptNarrowerAbstractChildren(context.Background(), abstractTag.ID)
+		}
 		go EnqueueAbstractTagUpdate(abstractTag.ID, "new_child_added")
 	}
 
-	return &TagExtractionResult{
-		Action:      ActionAbstract,
-		AbstractTag: abstractTag,
+	return &AbstractResult{
+		Tag:      abstractTag,
+		Children: abstractChildren,
 	}, nil
 }
 
@@ -311,6 +373,7 @@ func GetTagHierarchy(category string, scopeFeedID uint, scopeCategoryID uint, ti
 	activeTagIDs := resolveActiveTagIDs(timeRange, tagIDSet)
 
 	if timeRange != "" {
+		propagateActiveAncestors(activeTagIDs, relations)
 		prunedRelations := make([]models.TopicTagRelation, 0, len(relations))
 		for _, r := range relations {
 			if activeTagIDs[r.ChildID] {
@@ -491,14 +554,16 @@ func UpdateAbstractTagName(tagID uint, newName string) error {
 			logging.Warnf("Failed to load tag %d for re-embedding: %v", tid, err)
 			return
 		}
-		emb, err := es.GenerateEmbedding(context.Background(), &tag)
-		if err != nil {
-			logging.Warnf("Failed to generate embedding for renamed tag %d: %v", tid, err)
-			return
-		}
-		emb.TopicTagID = tid
-		if err := es.SaveEmbedding(emb); err != nil {
-			logging.Warnf("Failed to save embedding for renamed tag %d: %v", tid, err)
+		for _, embType := range []string{EmbeddingTypeIdentity, EmbeddingTypeSemantic} {
+			emb, err := es.GenerateEmbedding(context.Background(), &tag, embType)
+			if err != nil {
+				logging.Warnf("Failed to generate %s embedding for renamed tag %d: %v", embType, tid, err)
+				continue
+			}
+			emb.TopicTagID = tid
+			if err := es.SaveEmbedding(emb); err != nil {
+				logging.Warnf("Failed to save %s embedding for renamed tag %d: %v", embType, tid, err)
+			}
 		}
 	}(tagID)
 
@@ -613,22 +678,380 @@ func wouldCreateCycle(tx *gorm.DB, parentID, childID uint) (bool, error) {
 	return false, nil
 }
 
-type tagJudgment struct {
-	CandidateLabel string
-	Action         string
-	MergeTarget    string
-	MergeLabel     string
-	AbstractName   string
-	Description    string
-	Reason         string
+func loadAbstractChildLabels(tagID uint, limit int) []string {
+	var labels []string
+	database.DB.Model(&models.TopicTag{}).
+		Joins("JOIN topic_tag_relations ON topic_tag_relations.child_id = topic_tags.id").
+		Where("topic_tag_relations.parent_id = ? AND topic_tag_relations.relation_type = ?", tagID, "abstract").
+		Order("topic_tag_relations.similarity_score DESC").
+		Limit(limit).
+		Pluck("topic_tags.label", &labels)
+	if labels == nil {
+		labels = []string{}
+	}
+	return labels
 }
 
-const judgmentBatchSize = 8
+func formatChildLabels(labels []string) string {
+	if len(labels) == 0 {
+		return "(无子标签)"
+	}
+	return strings.Join(labels, ", ")
+}
 
-type previousRoundResult struct {
-	CandidateLabel string
-	Action         string
-	TargetLabel    string
+func findSimilarExistingAbstract(ctx context.Context, name, desc, category string, candidates []TagCandidate) *models.TopicTag {
+	es := NewEmbeddingService()
+	thresholds := es.GetThresholds()
+	probe := &models.TopicTag{
+		Label:       name,
+		Description: desc,
+		Category:    category,
+		Source:      "abstract",
+	}
+	similar, err := es.FindSimilarTags(ctx, probe, category, 8, EmbeddingTypeSemantic)
+	if err != nil {
+		logging.Warnf("findSimilarExistingAbstract: embedding search failed: %v", err)
+		return nil
+	}
+
+	existingAbstracts := make([]models.TopicTag, 0, len(similar))
+	for _, candidate := range similar {
+		if candidate.Tag == nil || candidate.Tag.Source != "abstract" {
+			continue
+		}
+		if candidate.Similarity < thresholds.LowSimilarity {
+			continue
+		}
+		existingAbstracts = append(existingAbstracts, *candidate.Tag)
+		if len(existingAbstracts) == 5 {
+			break
+		}
+	}
+	if len(existingAbstracts) == 0 {
+		return nil
+	}
+
+	candidateLabels := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.Tag != nil {
+			candidateLabels = append(candidateLabels, candidate.Tag.Label)
+		}
+	}
+
+	router := airouter.NewRouter()
+	abstractInfo := make([]string, 0, len(existingAbstracts))
+	for _, existing := range existingAbstracts {
+		children := loadAbstractChildLabels(existing.ID, 5)
+		abstractInfo = append(abstractInfo,
+			fmt.Sprintf("- ID %d: %q (描述: %s, 子标签: %s)", existing.ID, existing.Label, truncateStr(existing.Description, 100), formatChildLabels(children)))
+	}
+
+	prompt := fmt.Sprintf(`一个新的抽象标签即将被创建，请检查以下已有抽象标签中是否有描述同一概念的。
+
+即将创建的抽象标签: %q (描述: %s)
+其候选子标签: %s
+
+已有同 category 抽象标签:
+%s
+
+规则:
+- 只有当已有标签描述的核心概念与新标签完全相同时才返回
+- 不要把宽泛程度不同的标签当作同一概念
+
+返回 JSON: {"reuse_id": 0 或 已有标签的ID, "reason": "简要说明"}`,
+		name, truncateStr(desc, 200), formatChildLabels(candidateLabels), strings.Join(abstractInfo, "\n"))
+
+	req := airouter.ChatRequest{
+		Capability: airouter.CapabilityTopicTagging,
+		Messages: []airouter.Message{
+			{Role: "system", Content: "You are a tag taxonomy assistant. Respond only with valid JSON."},
+			{Role: "user", Content: prompt},
+		},
+		JSONMode: true,
+		JSONSchema: &airouter.JSONSchema{
+			Type: "object",
+			Properties: map[string]airouter.SchemaProperty{
+				"reuse_id": {Type: "integer", Description: "复用的已有标签ID，0表示不匹配"},
+				"reason":   {Type: "string", Description: "判断理由"},
+			},
+			Required: []string{"reuse_id", "reason"},
+		},
+		Temperature: func() *float64 { f := 0.2; return &f }(),
+		Metadata: map[string]any{
+			"operation":    "find_similar_existing_abstract",
+			"new_name":     name,
+			"category":     category,
+			"candidates_n": len(candidates),
+			"shortlist_n":  len(existingAbstracts),
+		},
+	}
+
+	result, err := router.Chat(ctx, req)
+	if err != nil {
+		logging.Warnf("findSimilarExistingAbstract: LLM call failed: %v", err)
+		return nil
+	}
+
+	var parsed struct {
+		ReuseID uint   `json:"reuse_id"`
+		Reason  string `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(result.Content), &parsed); err != nil {
+		logging.Warnf("findSimilarExistingAbstract: parse failed: %v", err)
+		return nil
+	}
+	if parsed.ReuseID == 0 {
+		return nil
+	}
+
+	for i := range existingAbstracts {
+		if existingAbstracts[i].ID == parsed.ReuseID {
+			logging.Infof("findSimilarExistingAbstract: found match %d (%q) for new %q: %s",
+				existingAbstracts[i].ID, existingAbstracts[i].Label, name, parsed.Reason)
+			return &existingAbstracts[i]
+		}
+	}
+
+	logging.Warnf("findSimilarExistingAbstract: reuse_id %d not found in shortlist", parsed.ReuseID)
+	return nil
+}
+
+func aiJudgeNarrowerConcept(ctx context.Context, parentTag *models.TopicTag, candidateTag *models.TopicTag) (bool, error) {
+	parentChildren := loadAbstractChildLabels(parentTag.ID, 5)
+	candidateChildren := loadAbstractChildLabels(candidateTag.ID, 5)
+
+	router := airouter.NewRouter()
+	prompt := fmt.Sprintf(`判断候选标签是否是目标标签的更窄（更具体）概念，应该作为其子标签。
+
+目标标签（潜在的父标签）: %q (描述: %s)
+目标标签的子标签: %s
+
+候选标签（潜在的子标签）: %q (描述: %s)
+候选标签的子标签: %s
+
+规则:
+- 如果候选标签描述的是目标标签范围内的一个具体方面、子集或特定场景，则它是更窄概念
+- 如果两者是同一层级或候选更宽泛，返回 false
+- 如果候选的子标签与目标的子标签高度重叠，说明是同一概念，返回 false
+
+返回 JSON: {"narrower": true/false, "reason": "简要说明"}`,
+		parentTag.Label, truncateStr(parentTag.Description, 200), formatChildLabels(parentChildren),
+		candidateTag.Label, truncateStr(candidateTag.Description, 200), formatChildLabels(candidateChildren))
+
+	req := airouter.ChatRequest{
+		Capability: airouter.CapabilityTopicTagging,
+		Messages: []airouter.Message{
+			{Role: "system", Content: "You are a tag taxonomy assistant. Respond only with valid JSON."},
+			{Role: "user", Content: prompt},
+		},
+		JSONMode: true,
+		JSONSchema: &airouter.JSONSchema{
+			Type: "object",
+			Properties: map[string]airouter.SchemaProperty{
+				"narrower": {Type: "boolean", Description: "候选标签是否是目标标签的更窄概念"},
+				"reason":   {Type: "string", Description: "判断理由"},
+			},
+			Required: []string{"narrower", "reason"},
+		},
+		Temperature: func() *float64 { f := 0.2; return &f }(),
+		Metadata: map[string]any{
+			"operation":     "adopt_narrower_abstract",
+			"parent_tag":    parentTag.ID,
+			"candidate_tag": candidateTag.ID,
+		},
+	}
+
+	result, err := router.Chat(ctx, req)
+	if err != nil {
+		return false, fmt.Errorf("LLM call failed: %w", err)
+	}
+
+	var parsed struct {
+		Narrower bool   `json:"narrower"`
+		Reason   string `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(result.Content), &parsed); err != nil {
+		return false, fmt.Errorf("parse LLM response: %w", err)
+	}
+
+	return parsed.Narrower, nil
+}
+
+func reparentOrLinkAbstractChild(ctx context.Context, childID, newParentID uint) error {
+	return database.DB.Transaction(func(tx *gorm.DB) error {
+		wouldCycle, err := wouldCreateCycle(tx, newParentID, childID)
+		if err != nil {
+			return fmt.Errorf("cycle check: %w", err)
+		}
+		if wouldCycle {
+			return fmt.Errorf("would create cycle: parent=%d, child=%d", newParentID, childID)
+		}
+
+		var count int64
+		tx.Model(&models.TopicTagRelation{}).
+			Where("parent_id = ? AND child_id = ? AND relation_type = ?", newParentID, childID, "abstract").
+			Count(&count)
+		if count > 0 {
+			return nil
+		}
+
+		var oldParentRelation models.TopicTagRelation
+		if err := tx.Where("child_id = ? AND relation_type = ?", childID, "abstract").First(&oldParentRelation).Error; err == nil {
+			var oldParentTag models.TopicTag
+			if err := tx.First(&oldParentTag, oldParentRelation.ParentID).Error; err != nil {
+				return fmt.Errorf("load old parent tag: %w", err)
+			}
+
+			var newParentTag models.TopicTag
+			if err := tx.First(&newParentTag, newParentID).Error; err != nil {
+				return fmt.Errorf("load new parent tag: %w", err)
+			}
+
+			narrower, err := aiJudgeNarrowerConceptFn(ctx, &newParentTag, &oldParentTag)
+			if err != nil {
+				return fmt.Errorf("judge old parent narrower: %w", err)
+			}
+			if !narrower {
+				return fmt.Errorf("child %d already has parent %d which is not narrower than %d", childID, oldParentRelation.ParentID, newParentID)
+			}
+
+			oldParentCycle, err := wouldCreateCycle(tx, newParentID, oldParentRelation.ParentID)
+			if err != nil {
+				return fmt.Errorf("cycle check for old parent: %w", err)
+			}
+			if oldParentCycle {
+				return fmt.Errorf("would create cycle via old parent: parent=%d, old_parent=%d", newParentID, oldParentRelation.ParentID)
+			}
+
+			relation := models.TopicTagRelation{
+				ParentID:     newParentID,
+				ChildID:      oldParentRelation.ParentID,
+				RelationType: "abstract",
+			}
+			return tx.Where("parent_id = ? AND child_id = ? AND relation_type = ?", newParentID, oldParentRelation.ParentID, "abstract").FirstOrCreate(&relation).Error
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("find old parent: %w", err)
+		}
+
+		relation := models.TopicTagRelation{
+			ParentID:     newParentID,
+			ChildID:      childID,
+			RelationType: "abstract",
+		}
+		return tx.Create(&relation).Error
+	})
+}
+
+func callLLMForTagJudgment(ctx context.Context, candidates []TagCandidate, newLabel string, category string, narrativeContext string, caller string) (*tagJudgment, error) {
+	router := airouter.NewRouter()
+	prompt := buildTagJudgmentPrompt(candidates, newLabel, category, narrativeContext)
+
+	req := airouter.ChatRequest{
+		Capability: airouter.CapabilityTopicTagging,
+		Messages: []airouter.Message{
+			{Role: "system", Content: "You are a tag taxonomy assistant. Respond only with valid JSON."},
+			{Role: "user", Content: prompt},
+		},
+		JSONMode: true,
+		JSONSchema: &airouter.JSONSchema{
+			Type: "object",
+			Properties: map[string]airouter.SchemaProperty{
+				"merge": {Type: "object", Description: "合并判断：新标签与哪些候选是同一概念。omit if not applicable", Properties: map[string]airouter.SchemaProperty{
+					"target":   {Type: "string", Description: "合并目标候选标签名称"},
+					"label":    {Type: "string", Description: "合并后的统一名称"},
+					"children": {Type: "array", Description: "与 target 同概念的其他候选标签名称列表", Items: &airouter.SchemaProperty{Type: "string"}},
+					"reason":   {Type: "string", Description: "判断理由"},
+				}, Required: []string{"target", "label", "children"}},
+				"abstract": {Type: "object", Description: "抽象判断：需要为哪些候选创建抽象父标签。omit if not applicable", Properties: map[string]airouter.SchemaProperty{
+					"name":        {Type: "string", Description: "抽象标签名称（1-160字）"},
+					"description": {Type: "string", Description: "抽象标签中文客观描述（500字以内）"},
+					"children":    {Type: "array", Description: "应作为该抽象标签子标签的候选名称列表", Items: &airouter.SchemaProperty{Type: "string"}},
+					"reason":      {Type: "string", Description: "判断理由"},
+				}, Required: []string{"name", "description", "children"}},
+			},
+		},
+		Temperature: func() *float64 { f := 0.3; return &f }(),
+		Metadata: map[string]any{
+			"operation":       "tag_judgment",
+			"caller":          caller,
+			"candidate_count": len(candidates),
+			"new_label":       newLabel,
+			"category":        category,
+			"candidates":      buildCandidateSummary(candidates),
+		},
+	}
+
+	result, err := router.Chat(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("LLM call failed: %w", err)
+	}
+
+	logging.Infof("Tag judgment LLM response for %q: %s", newLabel, result.Content)
+
+	return parseTagJudgmentResponse(result.Content, candidates)
+}
+
+type tagJudgment struct {
+	Merge    *tagJudgmentMerge    `json:"merge,omitempty"`
+	Abstract *tagJudgmentAbstract `json:"abstract,omitempty"`
+}
+
+type tagJudgmentMerge struct {
+	Target   string   `json:"target"`
+	Label    string   `json:"label"`
+	Children []string `json:"children"`
+	Reason   string   `json:"reason"`
+}
+
+type tagJudgmentAbstract struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Children    []string `json:"children"`
+	Reason      string   `json:"reason"`
+}
+
+func ensureNewLabelCandidateInAbstractJudgment(judgment *tagJudgment, candidates []TagCandidate, newLabel string) {
+	if judgment == nil || judgment.Abstract == nil || len(judgment.Abstract.Children) == 0 {
+		return
+	}
+
+	label := candidateLabelForNewLabel(candidates, newLabel)
+	if label == "" || labelInSlice(judgment.Abstract.Children, label) {
+		return
+	}
+
+	if judgment.Merge != nil {
+		if judgment.Merge.Target == label || labelInSlice(judgment.Merge.Children, label) {
+			return
+		}
+	}
+
+	judgment.Abstract.Children = append(judgment.Abstract.Children, label)
+}
+
+func candidateLabelForNewLabel(candidates []TagCandidate, newLabel string) string {
+	newSlug := topictypes.Slugify(newLabel)
+	if newSlug == "" {
+		return ""
+	}
+	for _, c := range candidates {
+		if c.Tag == nil {
+			continue
+		}
+		if c.Tag.Slug == newSlug || topictypes.Slugify(c.Tag.Label) == newSlug {
+			return c.Tag.Label
+		}
+	}
+	return ""
+}
+
+func labelInSlice(labels []string, target string) bool {
+	for _, label := range labels {
+		if label == target {
+			return true
+		}
+	}
+	return false
 }
 
 func selectMergeTarget(candidates []TagCandidate, mergeTarget string, mergeLabel string) *models.TopicTag {
@@ -666,172 +1089,90 @@ func selectMergeTarget(candidates []TagCandidate, mergeTarget string, mergeLabel
 	return nil
 }
 
-func callLLMForTagJudgment(ctx context.Context, candidates []TagCandidate, newLabel string, category string, narrativeContext string) ([]tagJudgment, error) {
-	var allJudgments []tagJudgment
-	var previousResults []previousRoundResult
-
-	for batchStart := 0; batchStart < len(candidates); batchStart += judgmentBatchSize {
-		batchEnd := batchStart + judgmentBatchSize
-		if batchEnd > len(candidates) {
-			batchEnd = len(candidates)
-		}
-		batch := candidates[batchStart:batchEnd]
-
-		judgments, err := callLLMForTagJudgmentBatch(ctx, batch, newLabel, category, narrativeContext, previousResults)
-		if err != nil {
-			logging.Warnf("Tag judgment batch %d-%d failed: %v", batchStart, batchEnd, err)
-			continue
-		}
-
-		for _, j := range judgments {
-			allJudgments = append(allJudgments, j)
-			previousResults = append(previousResults, previousRoundResult{
-				CandidateLabel: j.CandidateLabel,
-				Action:         j.Action,
-				TargetLabel:    j.MergeTarget,
-			})
-		}
-	}
-
-	if len(allJudgments) == 0 {
-		return nil, fmt.Errorf("all judgment batches failed")
-	}
-
-	return allJudgments, nil
-}
-
-func callLLMForTagJudgmentBatch(ctx context.Context, batch []TagCandidate, newLabel string, category string, narrativeContext string, previousResults []previousRoundResult) ([]tagJudgment, error) {
-	router := airouter.NewRouter()
-	prompt := buildBatchTagJudgmentPrompt(batch, newLabel, category, previousResults)
-
-	if narrativeContext != "" {
-		prompt += fmt.Sprintf("\n\nAdditional context from narrative analysis:\n%s\nUse this context to help determine if these tags belong to the same thematic thread.", narrativeContext)
-	}
-
-	req := airouter.ChatRequest{
-		Capability: airouter.CapabilityTopicTagging,
-		Messages: []airouter.Message{
-			{Role: "system", Content: "You are a tag taxonomy assistant. Respond only with valid JSON array."},
-			{Role: "user", Content: prompt},
-		},
-		JSONMode: true,
-		JSONSchema: &airouter.JSONSchema{
-			Type: "array",
-			Items: &airouter.JSONSchema{
-				Type: "object",
-				Properties: map[string]airouter.SchemaProperty{
-					"candidate_label": {Type: "string", Description: "判断针对的候选标签名称"},
-					"action":          {Type: "string", Description: "判断结果：merge 表示新标签与该候选是同一概念应合并，abstract 表示需要创建抽象概括标签，none 表示无关联"},
-					"merge_target":    {Type: "string", Description: "action=merge 时必填：指定新标签应合并到哪个候选（填候选标签名称）"},
-					"merge_label":     {Type: "string", Description: "action=merge 时必填：合并后的统一名称"},
-					"abstract_name":   {Type: "string", Description: "action=abstract 时必填：抽象标签名称（1-160字）"},
-					"description":     {Type: "string", Description: "action=abstract 时必填：抽象标签中文客观描述（500字以内）"},
-					"reason":          {Type: "string", Description: "判断理由"},
-				},
-				Required: []string{"candidate_label", "action", "reason"},
-			},
-		},
-		Temperature: func() *float64 { f := 0.3; return &f }(),
-		Metadata: map[string]any{
-			"operation":       "tag_judgment_batch",
-			"candidate_count": len(batch),
-			"new_label":       newLabel,
-		},
-	}
-
-	result, err := router.Chat(ctx, req)
-	if err != nil {
-		return nil, fmt.Errorf("LLM call failed: %w", err)
-	}
-
-	return parseBatchTagJudgmentResponse(result.Content)
-}
-
-func parseBatchTagJudgmentResponse(content string) ([]tagJudgment, error) {
+func parseTagJudgmentResponse(content string, candidates []TagCandidate) (*tagJudgment, error) {
 	content = jsonutil.SanitizeLLMJSON(content)
 
-	var parsed []struct {
-		CandidateLabel string `json:"candidate_label"`
-		Action         string `json:"action"`
-		MergeTarget    string `json:"merge_target"`
-		MergeLabel     string `json:"merge_label"`
-		AbstractName   string `json:"abstract_name"`
-		Description    string `json:"description"`
-		Reason         string `json:"reason"`
+	var raw struct {
+		Merge *struct {
+			Target   string   `json:"target"`
+			Label    string   `json:"label"`
+			Children []string `json:"children"`
+			Reason   string   `json:"reason"`
+		} `json:"merge"`
+		Abstract *struct {
+			Name        string   `json:"name"`
+			Description string   `json:"description"`
+			Children    []string `json:"children"`
+			Reason      string   `json:"reason"`
+		} `json:"abstract"`
 	}
 
-	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
-		return parseSingleJudgmentFallback(content)
+	if err := json.Unmarshal([]byte(content), &raw); err != nil {
+		return nil, fmt.Errorf("failed to parse tag judgment response: %w", err)
 	}
 
-	var judgments []tagJudgment
-	for _, p := range parsed {
-		action := strings.ToLower(strings.TrimSpace(p.Action))
-		if action != ActionMerge && action != ActionAbstract && action != ActionNone {
-			continue
+	candidateLabels := make(map[string]bool, len(candidates))
+	for _, c := range candidates {
+		if c.Tag != nil {
+			candidateLabels[c.Tag.Label] = true
 		}
+	}
 
-		j := tagJudgment{
-			CandidateLabel: strings.TrimSpace(p.CandidateLabel),
-			Action:         action,
-			Reason:         p.Reason,
-		}
-
-		switch action {
-		case ActionMerge:
-			j.MergeTarget = strings.TrimSpace(p.MergeTarget)
-			j.MergeLabel = strings.TrimSpace(p.MergeLabel)
-			if j.MergeLabel == "" {
-				j.MergeLabel = j.CandidateLabel
-			}
-		case ActionAbstract:
-			j.AbstractName = strings.TrimSpace(p.AbstractName)
-			if j.AbstractName == "" {
-				continue
-			}
-			if len(j.AbstractName) > maxAbstractNameLen {
-				j.AbstractName = j.AbstractName[:maxAbstractNameLen]
-			}
-			j.Description = strings.TrimSpace(p.Description)
-			if len(j.Description) > 500 {
-				j.Description = j.Description[:500]
+	filterChildren := func(children []string) []string {
+		var valid []string
+		for _, ch := range children {
+			ch = strings.TrimSpace(ch)
+			if candidateLabels[ch] {
+				valid = append(valid, ch)
 			}
 		}
-
-		judgments = append(judgments, j)
+		return valid
 	}
 
-	if len(judgments) == 0 {
-		return nil, fmt.Errorf("no valid judgments parsed from LLM response")
+	judgment := &tagJudgment{}
+	usedLabels := make(map[string]bool)
+
+	if raw.Merge != nil && raw.Merge.Target != "" {
+		judgment.Merge = &tagJudgmentMerge{
+			Target:   strings.TrimSpace(raw.Merge.Target),
+			Label:    strings.TrimSpace(raw.Merge.Label),
+			Children: filterChildren(raw.Merge.Children),
+			Reason:   raw.Merge.Reason,
+		}
+		if judgment.Merge.Label == "" {
+			judgment.Merge.Label = judgment.Merge.Target
+		}
+		usedLabels[judgment.Merge.Target] = true
+		for _, ch := range judgment.Merge.Children {
+			usedLabels[ch] = true
+		}
 	}
 
-	return judgments, nil
-}
-
-func parseSingleJudgmentFallback(content string) ([]tagJudgment, error) {
-	var parsed struct {
-		Action       string `json:"action"`
-		MergeLabel   string `json:"merge_label"`
-		AbstractName string `json:"abstract_name"`
-		Description  string `json:"description"`
-		Reason       string `json:"reason"`
+	if raw.Abstract != nil && raw.Abstract.Name != "" {
+		abstractName := strings.TrimSpace(raw.Abstract.Name)
+		if len(abstractName) > maxAbstractNameLen {
+			abstractName = abstractName[:maxAbstractNameLen]
+		}
+		desc := strings.TrimSpace(raw.Abstract.Description)
+		if len(desc) > 500 {
+			desc = desc[:500]
+		}
+		var dedupedChildren []string
+		for _, ch := range filterChildren(raw.Abstract.Children) {
+			if !usedLabels[ch] {
+				dedupedChildren = append(dedupedChildren, ch)
+				usedLabels[ch] = true
+			}
+		}
+		judgment.Abstract = &tagJudgmentAbstract{
+			Name:        abstractName,
+			Description: desc,
+			Children:    dedupedChildren,
+			Reason:      raw.Abstract.Reason,
+		}
 	}
-	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
-		return nil, fmt.Errorf("failed to parse LLM response as array or object: %w", err)
-	}
 
-	action := strings.ToLower(strings.TrimSpace(parsed.Action))
-	if action != ActionMerge && action != ActionAbstract && action != ActionNone {
-		return nil, fmt.Errorf("invalid action %q", parsed.Action)
-	}
-
-	return []tagJudgment{{
-		Action:       action,
-		MergeLabel:   strings.TrimSpace(parsed.MergeLabel),
-		AbstractName: strings.TrimSpace(parsed.AbstractName),
-		Description:  strings.TrimSpace(parsed.Description),
-		Reason:       parsed.Reason,
-	}}, nil
+	return judgment, nil
 }
 
 func buildCandidateList(candidates []TagCandidate, newLabel string) string {
@@ -858,89 +1199,107 @@ func buildCandidateList(candidates []TagCandidate, newLabel string) string {
 	return strings.Join(parts, "\n")
 }
 
-func buildPreviousResultsSummary(results []previousRoundResult) string {
-	if len(results) == 0 {
-		return ""
-	}
-	var parts []string
-	for _, r := range results {
-		switch r.Action {
-		case ActionMerge:
-			parts = append(parts, fmt.Sprintf("- %q → merge (into %q)", r.CandidateLabel, r.TargetLabel))
-		case ActionAbstract:
-			parts = append(parts, fmt.Sprintf("- %q → abstract (%q)", r.CandidateLabel, r.TargetLabel))
-		case ActionNone:
-			parts = append(parts, fmt.Sprintf("- %q → none (independent)", r.CandidateLabel))
-		}
-	}
-	return fmt.Sprintf("Previous round decisions:\n%s\n", strings.Join(parts, "\n"))
+func buildTagJudgmentPrompt(candidates []TagCandidate, newLabel string, category string, narrativeContext string) string {
+	tagList := buildCandidateList(candidates, newLabel)
+
+	rules := `
+Analyze ALL candidates together and return ONE JSON object with at most two sections:
+
+{
+  "merge": {
+    "target": "the candidate label the new tag should merge into",
+    "label": "unified name after merge",
+    "children": ["other candidate labels that are also the SAME concept as the target"],
+    "reason": "..."
+  },
+  "abstract": {
+    "name": "abstract parent tag name (1-160 chars)",
+    "description": "objective Chinese description (≤500 chars)",
+    "children": ["candidate labels that are RELATED but DISTINCT — should be grouped under this abstract tag"],
+    "reason": "..."
+  }
 }
 
-func buildBatchTagJudgmentPrompt(candidates []TagCandidate, newLabel string, category string, previousResults []previousRoundResult) string {
-	tagList := buildCandidateList(candidates, newLabel)
-	prevSummary := buildPreviousResultsSummary(previousResults)
+Rules:
+- "merge" and "abstract" are both optional — omit a section entirely if not applicable
+- merge: the new tag and listed children are ALL the SAME concept as the target — they should be unified
+  - "target" must be one of the candidate labels
+  - "children" lists other candidates that are also the same concept (NOT including the target itself)
+  - If similarity >= 0.97 with a normal candidate, merge is usually correct
+  - If a candidate is an abstract tag, merging into one of its concrete children is often better
+- abstract: PREFER creating abstract tags when 2+ candidates share a domain, theme, or category
+  - Be GENEROUS: candidates that share any thematic connection should be grouped under an abstract tag
+  - Good abstracts: "AI Models" for GPT-4+Claude+Gemini, "Space Industry" for SpaceX+Starlink, "Central Banks" for Fed+ECB+BOJ, "US Tech CEOs" for Musk+Altman+Nadella
+  - Even moderate connections (same industry, same region, same event type) warrant abstract tags
+  - abstract_name should be a concise, specific category name — NOT just listing the children's names
+  - Do NOT include any candidate already listed in merge.children here
+- A candidate must appear in at most ONE section (merge.children or abstract.children), never both
+- If truly no relationship exists for any candidate, return {"merge": null, "abstract": null}
+- When in doubt, prefer creating an abstract tag over leaving candidates ungrouped`
 
-	perCandidateRule := `
-For each candidate tag, return an independent judgment:
-- merge: the new tag and this candidate are the SAME concept — they should be unified
-  - merge_target: fill with the candidate label that the new tag should merge into
-  - merge_label: the unified name after merge
-- abstract: the new tag and this candidate are DISTINCT but RELATED concepts — they need an abstract parent tag
-  - abstract_name: name for the abstract parent tag (1-160 chars)
-  - description: objective Chinese description (≤500 chars)
-- none: the new tag has no meaningful relationship with this candidate
-
-Important:
-- If similarity >= 0.97 with a normal candidate, usually merge is correct
-- If a candidate is an abstract tag, merging into one of its concrete children is often better than creating another child
-- You can return different actions for different candidates
-- merge_target should reference one of the candidate labels from the list above
-
-Return a JSON array:
-[
-  {"candidate_label": "候选标签名", "action": "merge/abstract/none", "merge_target": "目标候选", "merge_label": "统一名称", "abstract_name": "抽象名", "description": "描述", "reason": "理由"},
-  ...
-]`
-
+	categoryRules := ""
 	switch category {
 	case "person":
-		return fmt.Sprintf(`以下是语义相似的人物标签:
-%s
-%s
-请为每个候选标签独立判断与新标签 %q 的关系:
-%s
-
-判断标准:
-- 只有同一人物的不同叫法才用 merge
-- 不同人物只有在紧密的组织/角色关系（同团队、同家族、师徒关系）时才用 abstract
-- 仅仅"同领域"、"同事件参与者"不构成 abstract 的充分理由，用 none
-- 绝不要创建形如"人物A与人物B"的抽象标签——如果 abstract_name 只是列举人名，用 none`, tagList, prevSummary, newLabel, perCandidateRule)
-
+		categoryRules = `
+Person-specific rules:
+- merge: ONLY when different names for the SAME person (e.g. "Tim Cook" and "蒂姆·库克")
+- abstract: CREATE abstract tags for people who share affiliations, roles, domains, or national relevance
+  - Examples: "中国科技领袖" for 雷军+余承东, "AI公司CEO" for Sam Altman+Satya Nadella, "美国政治人物" for Trump+Biden
+  - People in the same industry, organization, or country's public sphere are related enough for abstract
+  - Do NOT create overly vague tags like "人物" — add thematic specificity (e.g. "中国科技领袖" not "人物")`
 	case "event":
-		return fmt.Sprintf(`以下是语义相似的事件标签:
-%s
-%s
-请为每个候选标签独立判断与新标签 %q 的关系:
-%s
-
-判断标准:
-- 只有明确是同一事件的不同表述才用 merge
-- 相似但独立的事件（如同一系列的不同事件）用 abstract
-- 没有实质关联（只是语义相似度碰巧高）时用 none`, tagList, prevSummary, newLabel, perCandidateRule)
-
+		categoryRules = `
+Event-specific rules:
+- merge: ONLY when clearly the SAME event with different descriptions
+- abstract: CREATE abstract tags for related events
+  - Examples: "2024年大选" for multiple election events, "科技发布会" for WWDC+Google I/O, "中东冲突" for related military events
+  - Events sharing a theme, industry, region, or time period should be grouped under an abstract tag
+  - Same event type across different instances (e.g. quarterly earnings, annual conferences) should be grouped`
 	default:
-		return fmt.Sprintf(`Given these semantically similar tags:
-%s
-%s
-Judge the relationship between the new tag %q and each candidate independently:
+		categoryRules = `
+- abstract_name/merge_label should be in the original language of the tags
+- description must be objective, factual — no subjective opinions
+- When in doubt, prefer creating an abstract tag over leaving candidates ungrouped`
+	}
+
+	prompt := fmt.Sprintf(`Candidates:
 %s
 
-Criteria:
-- merge: same concept with different names/spellings
-- abstract: distinct but related concepts sharing a common theme
-- none: no meaningful relationship beyond semantic similarity
-- abstract_name/merge_label should be in the original language of the tags
-- description must be objective, factual — no subjective opinions`, tagList, prevSummary, newLabel, perCandidateRule)
+New tag: %q (category: %s)
+%s
+%s`, tagList, newLabel, category, rules, categoryRules)
+
+	if narrativeContext != "" {
+		prompt += fmt.Sprintf("\n\nAdditional context from narrative analysis:\n%s\nUse this context to help determine relationships.", narrativeContext)
+	}
+
+	return prompt
+}
+
+// propagateActiveAncestors walks up the relation chain and marks all ancestors
+// of directly-active tags as active. Without this, intermediate abstract tags
+// that have no direct article links get pruned during time-range filtering,
+// causing top-level abstract tags to disappear.
+func propagateActiveAncestors(activeTagIDs map[uint]bool, relations []models.TopicTagRelation) {
+	childToParents := make(map[uint][]uint)
+	for _, r := range relations {
+		childToParents[r.ChildID] = append(childToParents[r.ChildID], r.ParentID)
+	}
+
+	queue := make([]uint, 0, len(activeTagIDs))
+	for id := range activeTagIDs {
+		queue = append(queue, id)
+	}
+
+	for len(queue) > 0 {
+		id := queue[0]
+		queue = queue[1:]
+		for _, parentID := range childToParents[id] {
+			if !activeTagIDs[parentID] {
+				activeTagIDs[parentID] = true
+				queue = append(queue, parentID)
+			}
+		}
 	}
 }
 
@@ -1171,7 +1530,7 @@ func GetUnclassifiedTags(category string, scopeFeedID uint, scopeCategoryID uint
 	}
 
 	var tags []models.TopicTag
-	if err := query.Order("quality_score DESC, feed_count DESC, label ASC").Limit(200).Find(&tags).Error; err != nil {
+	if err := query.Order("quality_score DESC, feed_count DESC, label ASC").Find(&tags).Error; err != nil {
 		return nil, fmt.Errorf("query unclassified tags: %w", err)
 	}
 
@@ -1235,29 +1594,90 @@ func MatchAbstractTagHierarchy(ctx context.Context, abstractTagID uint) {
 		return
 	}
 
-	best := candidates[0]
 	thresholds := es.GetThresholds()
-
-	if best.Similarity >= thresholds.HighSimilarity {
-		if err := linkAbstractParentChild(abstractTagID, best.Tag.ID); err != nil {
-			logging.Warnf("MatchAbstractTagHierarchy: failed to link %d under %d: %v", abstractTagID, best.Tag.ID, err)
-			return
-		}
-		logging.Infof("Abstract tag %d linked under existing abstract %d (similarity=%.4f)", abstractTagID, best.Tag.ID, best.Similarity)
-		return
+	maxCheck := 3
+	if len(candidates) < maxCheck {
+		maxCheck = len(candidates)
 	}
 
-	if best.Similarity >= thresholds.LowSimilarity {
-		parentID, childID, err := aiJudgeAbstractHierarchy(ctx, abstractTagID, best.Tag.ID)
+	for i := 0; i < maxCheck; i++ {
+		candidate := candidates[i]
+		if candidate.Tag == nil {
+			continue
+		}
+
+		if candidate.Similarity >= thresholds.HighSimilarity {
+			if err := mergeOrLinkSimilarAbstract(ctx, abstractTagID, candidate.Tag.ID); err != nil {
+				logging.Warnf("MatchAbstractTagHierarchy: merge/link failed for %d vs %d: %v", abstractTagID, candidate.Tag.ID, err)
+			}
+			continue
+		}
+
+		if candidate.Similarity < thresholds.LowSimilarity {
+			continue
+		}
+
+		parentID, childID, err := aiJudgeAbstractHierarchy(ctx, abstractTagID, candidate.Tag.ID)
 		if err != nil {
-			logging.Warnf("MatchAbstractTagHierarchy: AI judgment failed for %d vs %d: %v", abstractTagID, best.Tag.ID, err)
-			return
+			logging.Warnf("MatchAbstractTagHierarchy: AI judgment failed for %d vs %d: %v", abstractTagID, candidate.Tag.ID, err)
+			continue
 		}
 		if err := linkAbstractParentChild(childID, parentID); err != nil {
 			logging.Warnf("MatchAbstractTagHierarchy: failed to link %d under %d: %v", childID, parentID, err)
-			return
+			continue
 		}
-		logging.Infof("Abstract hierarchy: %d is child of %d (AI judged, similarity=%.4f)", childID, parentID, best.Similarity)
+		logging.Infof("Abstract hierarchy: %d is child of %d (AI judged, similarity=%.4f)", childID, parentID, candidate.Similarity)
+	}
+}
+
+func adoptNarrowerAbstractChildren(ctx context.Context, abstractTagID uint) {
+	defer func() {
+		if r := recover(); r != nil {
+			logging.Warnf("adoptNarrowerAbstractChildren panic for tag %d: %v", abstractTagID, r)
+		}
+	}()
+
+	var abstractTag models.TopicTag
+	if err := database.DB.First(&abstractTag, abstractTagID).Error; err != nil {
+		logging.Warnf("adoptNarrowerAbstractChildren: tag %d not found: %v", abstractTagID, err)
+		return
+	}
+
+	es := NewEmbeddingService()
+	candidates, err := es.FindSimilarAbstractTags(ctx, abstractTagID, abstractTag.Category, 5)
+	if err != nil || len(candidates) == 0 {
+		if err != nil {
+			logging.Warnf("adoptNarrowerAbstractChildren: similarity search failed for %d: %v", abstractTagID, err)
+		}
+		return
+	}
+
+	thresholds := es.GetThresholds()
+	adopted := 0
+	for _, candidate := range candidates {
+		if candidate.Tag == nil || candidate.Similarity < thresholds.LowSimilarity {
+			continue
+		}
+
+		isNarrower, err := aiJudgeNarrowerConceptFn(ctx, &abstractTag, candidate.Tag)
+		if err != nil {
+			logging.Warnf("adoptNarrowerAbstractChildren: AI judgment failed for %d vs %d: %v", abstractTagID, candidate.Tag.ID, err)
+			continue
+		}
+		if !isNarrower {
+			continue
+		}
+
+		if err := reparentOrLinkAbstractChild(ctx, candidate.Tag.ID, abstractTagID); err != nil {
+			logging.Warnf("adoptNarrowerAbstractChildren: failed to link %d under %d: %v", candidate.Tag.ID, abstractTagID, err)
+			continue
+		}
+		adopted++
+	}
+
+	if adopted > 0 {
+		logging.Infof("adoptNarrowerAbstractChildren: abstract tag %d (%s) adopted %d narrower abstract tags", abstractTagID, abstractTag.Label, adopted)
+		go EnqueueAbstractTagUpdate(abstractTagID, "adopted_narrower_children")
 	}
 }
 
@@ -1304,6 +1724,94 @@ func linkAbstractParentChild(childID, parentID uint) error {
 	go EnqueueAbstractTagUpdate(parentID, "hierarchy_linked")
 
 	return nil
+}
+
+func mergeOrLinkSimilarAbstract(ctx context.Context, tag1ID, tag2ID uint) error {
+	var tag1, tag2 models.TopicTag
+	if err := database.DB.First(&tag1, tag1ID).Error; err != nil {
+		return fmt.Errorf("load tag %d: %w", tag1ID, err)
+	}
+	if err := database.DB.First(&tag2, tag2ID).Error; err != nil {
+		return fmt.Errorf("load tag %d: %w", tag2ID, err)
+	}
+
+	children1 := loadAbstractChildLabels(tag1ID, 5)
+	children2 := loadAbstractChildLabels(tag2ID, 5)
+
+	router := airouter.NewRouter()
+	prompt := fmt.Sprintf(`两个抽象标签非常相似，请判断它们的关系。
+
+标签 A: %q (描述: %s)
+A 的子标签: %s
+
+标签 B: %q (描述: %s)
+B 的子标签: %s
+
+判断:
+- 如果它们描述的是完全相同的概念（只是表述不同），返回 "merge"
+- 如果 A 是 B 的上位概念（更宽泛），返回 "parent_A"
+- 如果 B 是 A 的上位概念（更宽泛），返回 "parent_B"
+
+返回 JSON: {"action": "merge"|"parent_A"|"parent_B", "target": "A"|"B", "reason": "简要说明"}`,
+		tag1.Label, truncateStr(tag1.Description, 200), formatChildLabels(children1),
+		tag2.Label, truncateStr(tag2.Description, 200), formatChildLabels(children2))
+
+	req := airouter.ChatRequest{
+		Capability: airouter.CapabilityTopicTagging,
+		Messages: []airouter.Message{
+			{Role: "system", Content: "You are a tag taxonomy assistant. Respond only with valid JSON."},
+			{Role: "user", Content: prompt},
+		},
+		JSONMode: true,
+		JSONSchema: &airouter.JSONSchema{
+			Type: "object",
+			Properties: map[string]airouter.SchemaProperty{
+				"action": {Type: "string", Description: "merge, parent_A, 或 parent_B"},
+				"target": {Type: "string", Description: "A 或 B，merge 时保留的标签"},
+				"reason": {Type: "string", Description: "判断理由"},
+			},
+			Required: []string{"action", "target", "reason"},
+		},
+		Temperature: func() *float64 { f := 0.2; return &f }(),
+		Metadata: map[string]any{
+			"operation": "merge_or_link_similar_abstract",
+			"tag_a":     tag1ID,
+			"tag_b":     tag2ID,
+		},
+	}
+
+	result, err := router.Chat(ctx, req)
+	if err != nil {
+		return fmt.Errorf("LLM call failed: %w", err)
+	}
+
+	var parsed struct {
+		Action string `json:"action"`
+		Target string `json:"target"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(result.Content), &parsed); err != nil {
+		return fmt.Errorf("parse LLM response: %w", err)
+	}
+
+	switch parsed.Action {
+	case "merge":
+		sourceID, targetID := tag1ID, tag2ID
+		sourceLabel, targetLabel := tag1.Label, tag2.Label
+		if strings.EqualFold(parsed.Target, "A") {
+			sourceID, targetID = tag2ID, tag1ID
+			sourceLabel, targetLabel = tag2.Label, tag1.Label
+		}
+		logging.Infof("mergeOrLinkSimilarAbstract: merging %d (%s) into %d (%s), reason: %s",
+			sourceID, sourceLabel, targetID, targetLabel, parsed.Reason)
+		return MergeTags(sourceID, targetID)
+	case "parent_A":
+		return linkAbstractParentChild(tag2ID, tag1ID)
+	case "parent_B":
+		return linkAbstractParentChild(tag1ID, tag2ID)
+	default:
+		return fmt.Errorf("unknown action %q from LLM", parsed.Action)
+	}
 }
 
 // aiJudgeAbstractHierarchy uses LLM to determine which abstract tag is broader (parent) vs more specific (child).
@@ -1374,6 +1882,244 @@ func truncateStr(s string, maxLen int) string {
 		return s
 	}
 	return string(runes[:maxLen])
+}
+
+func buildCandidateSummary(candidates []TagCandidate) []string {
+	summaries := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		if c.Tag != nil {
+			summaries = append(summaries, fmt.Sprintf("%s(id=%d,sim=%.2f,src=%s)", c.Tag.Label, c.Tag.ID, c.Similarity, c.Tag.Source))
+		}
+	}
+	return summaries
+}
+
+func organizeMatchCategory(requestCategory string, tag *models.TopicTag) string {
+	if strings.TrimSpace(requestCategory) != "" {
+		return strings.TrimSpace(requestCategory)
+	}
+	if tag != nil && strings.TrimSpace(tag.Category) != "" {
+		return strings.TrimSpace(tag.Category)
+	}
+	return "keyword"
+}
+
+func shouldUseOrganizeCandidate(candidate TagCandidate, currentTagID uint, used map[uint]bool) bool {
+	if candidate.Tag == nil {
+		return false
+	}
+	if candidate.Tag.ID == currentTagID {
+		return false
+	}
+	if candidate.Similarity < DefaultThresholds.LowSimilarity {
+		return false
+	}
+	return !used[candidate.Tag.ID]
+}
+
+func collectOrganizeMergeSources(result *TagExtractionResult, currentTag *models.TopicTag) []*models.TopicTag {
+	if result == nil || result.Merge == nil || result.Merge.Target == nil {
+		return nil
+	}
+
+	sourceByID := make(map[uint]*models.TopicTag)
+	if currentTag != nil && currentTag.ID != 0 && currentTag.ID != result.Merge.Target.ID {
+		sourceByID[currentTag.ID] = currentTag
+	}
+	for _, child := range result.MergeChildren {
+		if child == nil || child.ID == 0 || child.ID == result.Merge.Target.ID {
+			continue
+		}
+		sourceByID[child.ID] = child
+	}
+
+	sources := make([]*models.TopicTag, 0, len(sourceByID))
+	for _, source := range sourceByID {
+		sources = append(sources, source)
+	}
+	return sources
+}
+
+func applyOrganizeMerge(result *TagExtractionResult, currentTag *models.TopicTag) []*models.TopicTag {
+	sources := collectOrganizeMergeSources(result, currentTag)
+	if len(sources) == 0 {
+		return nil
+	}
+
+	merged := make([]*models.TopicTag, 0, len(sources))
+	for _, source := range sources {
+		if err := MergeTags(source.ID, result.Merge.Target.ID); err != nil {
+			logging.Warnf("OrganizeUnclassifiedTags: merge %d (%s) into %d (%s) failed: %v",
+				source.ID, source.Label, result.Merge.Target.ID, result.Merge.Target.Label, err)
+			continue
+		}
+		merged = append(merged, source)
+	}
+	return merged
+}
+
+// OrganizeUnclassifiedTags finds unclassified tags, groups similar ones,
+// and runs ExtractAbstractTag on each group to build hierarchy.
+func OrganizeUnclassifiedTags(ctx context.Context, category string, _ int) (*OrganizeResult, error) {
+	tags, err := GetUnclassifiedTags(category, 0, 0, "")
+	if err != nil {
+		return nil, fmt.Errorf("query unclassified tags: %w", err)
+	}
+	if len(tags) == 0 {
+		return &OrganizeResult{TotalUnclassified: 0, Processed: 0}, nil
+	}
+
+	totalUnclassified := len(tags)
+
+	es := NewEmbeddingService()
+
+	tagModels := loadTagModels(tags)
+
+	processed := 0
+	var groups []OrganizeGroup
+	used := make(map[uint]bool)
+
+	broadcastOrganizeProgress("processing", totalUnclassified, processed, nil, 0, category)
+
+	for i, tag := range tags {
+		if used[tag.ID] {
+			continue
+		}
+
+		if tagModels[tag.ID] == nil {
+			continue
+		}
+
+		currentTag := tagModels[tag.ID]
+		matchCategory := organizeMatchCategory(category, currentTag)
+
+		similarCandidates, err := es.FindSimilarTags(ctx, currentTag, matchCategory, 5, EmbeddingTypeSemantic)
+		if err != nil {
+			logging.Warnf("OrganizeUnclassifiedTags: FindSimilarTags failed for tag %d: %v", tag.ID, err)
+			continue
+		}
+
+		var groupCandidates []TagCandidate
+		groupCandidates = append(groupCandidates, TagCandidate{
+			Tag:        currentTag,
+			Similarity: 1.0,
+		})
+
+		for _, sc := range similarCandidates {
+			if !shouldUseOrganizeCandidate(sc, tag.ID, used) {
+				continue
+			}
+			groupCandidates = append(groupCandidates, sc)
+		}
+
+		if len(groupCandidates) < 2 {
+			continue
+		}
+
+		logging.Infof("OrganizeUnclassifiedTags: processing group for %q with %d candidates", tag.Label, len(groupCandidates))
+
+		result, err := ExtractAbstractTag(ctx, groupCandidates, tag.Label, matchCategory, WithCaller("OrganizeUnclassifiedTags"))
+		if err != nil {
+			logging.Warnf("OrganizeUnclassifiedTags: ExtractAbstractTag failed for %q: %v", tag.Label, err)
+			continue
+		}
+
+		action := "none"
+		mergedSources := applyOrganizeMerge(result, currentTag)
+		hasMergeAction := len(mergedSources) > 0
+		hasAbstractAction := result != nil && result.HasAbstract()
+		if hasMergeAction || hasAbstractAction {
+			processed++
+			if hasMergeAction && hasAbstractAction {
+				action = "merge+abstract"
+			} else if hasMergeAction {
+				action = "merge"
+			} else if hasAbstractAction {
+				action = "abstract"
+			}
+
+			if hasMergeAction {
+				used[result.Merge.Target.ID] = true
+				for _, c := range mergedSources {
+					used[c.ID] = true
+				}
+			}
+			if hasAbstractAction {
+				used[result.Abstract.Tag.ID] = true
+				for _, c := range result.Abstract.Children {
+					used[c.ID] = true
+				}
+			}
+		} else if result != nil && result.HasMerge() {
+			logging.Infof("OrganizeUnclassifiedTags: merge judgment for %q had no mergeable sources", tag.Label)
+		}
+
+		g := OrganizeGroup{
+			NewLabel:       tag.Label,
+			CandidateCount: len(groupCandidates),
+			Action:         action,
+		}
+		groups = append(groups, g)
+
+		broadcastOrganizeProgress("processing", totalUnclassified, processed, &g, i+1, category)
+
+		_ = i
+	}
+
+	broadcastOrganizeProgress("completed", totalUnclassified, processed, nil, 0, category)
+
+	return &OrganizeResult{
+		TotalUnclassified: totalUnclassified,
+		Processed:         processed,
+		Groups:            groups,
+	}, nil
+}
+
+func broadcastOrganizeProgress(status string, total, processed int, currentGroup *OrganizeGroup, currentIndex int, category string) {
+	hub := ws.GetHub()
+	msg := ws.OrganizeProgressMessage{
+		Type:              "organize_progress",
+		Status:            status,
+		TotalUnclassified: total,
+		Processed:         processed,
+		Category:          category,
+	}
+	if currentGroup != nil {
+		msg.CurrentGroup = &ws.OrganizeGroupInfo{
+			NewLabel:       currentGroup.NewLabel,
+			CandidateCount: currentGroup.CandidateCount,
+			Action:         currentGroup.Action,
+		}
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		logging.Warnf("broadcastOrganizeProgress: marshal failed: %v", err)
+		return
+	}
+	hub.BroadcastRaw(data)
+}
+
+func loadTagModels(nodes []TagHierarchyNode) map[uint]*models.TopicTag {
+	result := make(map[uint]*models.TopicTag, len(nodes))
+	for _, n := range nodes {
+		var tag models.TopicTag
+		if err := database.DB.First(&tag, n.ID).Error; err == nil {
+			result[n.ID] = &tag
+		}
+	}
+	return result
+}
+
+type OrganizeResult struct {
+	TotalUnclassified int             `json:"total_unclassified"`
+	Processed         int             `json:"processed"`
+	Groups            []OrganizeGroup `json:"groups,omitempty"`
+}
+
+type OrganizeGroup struct {
+	NewLabel       string `json:"new_label"`
+	CandidateCount int    `json:"candidate_count"`
+	Action         string `json:"action"`
 }
 
 func enqueueEmbeddingsForNormalChildren(parentID uint) {

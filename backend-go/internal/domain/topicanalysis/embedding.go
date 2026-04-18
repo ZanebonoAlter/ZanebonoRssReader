@@ -18,9 +18,15 @@ import (
 	"gorm.io/gorm"
 )
 
+const (
+	EmbeddingTypeIdentity = "identity"
+	EmbeddingTypeSemantic = "semantic"
+)
+
 var (
 	ErrNoEmbeddingProvider = errors.New("no embedding provider configured")
 	ErrEmbeddingFailed     = errors.New("failed to generate embedding")
+	ErrTopicTagNotFound    = errors.New("topic tag not found")
 )
 
 // EmbeddingMatchThresholds defines similarity thresholds for tag matching
@@ -87,10 +93,9 @@ func (s *EmbeddingService) GetThresholds() EmbeddingMatchThresholds {
 }
 
 // GenerateEmbedding generates an embedding for a tag's text representation
-func (s *EmbeddingService) GenerateEmbedding(ctx context.Context, tag *models.TopicTag) (*models.TopicTagEmbedding, error) {
-	// Build text for embedding: label + aliases + category
-	text := buildTagEmbeddingText(tag)
-	textHash := hashText(text)
+func (s *EmbeddingService) GenerateEmbedding(ctx context.Context, tag *models.TopicTag, embeddingType string, opts ...EmbeddingTextOptions) (*models.TopicTagEmbedding, error) {
+	text := buildTagEmbeddingText(tag, embeddingType, opts...)
+	textHash := hashText(embeddingType + "\n" + text)
 
 	// Use router with failover to generate embedding
 	req := airouter.EmbeddingRequest{
@@ -121,6 +126,7 @@ func (s *EmbeddingService) GenerateEmbedding(ctx context.Context, tag *models.To
 
 	embedding := &models.TopicTagEmbedding{
 		TopicTagID:   tag.ID,
+		EmbeddingType: embeddingType,
 		Vector:       string(vectorJSON),
 		EmbeddingVec: pgVecStr,
 		Dimension:    result.Dimensions,
@@ -132,8 +138,8 @@ func (s *EmbeddingService) GenerateEmbedding(ctx context.Context, tag *models.To
 }
 
 // FindSimilarTags finds existing tags with similar embeddings using pgvector SQL
-func (s *EmbeddingService) FindSimilarTags(ctx context.Context, tag *models.TopicTag, category string, limit int) ([]TagCandidate, error) {
-	embedding, err := s.GenerateEmbedding(ctx, tag)
+func (s *EmbeddingService) FindSimilarTags(ctx context.Context, tag *models.TopicTag, category string, limit int, embeddingType string) ([]TagCandidate, error) {
+	embedding, err := s.GenerateEmbedding(ctx, tag, embeddingType)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate embedding: %w", err)
 	}
@@ -159,10 +165,11 @@ func (s *EmbeddingService) FindSimilarTags(ctx context.Context, tag *models.Topi
 		WHERE t.category = ?
 		  AND (t.status = 'active' OR t.status = '' OR t.status IS NULL)
 		  AND e.embedding IS NOT NULL
+		  AND e.embedding_type = ?
 		ORDER BY e.embedding <=> ?::vector
 		LIMIT ?
 	`
-	if err := database.DB.Raw(query, pgVecStr, category, pgVecStr, limit).Scan(&rows).Error; err != nil {
+	if err := database.DB.Raw(query, pgVecStr, category, embeddingType, pgVecStr, limit).Scan(&rows).Error; err != nil {
 		return nil, fmt.Errorf("failed to query similar tags: %w", err)
 	}
 
@@ -203,9 +210,11 @@ func (s *EmbeddingService) FindSimilarTags(ctx context.Context, tag *models.Topi
 // TagMatch decides how to handle a candidate tag
 func (s *EmbeddingService) TagMatch(ctx context.Context, label, category string, aliases string) (*TagMatchResult, error) {
 	slug := topictypes.Slugify(label)
+	logging.Infof("TagMatch: start label=%q slug=%q category=%s low=%.2f high=%.2f", label, slug, category, s.thresholds.LowSimilarity, s.thresholds.HighSimilarity)
 	var existingTag models.TopicTag
 	err := database.DB.Scopes(activeTagFilter).Where("slug = ? AND category = ?", slug, category).First(&existingTag).Error
 	if err == nil {
+		logging.Infof("TagMatch: label=%q category=%s result=exact reason=slug existingID=%d existingLabel=%q", label, category, existingTag.ID, existingTag.Label)
 		return &TagMatchResult{
 			MatchType:   "exact",
 			ExistingTag: &existingTag,
@@ -218,6 +227,7 @@ func (s *EmbeddingService) TagMatch(ctx context.Context, label, category string,
 		if err := database.DB.Scopes(activeTagFilter).Where("category = ?", category).Find(&aliasTags).Error; err == nil {
 			for _, t := range aliasTags {
 				if containsAlias(t.Aliases, label) {
+					logging.Infof("TagMatch: label=%q category=%s result=exact reason=alias existingID=%d existingLabel=%q", label, category, t.ID, t.Label)
 					return &TagMatchResult{
 						MatchType:   "exact",
 						ExistingTag: &t,
@@ -234,12 +244,19 @@ func (s *EmbeddingService) TagMatch(ctx context.Context, label, category string,
 		Aliases:  aliases,
 	}
 
-	candidates, err := s.FindSimilarTags(ctx, candidate, category, 20)
+	embType := EmbeddingTypeIdentity
+	if category == "event" {
+		embType = EmbeddingTypeSemantic
+	}
+	candidates, err := s.FindSimilarTags(ctx, candidate, category, 20, embType)
 	if err != nil {
+		logging.Warnf("TagMatch: label=%q category=%s similarity search failed, result=no_match err=%v", label, category, err)
 		return &TagMatchResult{
 			MatchType: "no_match",
 		}, nil
 	}
+
+	logging.Infof("TagMatch: label=%q category=%s similarity search returned totalCandidates=%d bestSimilarity=%.4f", label, category, len(candidates), bestSimilarity(candidates))
 
 	var validCandidates []TagCandidate
 	for _, c := range candidates {
@@ -249,11 +266,14 @@ func (s *EmbeddingService) TagMatch(ctx context.Context, label, category string,
 	}
 
 	if len(validCandidates) == 0 {
+		logging.Infof("TagMatch: label=%q category=%s result=no_match reason=below_low_similarity bestSimilarity=%.4f", label, category, bestSimilarity(candidates))
 		return &TagMatchResult{
 			MatchType:  "no_match",
 			Similarity: bestSimilarity(candidates),
 		}, nil
 	}
+
+	logging.Infof("TagMatch: label=%q category=%s result=candidates validCandidates=%d topSimilarity=%.4f topLabels=%s", label, category, len(validCandidates), validCandidates[0].Similarity, matchCandidateLabels(validCandidates))
 
 	return &TagMatchResult{
 		MatchType:  "candidates",
@@ -269,13 +289,26 @@ func bestSimilarity(candidates []TagCandidate) float64 {
 	return candidates[0].Similarity
 }
 
+func matchCandidateLabels(candidates []TagCandidate) string {
+	labels := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		if c.Tag == nil {
+			continue
+		}
+		labels = append(labels, c.Tag.Label)
+	}
+	return strings.Join(labels, ", ")
+}
+
 // FindSimilarAbstractTags finds existing abstract tags with similar embeddings using pgvector SQL.
 // Only considers tags where source = 'abstract'.
 // Excludes tags that already have a parent-child relation with tagID (in either direction).
 func (s *EmbeddingService) FindSimilarAbstractTags(ctx context.Context, tagID uint, category string, limit int) ([]TagCandidate, error) {
 	var existing models.TopicTagEmbedding
-	if err := database.DB.Where("topic_tag_id = ?", tagID).First(&existing).Error; err != nil {
-		return nil, fmt.Errorf("no embedding for tag %d: %w", tagID, err)
+	if err := database.DB.Where("topic_tag_id = ? AND embedding_type = ?", tagID, EmbeddingTypeSemantic).First(&existing).Error; err != nil {
+		if err2 := database.DB.Where("topic_tag_id = ? AND embedding_type = ?", tagID, EmbeddingTypeIdentity).First(&existing).Error; err2 != nil {
+			return nil, fmt.Errorf("no embedding for tag %d: %w", tagID, err)
+		}
 	}
 
 	pgVecStr := existing.EmbeddingVec
@@ -294,6 +327,7 @@ func (s *EmbeddingService) FindSimilarAbstractTags(ctx context.Context, tagID ui
 		  AND (t.status = 'active' OR t.status = '' OR t.status IS NULL)
 		  AND t.id != ?
 		  AND e.embedding IS NOT NULL
+		  AND e.embedding_type = 'semantic'
 		  AND NOT EXISTS (
 		    SELECT 1 FROM topic_tag_relations r
 		    WHERE (r.parent_id = ? AND r.child_id = t.id)
@@ -349,7 +383,7 @@ func (s *EmbeddingService) FindSimilarAbstractTags(ctx context.Context, tagID ui
 // Used by query functions to exclude merged tags from match candidates.
 // Includes empty-string status check for rows created before the migration ran.
 func activeTagFilter(db *gorm.DB) *gorm.DB {
-	return db.Where("status = ? OR status = ?", "active", "")
+	return db.Where("status = ? OR status = ? OR status IS NULL", "active", "")
 }
 
 type mergeReembeddingEnqueuer interface {
@@ -555,8 +589,16 @@ func (s *EmbeddingService) SaveEmbedding(embedding *models.TopicTagEmbedding) er
 		}
 	}
 
+	var tag models.TopicTag
+	if err := database.DB.Select("id").First(&tag, embedding.TopicTagID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrTopicTagNotFound
+		}
+		return fmt.Errorf("load topic tag %d: %w", embedding.TopicTagID, err)
+	}
+
 	var existing models.TopicTagEmbedding
-	err := database.DB.Where("topic_tag_id = ?", embedding.TopicTagID).First(&existing).Error
+	err := database.DB.Where("topic_tag_id = ? AND embedding_type = ?", embedding.TopicTagID, embedding.EmbeddingType).First(&existing).Error
 
 	if err == nil {
 		embedding.ID = existing.ID
@@ -611,20 +653,24 @@ func ensureVectorDimension(dim int) error {
 }
 
 // GetEmbedding retrieves the embedding for a tag
-func (s *EmbeddingService) GetEmbedding(tagID uint) (*models.TopicTagEmbedding, error) {
+func (s *EmbeddingService) GetEmbedding(tagID uint, embeddingType string) (*models.TopicTagEmbedding, error) {
 	var embedding models.TopicTagEmbedding
-	err := database.DB.Where("topic_tag_id = ?", tagID).First(&embedding).Error
+	err := database.DB.Where("topic_tag_id = ? AND embedding_type = ?", tagID, embeddingType).First(&embedding).Error
 	if err != nil {
 		return nil, err
 	}
 	return &embedding, nil
 }
 
+type EmbeddingTextOptions struct {
+	ContextTitles []string
+}
+
 // BuildTextForEmbedding creates the text representation for embedding
-func buildTagEmbeddingText(tag *models.TopicTag) string {
+func buildTagEmbeddingText(tag *models.TopicTag, embeddingType string, opts ...EmbeddingTextOptions) string {
 	text := tag.Label
 
-	if tag.Description != "" {
+	if embeddingType == EmbeddingTypeSemantic && tag.Description != "" {
 		text += ". " + tag.Description
 	}
 
@@ -641,7 +687,54 @@ func buildTagEmbeddingText(tag *models.TopicTag) string {
 
 	text += " " + tag.Category
 
+	if embeddingType == EmbeddingTypeSemantic && tag.Category == "event" {
+		for _, o := range opts {
+			if len(o.ContextTitles) > 0 {
+				text += ". 相关报道: " + strings.Join(o.ContextTitles, "；")
+				break
+			}
+		}
+	}
+
 	return text
+}
+
+func GetTagContextTitles(tagID uint, limit int) []string {
+	var titles []string
+	query := `
+		SELECT title FROM (
+			SELECT DISTINCT a.title, MAX(a.created_at) AS created_at
+			FROM article_topic_tags att
+			JOIN articles a ON a.id = att.article_id
+			WHERE att.topic_tag_id = ?
+			GROUP BY a.title
+		) sub
+		ORDER BY sub.created_at DESC
+		LIMIT ?
+	`
+	database.DB.Raw(query, tagID, limit).Scan(&titles)
+
+	if len(titles) >= limit {
+		return titles
+	}
+
+	remaining := limit - len(titles)
+	var summaryTitles []string
+	query2 := `
+		SELECT title FROM (
+			SELECT DISTINCT s.title, MAX(ast.created_at) AS created_at
+			FROM ai_summary_topics ast
+			JOIN ai_summaries s ON s.id = ast.summary_id
+			WHERE ast.topic_tag_id = ?
+			  AND s.title NOT IN (SELECT DISTINCT a.title FROM article_topic_tags att JOIN articles a ON a.id = att.article_id WHERE att.topic_tag_id = ?)
+			GROUP BY s.title
+		) sub
+		ORDER BY sub.created_at DESC
+		LIMIT ?
+	`
+	database.DB.Raw(query2, tagID, tagID, remaining).Scan(&summaryTitles)
+	titles = append(titles, summaryTitles...)
+	return titles
 }
 
 func hashText(text string) string {

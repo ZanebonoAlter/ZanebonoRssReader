@@ -1,9 +1,11 @@
 package topicextraction
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -188,11 +190,62 @@ func RetryTagQueueFailed(c *gin.Context) {
 	})
 }
 
+func RetagTodayArticles(c *gin.Context) {
+	now := time.Now()
+	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+
+	var articles []models.Article
+	if err := database.DB.Where("pub_date >= ?", startOfDay).Find(&articles).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	if len(articles) == 0 {
+		c.JSON(http.StatusOK, gin.H{"success": true, "message": "今日没有文章", "data": gin.H{"enqueued": 0}})
+		return
+	}
+
+	feedCache := make(map[uint]models.Feed)
+	queue := NewTagJobQueue(database.DB)
+	enqueued := 0
+
+	for _, article := range articles {
+		feed, ok := feedCache[article.FeedID]
+		if !ok {
+			if err := database.DB.Preload("Category").First(&feed, article.FeedID).Error; err != nil {
+				continue
+			}
+			feedCache[article.FeedID] = feed
+		}
+
+		if err := queue.Enqueue(TagJobRequest{
+			ArticleID:    article.ID,
+			FeedName:     feed.Title,
+			CategoryName: FeedCategoryName(feed),
+			ForceRetag:   true,
+			Reason:       "retag_today",
+		}); err != nil {
+			continue
+		}
+		enqueued++
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": fmt.Sprintf("已提交 %d 篇今日文章的重新打标任务", enqueued),
+		"data": gin.H{
+			"total":    len(articles),
+			"enqueued": enqueued,
+		},
+	})
+}
+
 func RegisterTagQueueRoutes(rg *gin.RouterGroup) {
 	queue := rg.Group("/tag-queue")
 	{
 		queue.GET("/status", GetTagQueueStatus)
 		queue.GET("/tasks", GetTagQueueTasks)
 		queue.POST("/retry", RetryTagQueueFailed)
+		queue.POST("/retag-today", RetagTodayArticles)
 	}
 }

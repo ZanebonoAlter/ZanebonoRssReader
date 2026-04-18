@@ -81,10 +81,10 @@ func checkNarrativeEventTagClustering(out NarrativeOutput) {
 			idA, idB := unclusteredIDs[i], unclusteredIDs[j]
 
 			var embA, embB models.TopicTagEmbedding
-			if err := database.DB.Where("topic_tag_id = ?", idA).First(&embA).Error; err != nil {
+			if err := database.DB.Where("topic_tag_id = ? AND embedding_type = ?", idA, topicanalysis.EmbeddingTypeSemantic).First(&embA).Error; err != nil {
 				continue
 			}
-			if err := database.DB.Where("topic_tag_id = ?", idB).First(&embB).Error; err != nil {
+			if err := database.DB.Where("topic_tag_id = ? AND embedding_type = ?", idB, topicanalysis.EmbeddingTypeSemantic).First(&embB).Error; err != nil {
 				continue
 			}
 
@@ -131,13 +131,13 @@ func triggerAbstractExtractionWithContext(ctx context.Context, tagAID, tagBID ui
 
 	result, err := topicanalysis.ExtractAbstractTag(ctx, candidates, tagA.Label, tagA.Category,
 		topicanalysis.WithNarrativeContext(narrativeContext))
-	if err != nil || result == nil {
+	if err != nil || result == nil || !result.HasAction() {
 		logging.Warnf("narrative-tag-feedback: tag judgment with context failed for %d+%d: %v", tagAID, tagBID, err)
 		return
 	}
 
-	if result.Action == topicanalysis.ActionMerge && result.MergeTarget != nil {
-		targetID := result.MergeTarget.ID
+	if result.HasMerge() {
+		targetID := result.Merge.Target.ID
 		sourceID := tagAID
 		if targetID == tagAID {
 			sourceID = tagBID
@@ -150,16 +150,22 @@ func triggerAbstractExtractionWithContext(ctx context.Context, tagAID, tagBID ui
 			return
 		}
 		logging.Infof("narrative-tag-feedback: merged tag %d into %d (AI judged same concept)", sourceID, targetID)
-		return
+
+		for _, child := range result.MergeChildren {
+			if child.ID != targetID {
+				if mergeErr := topicanalysis.MergeTags(child.ID, targetID); mergeErr != nil {
+					logging.Warnf("narrative-tag-feedback: merge child %d into %d failed: %v", child.ID, targetID, mergeErr)
+				}
+			}
+		}
+
+		if !result.HasAbstract() {
+			return
+		}
 	}
 
-	if result.Action == topicanalysis.ActionNone {
-		logging.Infof("narrative-tag-feedback: tags %d+%d judged as independent, no action needed", tagAID, tagBID)
-		return
-	}
-
-	if result.AbstractTag != nil {
+	if result.HasAbstract() {
 		logging.Infof("narrative-tag-feedback: created abstract tag %d (%s) from narrative-driven clustering of %d+%d",
-			result.AbstractTag.ID, result.AbstractTag.Label, tagAID, tagBID)
+			result.Abstract.Tag.ID, result.Abstract.Tag.Label, tagAID, tagBID)
 	}
 }

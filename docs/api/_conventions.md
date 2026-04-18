@@ -47,3 +47,26 @@
 ## WebSocket
 
 实时端点：`ws://localhost:5000/ws`，用于 AI 总结进度推送等。
+
+## 全局任务状态
+
+`GET /api/tasks/status` 返回所有后台任务的即时汇总（summary queue、content completion、firecrawl 的队列大小和活跃任务数）。
+
+```json
+{
+  "success": true,
+  "data": {
+    "queue_size": 5,
+    "active_tasks": 2,
+    "tasks": [
+      {
+        "type": "content_completion",
+        "status": "running",
+        "pending_count": 5,
+        "processing_count": 1,
+        "overview": { ... }
+      }
+    ]
+  }
+}
+```

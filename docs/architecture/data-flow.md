@@ -1,12 +1,13 @@
-﻿# 数据流
+# 数据流
 
 ## 主链路
 
 ```text
 RSS 源
   -> backend-go 拉取和解析
-  -> SQLite 持久化
+  -> PostgreSQL 持久化
   -> 可选全文抓取 / 内容补全 / AI 总结 / Digest 聚合
+  -> 可选主题标签 embedding 向量化 / 自动合并 / 叙事摘要
   -> 前端通过 app/api 拉取
   -> apiStore 映射为前端模型
   -> 派生 store 和 feature 组件消费
@@ -177,6 +178,10 @@ DigestListView
 - AI 总结批量生成
 - Digest 日报 / 周报生成
 - 阅读偏好聚合任务
+- 阻塞文章恢复
+- 标签自动合并
+- 标签质量分数重算
+- 叙事摘要生成
 
 ### scheduler 状态回传
 

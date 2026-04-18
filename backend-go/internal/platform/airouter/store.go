@@ -224,10 +224,15 @@ func (s *Store) ensureDefaultRoute(capability Capability, providerID uint) error
 	}
 
 	link := models.AIRouteProvider{RouteID: route.ID, ProviderID: providerID, Priority: 1, Enabled: true}
-	return s.db.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "route_id"}, {Name: "provider_id"}},
-		DoUpdates: clause.AssignmentColumns([]string{"priority", "enabled", "updated_at"}),
-	}).Create(&link).Error
+	var existing models.AIRouteProvider
+	err = s.db.Where("route_id = ? AND provider_id = ?", route.ID, providerID).First(&existing).Error
+	if err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		return s.db.Create(&link).Error
+	}
+	return s.db.Model(&existing).Update("enabled", true).Error
 }
 
 func (s *Store) LogCall(logEntry *models.AICallLog) {

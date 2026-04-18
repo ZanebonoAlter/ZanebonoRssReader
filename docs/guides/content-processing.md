@@ -183,10 +183,16 @@ Feed refresh
 - `firecrawl`
 - `preference_update`
 - `digest`
+- `blocked_article_recovery`
+- `auto_tag_merge`
+- `tag_quality_score`
+- `narrative_summary`
 
 其中 `content_completion` 是文章级内容补全 scheduler，不是 feed 聚合摘要任务。
 
 为了兼容旧前端和旧调用，后端目前仍接受 `ai_summary` 作为 `content_completion` 的别名。
+
+`blocked_article_recovery` 调度器会定期恢复卡在 `processing` 状态的文章，将其重置为可重新处理的状态。
 
 ### 内容补全视角
 

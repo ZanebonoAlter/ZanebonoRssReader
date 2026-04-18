@@ -1,30 +1,38 @@
-<!-- generated-by: gsd-doc-writer -->
+# 快速开始
 
-# Getting Started
+## 前置条件
 
-## Prerequisites
-
-| Tool | Minimum Version | Notes |
+| 工具 | 最低版本 | 说明 |
 |------|----------------|-------|
-| [Node.js](https://nodejs.org/) | >= 18 | Required for the Nuxt 4 frontend |
-| [pnpm](https://pnpm.io/) | >= 10 | Frontend package manager |
-| [Go](https://go.dev/) | >= 1.25 | Required for the Gin backend |
-| [Docker](https://www.docker.com/) | — | Optional, for containerized deployment |
-| [Git](https://git-scm.com/) | — | For cloning the repository |
-| [Python](https://www.python.org/) | >= 3.10 | Optional, for running integration tests in `tests/workflow/` |
+| [Node.js](https://nodejs.org/) | >= 18 | Nuxt 4 前端必需 |
+| [pnpm](https://pnpm.io/) | >= 10 | 前端包管理器 |
+| [Go](https://go.dev/) | >= 1.25 | Gin 后端必需 |
+| [Docker](https://www.docker.com/) | — | 可选，用于容器化部署 |
+| [Git](https://git-scm.com/) | — | 克隆仓库 |
+| [Python](https://www.python.org/) | >= 3.10 | 可选，用于运行 `tests/workflow/` 中的集成测试 |
 
-No `.env` file is required for local development — the backend and frontend both have working defaults.
+本地开发无需 `.env` 文件 — 后端和前端都有可用的默认值。
 
-## Installation Steps
+## 安装步骤
 
-### 1. Clone the repository
+### 1. 克隆仓库
 
 ```bash
 git clone <repository-url>
 cd my-robot
 ```
 
-### 2. Start the backend
+### 2. 启动 PostgreSQL
+
+本地开发需要 PostgreSQL + pgvector 扩展。通过 Docker 快速启动：
+
+```bash
+docker run -d --name rss-postgres -p 5432:5432 \
+  -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=rss_reader \
+  pgvector/pgvector:pg18-trixie
+```
+
+### 3. 启动后端
 
 ```bash
 cd backend-go
@@ -32,11 +40,11 @@ go mod tidy
 go run cmd/server/main.go
 ```
 
-The backend starts on `http://localhost:5000` and creates a SQLite database file (`rss_reader.db`) in the working directory on first run.
+后端在 `http://localhost:5000` 启动，连接到本地 PostgreSQL 数据库。首次运行时 GORM 会自动迁移所有表。
 
-### 3. Start the frontend
+### 4. 启动前端
 
-Open a new terminal:
+新开一个终端：
 
 ```bash
 cd front
@@ -44,88 +52,78 @@ pnpm install
 pnpm dev
 ```
 
-The frontend dev server starts on `http://localhost:3000`.
+前端开发服务器在 `http://localhost:3000` 启动。
 
-### 4. Verify the connection
+### 5. 验证连接
 
-Open `http://localhost:3000` in a browser. The frontend should load and connect to the backend at `http://localhost:5000/api`. You can begin adding RSS feeds immediately.
+在浏览器中打开 `http://localhost:3000`。前端应该加载并连接到 `http://localhost:5000/api`。可以立即开始添加 RSS 订阅源。
 
-## Docker Compose (Alternative)
+## Docker Compose（替代方案）
 
-If you prefer containerized deployment, copy the environment template and start both services with a single command:
-
-```bash
-cp .env.example .env
-docker compose -f docker-compose.sqlite.yml up --build
-```
-
-The `.env.example` file contains the minimal set of variables:
-
-```
-FRONT_PORT=3000
-BACKEND_PORT=5000
-SQLITE_DB_FILE=rss_reader.db
-```
-
-- Frontend: `http://localhost:3000`
-- Backend: `http://localhost:5000`
-- SQLite database persisted in `./data/rss_reader.db`
-
-To use PostgreSQL with pgvector support instead:
+如果希望容器化部署，一条命令启动所有服务：
 
 ```bash
-docker compose -f docker-compose.yml up --build
+docker compose up --build -d
 ```
 
-Port mappings and other Docker settings can be customized via the `.env` file — see [Configuration](configuration.md) for the full list.
+启动三个服务：
+- **postgres**: PostgreSQL + pgvector，数据持久化在 `./data/`
+- **backend**: Go API 服务器端口 5000
+- **front**: Nuxt SSR 服务器端口 3000
 
-## First Run
+端口映射和其他 Docker 设置可通过 `.env` 文件自定义 — 详见 [配置指南](configuration.md)。
 
-Once both services are running:
+## 首次使用
 
-1. Open `http://localhost:3000` in your browser.
-2. Add an RSS feed via the subscription management panel.
-3. The feed will be fetched and articles will appear in the three-pane reading layout.
-4. (Optional) Configure AI features — LLM API key, Firecrawl, and digest settings — through the web UI Settings page. These are stored in the database and don't require config file edits.
+两个服务都运行后：
 
-## Common Setup Issues
+1. 在浏览器中打开 `http://localhost:3000`。
+2. 通过订阅管理面板添加 RSS feed。
+3. Feed 会被抓取，文章出现在三栏阅读布局中。
+4. （可选）通过 Web UI 设置页面配置 AI 功能 — LLM API key、Firecrawl、Digest 设置。这些存储在数据库中，不需要编辑配置文件。
 
-### Port already in use
+## 常见问题
 
-If `http://localhost:5000` or `http://localhost:3000` is occupied, set the ports via environment variables:
+### 端口已被占用
 
-- Backend: set `SERVER_PORT` before running `go run cmd/server/main.go`.
-- Frontend: set the `NUXT_PUBLIC_API_BASE` environment variable if the backend runs on a non-default port.
-- Docker: set `FRONT_PORT` and `BACKEND_PORT` in `.env`.
+如果 `http://localhost:5000` 或 `http://localhost:3000` 被占用，通过环境变量设置端口：
 
-### Backend fails to start with database errors
+- 后端：运行 `go run cmd/server/main.go` 前设置 `SERVER_PORT`。
+- 前端：如果后端运行在非默认端口，设置 `NUXT_PUBLIC_API_BASE` 环境变量。
+- Docker：在 `.env` 中设置 `FRONT_PORT` 和 `BACKEND_PORT`。
 
-The backend defaults to SQLite. If the database file is corrupted, delete `rss_reader.db` (or the file specified by `DATABASE_DSN`) and restart — it will be recreated on startup.
+### 后端启动失败（数据库错误）
 
-### Frontend cannot connect to backend
+后端默认连接 PostgreSQL。确保 PostgreSQL 正在运行且 DSN 配置正确。如果使用 Docker 启动的 PostgreSQL，检查容器是否正常运行：
 
-Ensure the backend is running on `http://localhost:5000`. The frontend API base URL defaults to `http://localhost:5000/api` and can be overridden with the `NUXT_PUBLIC_API_BASE` environment variable if needed.
+```bash
+docker ps | grep rss-postgres
+```
 
-### Go module download failures (China region)
+### 前端无法连接后端
 
-If `go mod tidy` is slow or fails, set a Go module proxy:
+确保后端在 `http://localhost:5000` 运行。前端 API 基础 URL 默认为 `http://localhost:5000/api`，如有需要可通过 `NUXT_PUBLIC_API_BASE` 环境变量覆盖。
+
+### Go 模块下载失败（中国地区）
+
+如果 `go mod tidy` 慢或失败，设置 Go 模块代理：
 
 ```bash
 go env -w GOPROXY=https://goproxy.cn,direct
 ```
 
-Similarly for pnpm, you can set a registry:
+pnpm 也可以设置镜像：
 
 ```bash
 pnpm config set registry https://registry.npmmirror.com
 ```
 
-### Docker build proxy settings
+### Docker 构建代理设置
 
-For Docker builds behind a proxy, configure `GOPROXY`, `NPM_CONFIG_REGISTRY`, `HTTP_PROXY`, and `HTTPS_PROXY` in your `.env` file. These are forwarded to the build contexts.
+在代理后构建 Docker 镜像时，在 `.env` 文件中配置 `GOPROXY`、`NPM_CONFIG_REGISTRY`、`HTTP_PROXY` 和 `HTTPS_PROXY`。这些会传递到构建上下文。
 
-## Next Steps
+## 下一步
 
-- **[Configuration](configuration.md)** — Full list of environment variables, config file options, and database-stored AI settings.
-- **[Development Guide](../operations/development.md)** — Build commands, test commands, coding conventions, and submission checklist.
-- **[Architecture Overview](../architecture/overview.md)** — System design, component relationships, data flow, and background scheduler details.
+- **[配置指南](configuration.md)** — 完整的环境变量列表、配置文件选项和数据库存储的 AI 设置。
+- **[开发指南](../operations/development.md)** — 构建命令、测试命令、编码规范和提交检查清单。
+- **[架构概览](../architecture/overview.md)** — 系统设计、组件关系、数据流和后台调度器详情。

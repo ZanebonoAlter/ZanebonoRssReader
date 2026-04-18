@@ -157,6 +157,7 @@ type AIRoute struct {
 	Name           string            `gorm:"size:100;not null;index:idx_ai_routes_capability_name,unique" json:"name"`
 	Capability     string            `gorm:"size:50;not null;index:idx_ai_routes_capability_name,unique;index" json:"capability"`
 	Enabled        bool              `gorm:"not null;default:true;index" json:"enabled"`
+	Priority       int               `gorm:"not null;default:100;index" json:"priority"`
 	Strategy       string            `gorm:"size:50;not null;default:ordered_failover" json:"strategy"`
 	Description    string            `gorm:"size:255" json:"description"`
 	RouteProviders []AIRouteProvider `gorm:"foreignKey:RouteID" json:"route_providers,omitempty"`

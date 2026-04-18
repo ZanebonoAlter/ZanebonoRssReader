@@ -275,6 +275,25 @@ func postgresMigrations() []Migration {
 			},
 		},
 		{
+			Version:     "20260418_0001",
+			Description: "Add embedding_type to topic_tag_embeddings and allow dual embeddings per tag.",
+			Up: func(db *gorm.DB) error {
+				if err := db.Exec(`ALTER TABLE topic_tag_embeddings ADD COLUMN IF NOT EXISTS embedding_type VARCHAR(20) NOT NULL DEFAULT 'identity'`).Error; err != nil {
+					return fmt.Errorf("add embedding_type to topic_tag_embeddings: %w", err)
+				}
+				if err := db.Exec(`UPDATE topic_tag_embeddings SET embedding_type = 'identity' WHERE embedding_type IS NULL OR embedding_type = ''`).Error; err != nil {
+					return fmt.Errorf("backfill embedding_type: %w", err)
+				}
+				if err := db.Exec(`DROP INDEX IF EXISTS idx_topic_tag_embeddings_topic_tag_id`).Error; err != nil {
+					return fmt.Errorf("drop old unique index: %w", err)
+				}
+				if err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_topic_tag_embeddings_tag_type ON topic_tag_embeddings(topic_tag_id, embedding_type)`).Error; err != nil {
+					return fmt.Errorf("create topic_tag_embeddings(tag_id, type) unique index: %w", err)
+				}
+				return nil
+			},
+		},
+		{
 			Version:     "20260417_0002",
 			Description: "Add GIN index for article full-text search using tsvector.",
 			Up: func(db *gorm.DB) error {

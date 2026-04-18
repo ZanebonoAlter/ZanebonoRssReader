@@ -15,6 +15,8 @@
 
 可选请求体：`{ "force": true }`
 
+成功返回 `{ "success": true, "message": "Content completion initiated" }`。
+
 ### POST .../feeds/:feed_id/complete-all
 
 补全 `incomplete` 或 `failed` 状态的文章：
@@ -65,7 +67,16 @@
       "feed_disabled_count": 1,
       "ai_unconfigured_count": 0,
       "ready_but_missing_content_count": 1
-    }
+    },
+    "is_executing": false,
+    "current_article": null,
+    "last_processed": "2025-03-10 10:00:00",
+    "next_run": 1710000000,
+    "last_error": "",
+    "database_state": { ... },
+    "overview": { ... }
   }
 }
 ```
+
+`overview` 还会注入当前 content_completion 调度器的执行状态（`is_executing`、`current_article` 等）。

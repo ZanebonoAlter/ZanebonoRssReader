@@ -1,11 +1,14 @@
 package topicanalysis
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/gin-gonic/gin"
+	"my-robot-backend/internal/platform/logging"
 )
 
 // GetTagHierarchyHandler returns the tag hierarchy tree.
@@ -182,5 +185,35 @@ func RegisterAbstractTagRoutes(rg *gin.RouterGroup) {
 		tags.PUT("/:tag_id/abstract-name", UpdateAbstractTagNameHandler)
 		tags.POST("/:tag_id/detach", DetachChildTagHandler)
 		tags.POST("/:tag_id/reassign", ReassignTagHandler)
+		tags.POST("/organize", OrganizeUnclassifiedTagsHandler)
 	}
 }
+
+// OrganizeUnclassifiedTagsHandler triggers abstract tag extraction for unclassified tags.
+// POST /api/topic-tags/organize?category=
+// Runs asynchronously; progress is broadcast via WebSocket (type "organize_progress").
+func OrganizeUnclassifiedTagsHandler(c *gin.Context) {
+	category := strings.TrimSpace(c.Query("category"))
+
+	if !organizeMu.TryLock() {
+		c.JSON(http.StatusConflict, gin.H{"success": false, "error": "整理任务正在运行中，请稍后再试"})
+		return
+	}
+
+	broadcastOrganizeProgress("processing", 0, 0, nil, 0, category)
+
+	go func() {
+		defer organizeMu.Unlock()
+		_, err := OrganizeUnclassifiedTags(context.Background(), category, 0)
+		if err != nil {
+			logging.Errorf("OrganizeUnclassifiedTags async error: %v", err)
+		}
+	}()
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"success": true,
+		"message": "整理任务已启动",
+	})
+}
+
+var organizeMu sync.Mutex

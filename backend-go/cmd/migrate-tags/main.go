@@ -162,15 +162,24 @@ func migrateTags(dryRun bool, generateEmbeddings bool) (*migrationResult, error)
 				result.embeddings++
 			} else {
 				// Generate embedding
-				embedding, err := embeddingSvc.GenerateEmbedding(nil, &tag)
+				identityEmb, err := embeddingSvc.GenerateEmbedding(nil, &tag, topicanalysis.EmbeddingTypeIdentity)
 				if err != nil {
-					logging.Infof("WARNING: Failed to generate embedding for tag %d: %v", tag.ID, err)
+					logging.Infof("WARNING: Failed to generate identity embedding for tag %d: %v", tag.ID, err)
 				} else {
-					// Save embedding
-					if err := embeddingSvc.SaveEmbedding(embedding); err != nil {
-						logging.Infof("WARNING: Failed to save embedding for tag %d: %v", tag.ID, err)
+					if err := embeddingSvc.SaveEmbedding(identityEmb); err != nil {
+						logging.Infof("WARNING: Failed to save identity embedding for tag %d: %v", tag.ID, err)
 					} else {
-						logging.Infof("Generated embedding for tag %d: %q", tag.ID, tag.Label)
+						logging.Infof("Generated identity embedding for tag %d: %q", tag.ID, tag.Label)
+						result.embeddings++
+					}
+				}
+				semanticEmb, semErr := embeddingSvc.GenerateEmbedding(nil, &tag, topicanalysis.EmbeddingTypeSemantic)
+				if semErr != nil {
+					logging.Infof("WARNING: Failed to generate semantic embedding for tag %d: %v", tag.ID, semErr)
+				} else {
+					if err := embeddingSvc.SaveEmbedding(semanticEmb); err != nil {
+						logging.Infof("WARNING: Failed to save semantic embedding for tag %d: %v", tag.ID, err)
+					} else {
 						result.embeddings++
 					}
 				}

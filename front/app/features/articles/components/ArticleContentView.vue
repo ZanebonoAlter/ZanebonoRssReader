@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { Icon } from '@iconify/vue'
 import { marked } from 'marked'
 import type { Article, RssFeed } from '~/types'
@@ -13,6 +13,8 @@ import {
   resolveArticleContentBySource,
   type ArticleContentSource,
 } from '~/utils/articleContentSource'
+import { useTagWebSocket } from '~/features/articles/composables/useTagWebSocket'
+import type { ArticleTag } from '~/types/article'
 import {
   getFirecrawlStatusMeta,
   getStatusToneClasses,
@@ -50,6 +52,7 @@ const { $dayjs } = useNuxtApp()
 const articlesApi = useArticlesApi()
 const { crawlArticle } = useFirecrawlApi()
 const { getCompletionStatus, completeArticle } = useContentCompletion()
+const { onResult: onTagResult, onError: onTagError, watchArticle, clearWatch } = useTagWebSocket()
 
 const viewMode = ref<'preview' | 'iframe'>('preview')
 const iframeLoading = ref(true)
@@ -61,6 +64,7 @@ const manualFirecrawlLoading = ref(false)
 const manualSummaryLoading = ref(false)
 const manualTaggingLoading = ref(false)
 const manualActionError = ref<string | null>(null)
+const taggingError = ref<string | null>(null)
 
 const feed = computed(() => {
   const article = props.article
@@ -122,7 +126,7 @@ const showProcessingPanel = computed(() => {
     || detailLines.value.length > 0
     || Boolean(manualActionError.value || mergedArticle.value.firecrawlError || mergedArticle.value.completionError)
 })
-const actionBusy = computed(() => manualFirecrawlLoading.value || manualSummaryLoading.value || manualTaggingLoading.value)
+const actionBusy = computed(() => manualFirecrawlLoading.value || manualSummaryLoading.value)
 
 const manualFirecrawlLabel = computed(() => {
   if (manualFirecrawlLoading.value) return '抓取中...'
@@ -244,24 +248,40 @@ async function handleManualTagging() {
   if (!props.article || manualTaggingLoading.value) return
 
   manualTaggingLoading.value = true
-  manualActionError.value = null
+  taggingError.value = null
 
   try {
     const response = await articlesApi.retagArticle(Number(props.article.id))
     if (!response.success || !response.data) {
-      throw new Error(response.error || '手动打标签失败')
+      throw new Error(response.error || '提交标签任务失败')
     }
 
-    syncCurrentArticle({
-      tags: response.data.tags || [],
-      tagCount: response.data.tag_count,
-    })
+    watchArticle(Number(props.article.id))
   } catch (error) {
-    manualActionError.value = error instanceof Error ? error.message : '手动打标签失败'
-  } finally {
+    const message = error instanceof Error ? error.message : '提交标签任务失败'
+    taggingError.value = message
     manualTaggingLoading.value = false
   }
 }
+
+onTagResult((articleId: number, tags: ArticleTag[]) => {
+  if (!props.article || String(articleId) !== props.article.id) return
+
+  syncCurrentArticle({
+    tags,
+    tagCount: tags.length,
+  })
+
+  manualTaggingLoading.value = false
+  taggingError.value = null
+})
+
+onTagError((articleId: number, error: string) => {
+  if (!props.article || String(articleId) !== props.article.id) return
+
+  taggingError.value = error
+  manualTaggingLoading.value = false
+})
 
 watch(() => props.article?.id, (newId, oldId) => {
   if (newId === oldId) return
@@ -270,9 +290,11 @@ watch(() => props.article?.id, (newId, oldId) => {
   showAISummary.value = false
   liveStatus.value = null
   manualActionError.value = null
+  taggingError.value = null
   manualFirecrawlLoading.value = false
   manualSummaryLoading.value = false
   manualTaggingLoading.value = false
+  clearWatch()
   selectedContentSource.value = getArticleContentSources({
     firecrawlContent: props.article?.firecrawlContent,
     content: props.article?.content,
@@ -512,19 +534,7 @@ import '~/components/article/ArticleContent.css'
               <Icon icon="mdi:brain" width="14" height="14" :class="{ 'animate-spin': manualSummaryLoading }" />
               {{ manualSummaryLabel }}
             </button>
-            <button
-              class="inline-flex items-center gap-1.5 rounded-full border border-ink-200 bg-white px-3 py-1.5 text-xs font-semibold text-ink-700 transition hover:border-ink-300 hover:text-ink-900 disabled:cursor-not-allowed disabled:opacity-50"
-              :disabled="actionBusy"
-              @click="handleManualTagging"
-            >
-              <Icon icon="mdi:tag-plus-outline" width="14" height="14" :class="{ 'animate-spin': manualTaggingLoading }" />
-              {{ manualTaggingLabel }}
-            </button>
           </div>
-        </div>
-
-        <div v-if="manualTaggingLoading" class="mt-3 text-sm text-ink-medium">
-          正在分析正文并生成标签...
         </div>
 
         <div v-if="detailLines.length" class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink-medium">
@@ -590,13 +600,31 @@ import '~/components/article/ArticleContent.css'
 
       <h1 class="article-title-full">{{ article.title }}</h1>
 
-      <ArticleTagList
-        v-if="article.tags?.length"
-        class="mb-4"
-        :tags="article.tags"
-        :highlighted-slugs="highlightedTagSlugs"
-        compact
-      />
+      <div class="mb-4 flex flex-wrap items-center gap-2">
+        <ArticleTagList
+          v-if="article.tags?.length"
+          :tags="article.tags"
+          :highlighted-slugs="highlightedTagSlugs"
+          compact
+        />
+        <span v-if="manualTaggingLoading" class="inline-flex items-center gap-1 text-xs text-ink-medium">
+          <Icon icon="mdi:loading" width="14" height="14" class="animate-spin" />
+          正在生成标签...
+        </span>
+        <button
+          v-else-if="aiEnabled"
+          class="inline-flex items-center gap-1 rounded-full border border-dashed border-ink-200 bg-white/80 px-2.5 py-1 text-xs font-medium text-ink-medium transition hover:border-ink-300 hover:text-ink-900 disabled:cursor-not-allowed disabled:opacity-50"
+          :disabled="actionBusy"
+          @click="handleManualTagging"
+        >
+          <Icon icon="mdi:tag-plus-outline" width="14" height="14" />
+          {{ manualTaggingLabel }}
+        </button>
+      </div>
+
+      <div v-if="taggingError" class="mb-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs text-rose-700">
+        {{ taggingError }}
+      </div>
 
       <div v-if="showDescription" class="article-description">
         <div v-html="article.description" />
@@ -728,19 +756,7 @@ import '~/components/article/ArticleContent.css'
                 <Icon icon="mdi:brain" width="14" height="14" :class="{ 'animate-spin': manualSummaryLoading }" />
                 {{ manualSummaryLabel }}
               </button>
-              <button
-                class="inline-flex items-center gap-1.5 rounded-full border border-ink-200 bg-white px-3 py-1.5 text-xs font-semibold text-ink-700 transition hover:border-ink-300 hover:text-ink-900 disabled:cursor-not-allowed disabled:opacity-50"
-                :disabled="actionBusy"
-                @click="handleManualTagging"
-              >
-                <Icon icon="mdi:tag-plus-outline" width="14" height="14" :class="{ 'animate-spin': manualTaggingLoading }" />
-                {{ manualTaggingLabel }}
-              </button>
             </div>
-          </div>
-
-          <div v-if="manualTaggingLoading" class="mt-3 text-sm text-ink-medium">
-            正在分析正文并生成标签...
           </div>
 
           <div v-if="detailLines.length" class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink-medium">
@@ -800,13 +816,31 @@ import '~/components/article/ArticleContent.css'
 
         <h1 class="article-title-full">{{ article.title }}</h1>
 
-        <ArticleTagList
-          v-if="article.tags?.length"
-          class="mb-4"
-          :tags="article.tags"
-          :highlighted-slugs="highlightedTagSlugs"
-          compact
-        />
+        <div class="mb-4 flex flex-wrap items-center gap-2">
+          <ArticleTagList
+            v-if="article.tags?.length"
+            :tags="article.tags"
+            :highlighted-slugs="highlightedTagSlugs"
+            compact
+          />
+          <span v-if="manualTaggingLoading" class="inline-flex items-center gap-1 text-xs text-ink-medium">
+            <Icon icon="mdi:loading" width="14" height="14" class="animate-spin" />
+            正在生成标签...
+          </span>
+          <button
+            v-else-if="aiEnabled"
+            class="inline-flex items-center gap-1 rounded-full border border-dashed border-ink-200 bg-white/80 px-2.5 py-1 text-xs font-medium text-ink-medium transition hover:border-ink-300 hover:text-ink-900 disabled:cursor-not-allowed disabled:opacity-50"
+            :disabled="actionBusy"
+            @click="handleManualTagging"
+          >
+            <Icon icon="mdi:tag-plus-outline" width="14" height="14" />
+            {{ manualTaggingLabel }}
+          </button>
+        </div>
+
+        <div v-if="taggingError" class="mb-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs text-rose-700">
+          {{ taggingError }}
+        </div>
 
         <div v-if="showDescription" class="article-description">
           <div v-html="article.description" />

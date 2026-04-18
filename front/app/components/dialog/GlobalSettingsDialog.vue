@@ -3,9 +3,7 @@ import { Icon } from "@iconify/vue";
 import AIRouterSettingsPanel from '~/features/ai/components/AIRouterSettingsPanel.vue'
 import EmbeddingConfigPanel from '~/features/ai/components/EmbeddingConfigPanel.vue'
 import EmbeddingQueuePanel from '~/features/ai/components/EmbeddingQueuePanel.vue'
-import MergeReembeddingQueuePanel from '~/features/ai/components/MergeReembeddingQueuePanel.vue'
-import TagMergePreview from '~/features/topic-graph/components/TagMergePreview.vue'
-import type { MergeSummary } from '~/types/tagMerge'
+import TagQueuePanel from '~/features/topic-graph/components/TagQueuePanel.vue'
 import type { RssFeed } from '~/types'
 import type { ReadingStats, UserPreference } from '~/types/reading_behavior'
 import type { SchedulerStatus, SchedulerTriggerResult } from '~/types/scheduler'
@@ -36,7 +34,7 @@ const apiStore = useApiStore()
 const feedsStore = useFeedsStore()
 const preferencesStore = usePreferencesStore()
 
-const activeTab = ref<'feeds' | 'categories' | 'general' | 'backend-queues' | 'preferences' | 'firecrawl' | 'schedulers' | 'tag-merge'>('feeds')
+const activeTab = ref<'feeds' | 'categories' | 'general' | 'queues' | 'preferences' | 'firecrawl' | 'schedulers'>('feeds')
 const loading = ref(false)
 const error = ref<string | null>(null)
 const success = ref<string | null>(null)
@@ -108,13 +106,6 @@ const maxArticlesOptions = [
   { label: '1000 篇', value: 1000 },
   { label: '无限制', value: 9999 },
 ]
-
-function handleMerged(summary: MergeSummary) {
-  success.value = `标签合并完成 (${summary.mergedCount} 对已合并)。合并可能影响抽象层结构，建议在设置中重建抽象层关系。`
-  setTimeout(() => {
-    success.value = null
-  }, 5000)
-}
 
 async function updateFeedSetting(
   feedId: string,
@@ -573,17 +564,10 @@ function formatNextRun(nextRun: string | null | undefined): string {
         </button>
         <button
           class="px-6 py-3 text-sm font-medium transition-colors"
-          :class="activeTab === 'backend-queues' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:text-gray-700'"
-          @click="activeTab = 'backend-queues'"
+          :class="activeTab === 'queues' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:text-gray-700'"
+          @click="activeTab = 'queues'"
         >
-          后端队列
-        </button>
-        <button
-          class="px-6 py-3 text-sm font-medium transition-colors"
-          :class="activeTab === 'tag-merge' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:text-gray-700'"
-          @click="activeTab = 'tag-merge'"
-        >
-          标签合并
+          标签 & 队列
         </button>
         <button
           class="px-6 py-3 text-sm font-medium transition-colors"
@@ -966,19 +950,9 @@ function formatNextRun(nextRun: string | null | undefined): string {
           </div> -->
         </div>
 
-        <div v-if="activeTab === 'backend-queues'" class="space-y-6">
+        <div v-if="activeTab === 'queues'" class="space-y-6">
           <EmbeddingQueuePanel />
-          <MergeReembeddingQueuePanel />
-        </div>
-
-        <!-- Tag Merge Tab -->
-        <div v-if="activeTab === 'tag-merge'" class="space-y-4">
-          <TagMergePreview
-            :visible="true"
-            :standalone="false"
-            @merged="handleMerged"
-            @close="activeTab = 'backend-queues'"
-          />
+          <TagQueuePanel />
         </div>
 
         <!-- Firecrawl Settings Tab -->

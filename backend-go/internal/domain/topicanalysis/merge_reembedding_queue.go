@@ -231,14 +231,32 @@ func (s *MergeReembeddingQueueService) processNext() {
 		return
 	}
 
-	embedding, err := s.embedding.GenerateEmbedding(context.Background(), &target)
+	identityEmb, err := s.embedding.GenerateEmbedding(context.Background(), &target, EmbeddingTypeIdentity)
 	if err != nil {
-		s.markFailed(task.ID, "failed to generate embedding: "+err.Error())
+		s.markFailed(task.ID, "failed to generate identity embedding: "+err.Error())
 		return
 	}
 
-	if err := s.embedding.SaveEmbedding(embedding); err != nil {
-		s.markFailed(task.ID, "failed to save embedding: "+err.Error())
+	if err := s.embedding.SaveEmbedding(identityEmb); err != nil {
+		s.markFailed(task.ID, "failed to save identity embedding: "+err.Error())
+		return
+	}
+
+	var semOpts []EmbeddingTextOptions
+	if target.Category == "event" {
+		titles := GetTagContextTitles(target.ID, 5)
+		if len(titles) > 0 {
+			semOpts = append(semOpts, EmbeddingTextOptions{ContextTitles: titles})
+		}
+	}
+	semanticEmb, semErr := s.embedding.GenerateEmbedding(context.Background(), &target, EmbeddingTypeSemantic, semOpts...)
+	if semErr != nil {
+		s.markFailed(task.ID, "failed to generate semantic embedding: "+semErr.Error())
+		return
+	}
+
+	if err := s.embedding.SaveEmbedding(semanticEmb); err != nil {
+		s.markFailed(task.ID, "failed to save semantic embedding: "+err.Error())
 		return
 	}
 

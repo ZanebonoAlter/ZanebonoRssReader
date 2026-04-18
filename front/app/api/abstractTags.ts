@@ -73,5 +73,12 @@ export function useAbstractTagApi() {
     async reassignTag(tagId: number, newParentId: number): Promise<ApiResponse<{ message: string }>> {
       return apiClient.post('/topic-tags/' + tagId + '/reassign', { parent_id: newParentId })
     },
+
+    async organizeTags(category?: string): Promise<ApiResponse<{ message: string }>> {
+      const params = new URLSearchParams()
+      if (category) params.set('category', category)
+      const query = params.toString() ? `?${params.toString()}` : ''
+      return apiClient.post('/topic-tags/organize' + query, {})
+    },
   }
 }

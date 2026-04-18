@@ -22,8 +22,8 @@ export function useArticlesApi() {
     return apiClient.put<Article>(`/articles/${id}`, data)
   }
 
-  async function retagArticle(id: number): Promise<ApiResponse<{ tag_count: number; tags: Article['tags'] }>> {
-    return apiClient.post<{ tag_count: number; tags: Article['tags'] }>(`/articles/${id}/tags`)
+  async function retagArticle(id: number): Promise<ApiResponse<{ job_id: number; article_id: number; status: string }>> {
+    return apiClient.post<{ job_id: number; article_id: number; status: string }>(`/articles/${id}/tags`)
   }
 
   async function bulkUpdateArticles(data: BulkUpdateArticlesData): Promise<ApiResponse<void>> {

@@ -1,69 +1,66 @@
-<!-- generated-by: gsd-doc-writer -->
+# 配置指南
 
-# Configuration
+RSS Reader 使用分层配置系统：后端 YAML 配置文件、覆盖文件值的环境变量，以及 Nuxt 运行时配置。AI 相关设置（LLM、Firecrawl、Digest）存储在数据库中，通过 Web UI 配置。
 
-The RSS Reader uses a layered configuration system: a YAML config file for the backend, environment variables that override file values, and Nuxt runtime config for the frontend. AI-related settings (LLM, Firecrawl, digest) are stored in the database and configured via the web UI.
+## 环境变量
 
-## Environment Variables
+### 后端（Go）
 
-### Backend (Go)
+以下环境变量会覆盖 `backend-go/configs/config.yaml` 中的值。未设置时使用配置文件默认值。
 
-These environment variables override values from `backend-go/configs/config.yaml`. If unset, the config file defaults apply.
-
-| Variable | Required | Default | Description |
+| 变量 | 必填 | 默认值 | 说明 |
 |---|---|---|---|
-| `SERVER_PORT` | No | `"5000"` | HTTP port the backend listens on |
-| `SERVER_MODE` | No | `"debug"` | Gin mode: `"debug"`, `"release"`, or `"test"` |
-| `DATABASE_DRIVER` | No | `"postgres"` | Database driver: `"sqlite"` (only in `sqlite` branch) or `"postgres"` |
-| `DATABASE_DSN` | No | `"host=postgres user=postgres password=postgres dbname=rss_reader port=5432 sslmode=disable TimeZone=Asia/Shanghai"` | Data source name. For SQLite: file path. For Postgres: connection string |
-| `CORS_ORIGINS` | No | `"http://localhost:3000,http://localhost:3000"` | Comma-separated list of allowed CORS origins |
-| `CRAWL_SERVICE_URL` | No | `"http://localhost:11235"` | URL for the crawl/content-completion service |
-| `REDIS_URL` | No | *(empty)* | Redis URL for the topic analysis job queue. When set, the queue uses Redis as a persistent backend; otherwise falls back to in-memory |
+| `SERVER_PORT` | 否 | `"5000"` | 后端 HTTP 监听端口 |
+| `SERVER_MODE` | 否 | `"debug"` | Gin 模式：`"debug"`、`"release"` 或 `"test"` |
+| `DATABASE_DRIVER` | 否 | `"postgres"` | 数据库驱动，主分支仅支持 `"postgres"` |
+| `DATABASE_DSN` | 否 | `"host=127.0.0.1 user=postgres password=postgres dbname=rss_reader port=5432 sslmode=disable TimeZone=Asia/Shanghai"` | PostgreSQL 连接字符串 |
+| `CORS_ORIGINS` | 否 | `"http://localhost:3000,http://localhost:3000"` | 逗号分隔的允许 CORS 来源列表 |
+| `CRAWL_SERVICE_URL` | 否 | `"http://localhost:11235"` | 抓取/内容补全服务 URL |
+| `REDIS_URL` | 否 | *(空)* | Topic 分析任务队列的 Redis URL。设置后使用 Redis 作为持久后端；否则回退到内存队列 |
 
-### Topic Analysis Tuning
+### Topic Analysis 调优
 
-These environment variables control the AI topic analysis module. They are read at runtime in `internal/domain/topicanalysis/ai_analysis.go` via `parseEnvInt` / `parseEnvFloat`.
+以下环境变量控制 AI 话题分析模块，在 `internal/domain/topicanalysis/ai_analysis.go` 中通过 `parseEnvInt` / `parseEnvFloat` 读取。
 
-| Variable | Required | Default | Description |
+| 变量 | 必填 | 默认值 | 说明 |
 |---|---|---|---|
-| `TOPIC_ANALYSIS_MAX_TOKENS` | No | `2000` | Maximum tokens for topic analysis AI calls |
-| `TOPIC_ANALYSIS_TEMPERATURE` | No | `0.2` | Temperature for topic analysis AI calls |
-| `TOPIC_ANALYSIS_TIMEOUT_SECONDS` | No | `90` | Timeout in seconds for topic analysis AI calls |
-| `TOPIC_ANALYSIS_RETRY_COUNT` | No | `3` | Maximum retries for topic analysis AI calls |
+| `TOPIC_ANALYSIS_MAX_TOKENS` | 否 | `2000` | 话题分析 AI 调用最大 token 数 |
+| `TOPIC_ANALYSIS_TEMPERATURE` | 否 | `0.2` | 话题分析 AI 调用温度 |
+| `TOPIC_ANALYSIS_TIMEOUT_SECONDS` | 否 | `90` | 话题分析 AI 调用超时（秒） |
+| `TOPIC_ANALYSIS_RETRY_COUNT` | 否 | `3` | 话题分析 AI 调用最大重试次数 |
 
-### Frontend (Nuxt)
+### 前端（Nuxt）
 
-These are set via `nuxt.config.ts` `runtimeConfig` and can be overridden with environment variables.
+通过 `nuxt.config.ts` 的 `runtimeConfig` 设置，可用环境变量覆盖。
 
-| Variable | Required | Default | Description |
+| 变量 | 必填 | 默认值 | 说明 |
 |---|---|---|---|
-| `API_INTERNAL_BASE` | No | `"http://localhost:5000/api"` | Server-side API base URL (used during SSR) |
-| `NUXT_PUBLIC_API_ORIGIN` | No | `"http://localhost:5000"` | Public API origin exposed to the browser |
-| `NUXT_PUBLIC_API_BASE` | No | `"http://localhost:5000/api"` | Public API base URL exposed to the browser |
+| `API_INTERNAL_BASE` | 否 | `"http://localhost:5000/api"` | 服务端 API 基础 URL（SSR 时使用） |
+| `NUXT_PUBLIC_API_ORIGIN` | 否 | `"http://localhost:5000"` | 暴露给浏览器的公共 API 源 |
+| `NUXT_PUBLIC_API_BASE` | 否 | `"http://localhost:5000/api"` | 暴露给浏览器的公共 API 基础 URL |
 
 ### Docker Compose
 
-These variables are used by the Docker Compose files and have no effect outside Docker.
+以下变量由 Docker Compose 文件使用，Docker 外部无效。
 
-| Variable | Required | Default | Description |
+| 变量 | 必填 | 默认值 | 说明 |
 |---|---|---|---|
-| `FRONT_PORT` | No | `"3000"` (SQLite compose), `"3000"` (internal) | Host port mapped to the frontend container |
-| `BACKEND_PORT` | No | `"5000"` | Host port mapped to the backend container |
-| `SQLITE_DB_FILE` | No | `"rss_reader.db"` | SQLite database filename (mounted volume) |
-| `POSTGRES_DB` | No | `"rss_reader"` | PostgreSQL database name |
-| `POSTGRES_USER` | No | `"postgres"` | PostgreSQL user |
-| `POSTGRES_PASSWORD` | No | `"postgres"` | PostgreSQL password |
-| `POSTGRES_PORT` | No | `"5432"` | Host port mapped to the PostgreSQL container |
-| `TZ` | No | `"Asia/Shanghai"` | Timezone for PostgreSQL container |
-| `GOPROXY` | No | *(empty)* | Go module proxy for backend build |
-| `GOSUMDB` | No | *(empty)* | Go checksum database for backend build |
-| `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | No | *(empty)* | Proxy settings forwarded to build contexts |
+| `FRONT_PORT` | 否 | `"3000"` | 前端容器映射到宿主机的端口 |
+| `BACKEND_PORT` | 否 | `"5000"` | 后端容器映射到宿主机的端口 |
+| `POSTGRES_DB` | 否 | `"rss_reader"` | PostgreSQL 数据库名 |
+| `POSTGRES_USER` | 否 | `"postgres"` | PostgreSQL 用户名 |
+| `POSTGRES_PASSWORD` | 否 | `"postgres"` | PostgreSQL 密码 |
+| `POSTGRES_PORT` | 否 | `"5432"` | PostgreSQL 容器映射到宿主机的端口 |
+| `TZ` | 否 | `"Asia/Shanghai"` | PostgreSQL 容器时区 |
+| `GOPROXY` | 否 | *(空)* | 后端构建时的 Go 模块代理 |
+| `GOSUMDB` | 否 | *(空)* | 后端构建时的 Go 校验数据库 |
+| `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | 否 | *(空)* | 代理设置，传递到构建上下文 |
 
-## Config File Format
+## 配置文件格式
 
-The backend reads a YAML config file from `backend-go/configs/config.yaml`. This file is loaded via [Viper](https://github.com/spf13/viper) on startup. The shipped `config.yaml` contains a PostgreSQL example, and the code defaults are PostgreSQL — the app works without the file at all.
+后端从 `backend-go/configs/config.yaml` 读取 YAML 配置文件，通过 Viper 在启动时加载。默认配置即为 PostgreSQL 连接，即使没有配置文件也能正常工作。
 
-> **注意：SQLite 配置仅在 `sqlite` 分支可用，主分支不再支持 SQLite 驱动。**
+> **注意：主分支仅支持 PostgreSQL 数据库驱动。SQLite 支持仅在 `sqlite` 分支可用。**
 
 ```yaml
 server:
@@ -71,13 +68,8 @@ server:
   mode: "debug"           # debug | release | test
 
 database:
-  driver: "postgres"        # sqlite (only in sqlite branch) | postgres
-  dsn: "host=postgres user=postgres password=postgres dbname=rss_reader port=5432 sslmode=disable TimeZone=Asia/Shanghai"    # SQLite path or Postgres connection string
-  sqlite:
-    journal_mode: "WAL"
-    busy_timeout_ms: 5000
-    max_idle_conns: 2
-    max_open_conns: 1
+  driver: "postgres"
+  dsn: "host=127.0.0.1 user=postgres password=postgres dbname=rss_reader port=5432 sslmode=disable TimeZone=Asia/Shanghai"
   postgres:
     max_idle_conns: 5
     max_open_conns: 25
@@ -85,34 +77,30 @@ database:
     conn_max_idle_time_minutes: 10
 ```
 
-### Key Sections
+### 主要配置段
 
-- **server** — Controls the HTTP server port and Gin run mode. In `release` mode, Gin suppresses debug output.
-- **database** — Configures the persistence layer. The `driver` field selects between SQLite and PostgreSQL. Each driver has its own tuning knobs for connection pooling.
-- **cors** — Allowed origins, HTTP methods, and headers for cross-origin requests. Origins is a list; when overridden via `CORS_ORIGINS` env var, it is parsed as a comma-separated string.
+- **server** — 控制 HTTP 服务器端口和 Gin 运行模式。`release` 模式下 Gin 会抑制调试输出。
+- **database** — 配置持久化层。`driver` 字段始终为 `"postgres"`。PostgreSQL 有独立的连接池调优参数。
+- **cors** — 跨域请求的允许来源、HTTP 方法和请求头。来源是列表形式；通过 `CORS_ORIGINS` 环境变量覆盖时，解析为逗号分隔的字符串。
 
-## Required vs Optional Settings
+## 必填与可选设置
 
-All settings have defaults. The application will start without any configuration file or environment variables, using SQLite with sensible defaults.
+所有设置都有默认值。应用程序无需任何配置文件或环境变量即可启动，使用 PostgreSQL 的合理默认值。
 
-No environment variable causes a startup failure if absent. The config loading code (`applyEnvOverrides` in `config.go`) only applies env values when they are non-empty; otherwise the YAML file or code defaults are used.
+没有环境变量缺失会导致启动失败。配置加载代码（`config.go` 中的 `applyEnvOverrides`）仅当环境值非空时才覆盖，否则使用 YAML 文件或代码默认值。
 
-The only scenario that causes a startup failure is an invalid or unreachable database DSN — the `database.InitDB` call in `main.go` will `log.Fatalf` if the connection cannot be established.
+唯一会导致启动失败的场景是数据库 DSN 无效或不可达 — `main.go` 中的 `database.InitDB` 调用会 `log.Fatalf`。
 
-## Defaults
+## 默认值
 
-### Backend Defaults
+### 后端默认值
 
-| Setting | Default | Source |
+| 设置 | 默认值 | 来源 |
 |---|---|---|
 | Server port | `"5000"` | `viper.SetDefault` in `config.go` |
 | Server mode | `"debug"` | `viper.SetDefault` in `config.go` |
-| Database driver | `"sqlite"` | `viper.SetDefault` in `config.go` |
-| Database DSN | `"rss_reader.db"` | `viper.SetDefault` in `config.go` |
-| SQLite journal mode | `"WAL"` | `viper.SetDefault` in `config.go` |
-| SQLite busy timeout | `5000` ms | `viper.SetDefault` in `config.go` |
-| SQLite max idle conns | `2` | `viper.SetDefault` in `config.go` |
-| SQLite max open conns | `1` | `viper.SetDefault` in `config.go` |
+| Database driver | `"postgres"` | `viper.SetDefault` in `config.go` |
+| Database DSN | `"host=127.0.0.1 user=postgres password=postgres dbname=rss_reader port=5432 sslmode=disable TimeZone=Asia/Shanghai"` | `viper.SetDefault` in `config.go` |
 | Postgres max idle conns | `5` | `viper.SetDefault` in `config.go` |
 | Postgres max open conns | `25` | `viper.SetDefault` in `config.go` |
 | Postgres conn max lifetime | `60` min | `viper.SetDefault` in `config.go` |
@@ -128,55 +116,54 @@ The only scenario that causes a startup failure is an invalid or unreachable dat
 | Topic analysis timeout | `90` s | `ai_analysis.go` `parseEnvInt` |
 | Topic analysis retries | `3` | `ai_analysis.go` `parseEnvInt` |
 
-### Frontend Defaults
+### 前端默认值
 
-| Setting | Default | Source |
+| 设置 | 默认值 | 来源 |
 |---|---|---|
 | API internal base | `"http://localhost:5000/api"` | `nuxt.config.ts` |
 | Public API origin | `"http://localhost:5000"` | `nuxt.config.ts` |
 | Public API base | `"http://localhost:5000/api"` | `nuxt.config.ts` |
 
-## Per-Environment Overrides
+## 各环境覆盖
 
-### Local Development
+### 本地开发
 
-For local development, the defaults work out of the box:
+本地开发时默认值开箱即用：
 
-- Backend runs on `http://localhost:5000` with SQLite.
-- Frontend dev server (`pnpm dev`) runs on `http://localhost:3000`.
-- No config file or `.env` file is required.
-
-To switch the backend to PostgreSQL locally, create or edit `backend-go/configs/config.yaml` and set `database.driver: "postgres"` with the appropriate DSN.
-
-### Docker (SQLite)
-
-Use `docker-compose.sqlite.yml` for containerized deployment with SQLite persistence:
+- 后端运行在 `http://localhost:5000`，使用 PostgreSQL 数据库。
+- 前端开发服务器（`pnpm dev`）运行在 `http://localhost:3000`。
+- 无需配置文件或 `.env` 文件。
+- 需要本地运行 PostgreSQL + pgvector，可通过 Docker 启动：
 
 ```bash
-docker compose -f docker-compose.sqlite.yml up --build
+docker run -d --name rss-postgres -p 5432:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=rss_reader pgvector/pgvector:pg18-trixie
 ```
 
-The SQLite database file is persisted in `./data/` on the host.
-
-### Docker (PostgreSQL + pgvector)
-
-Use `docker-compose.yml` for PostgreSQL with the pgvector extension:
+### Docker（PostgreSQL + pgvector）— 推荐方式
 
 ```bash
 docker compose up -d
 ```
 
-Set `POSTGRES_PASSWORD` and other Postgres variables in your environment or a `.env` file for production. The database is persisted in `./data/` on the host. An init script at `docker/postgres/init/01-enable-pgvector.sql` enables the pgvector extension on first start.
+启动三个服务：
 
-## Database-Stored Settings (AI Features)
+- **postgres**: PostgreSQL（pgvector:pg18-trixie）端口 5432，数据通过 `./data/` 目录持久化。
+- **backend**: Go API 服务器端口 5000，内部连接 postgres 服务。
+- **front**: Nuxt SSR 服务器内部端口 3000，通过 `${FRONT_PORT:-3000}` 映射到宿主机。内部通过 `http://backend:5000/api` 代理 API 请求。
 
-AI-related configuration is not stored in files or environment variables — it is managed through the web UI and persisted in the `ai_settings` SQLite/Postgres table. The backend reads these at runtime via the `aisettings` package.
+启动后：
+- 前端：`http://localhost:3000`
+- 后端 API：`http://localhost:5000/api`
 
-| Config Key | Description |
+## 数据库存储的设置（AI 功能）
+
+AI 相关配置不存储在文件或环境变量中 — 通过 Web UI 管理并持久化到 PostgreSQL 的 `ai_settings` 表。后端通过 `aisettings` 包在运行时读取。
+
+| 配置键 | 说明 |
 |---|---|
-| `summary_config` | LLM credentials for article summarization (base URL, API key, model) |
-| `auto_summary_config` | Auto-summary scheduler settings (time range, model params) |
-| `firecrawl_config` | Firecrawl integration settings (enabled, API URL, API key, mode, timeout, max content length) |
-| `open_notebook_config` | Open Notebook digest export settings (enabled, base URL, API key, model, target notebook, prompt mode, auto-send daily/weekly) |
+| `summary_config` | 文章摘要 LLM 凭证（base URL、API key、model） |
+| `auto_summary_config` | 自动摘要调度器设置（时间范围、模型参数） |
+| `firecrawl_config` | Firecrawl 集成设置（启用、API URL、API key、模式、超时、最大内容长度） |
+| `open_notebook_config` | Open Notebook digest 导出设置（启用、base URL、API key、model、目标笔记本、prompt 模式、自动发送日报/周报） |
 
-These settings are loaded via `aisettings.LoadSummaryConfig()`, `aisettings.LoadFirecrawlConfig()`, etc. and are available through the Settings page in the frontend.
+这些设置通过 `aisettings.LoadSummaryConfig()`、`aisettings.LoadFirecrawlConfig()` 等函数加载，在前端设置页面中配置。

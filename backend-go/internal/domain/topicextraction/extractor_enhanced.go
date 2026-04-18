@@ -180,16 +180,38 @@ func (te *TagExtractor) resolveCandidate(ctx context.Context, candidate topictyp
 		case "candidates":
 			if len(matchResult.Candidates) > 0 && matchResult.Candidates[0].Tag != nil {
 				best := matchResult.Candidates[0]
-				return &topictypes.TopicTag{
-					Label:     best.Tag.Label,
-					Slug:      best.Tag.Slug,
-					Category:  best.Tag.Category,
-					Icon:      best.Tag.Icon,
-					Aliases:   parseAliases(best.Tag.Aliases),
-					Score:     candidate.Confidence * best.Similarity,
-					IsNew:     false,
-					MatchedTo: best.Tag.ID,
-				}, false, nil
+
+				if category == "event" && best.Similarity < te.embeddingService.GetThresholds().HighSimilarity {
+					judgment, jErr := te.aiJudgment(ctx, candidate, matchResult.Candidates, input)
+					if jErr == nil && judgment != nil {
+						if judgment.Decision == "reuse" && judgment.ReuseTagID > 0 {
+							var reuseTag models.TopicTag
+							if err := database.DB.First(&reuseTag, judgment.ReuseTagID).Error; err == nil {
+								return &topictypes.TopicTag{
+									Label:     reuseTag.Label,
+									Slug:      reuseTag.Slug,
+									Category:  reuseTag.Category,
+									Icon:      reuseTag.Icon,
+									Aliases:   parseAliases(reuseTag.Aliases),
+									Score:     candidate.Confidence,
+									IsNew:     false,
+									MatchedTo: reuseTag.ID,
+								}, false, nil
+							}
+						}
+					}
+				} else {
+					return &topictypes.TopicTag{
+						Label:     best.Tag.Label,
+						Slug:      best.Tag.Slug,
+						Category:  best.Tag.Category,
+						Icon:      best.Tag.Icon,
+						Aliases:   parseAliases(best.Tag.Aliases),
+						Score:     candidate.Confidence * best.Similarity,
+						IsNew:     false,
+						MatchedTo: best.Tag.ID,
+					}, false, nil
+				}
 			}
 
 		case "no_match":
@@ -225,6 +247,9 @@ func (te *TagExtractor) aiJudgment(ctx context.Context, candidate topictypes.Ext
 		CandidateTag:   candidate,
 		SimilarTags:    similarInfo,
 		SummaryContext: fmt.Sprintf("标题: %s\n来源: %s", input.Title, input.FeedName),
+	}
+	if input.Summary != "" {
+		req.SummaryContext += fmt.Sprintf("\n摘要: %s", truncateString(input.Summary, 500))
 	}
 
 	systemPrompt := buildResolutionSystemPrompt()
@@ -315,11 +340,13 @@ func buildExtractionSystemPrompt() string {
   * 纯年份/日期/时间词（如"2026"、"2024年"、"Q3"、"上半年"）
   * 过于宽泛的通用词（如"技术"、"发展"、"创新"、"行业"、"未来"、"趋势"、"市场"、"影响"）
   * 文章中未展开讨论的附带提及词
-- 优先提取专业术语和技术概念，而非泛化描述词
-- event类标签必须是语义完整的名词短语，能独立传达事件内容
-- 拒绝语义片段：不要把裸日期、无主体动作、无归属状态、裸地名、泛化活动名当作event，应归入keyword
-- 无法判断语义完整性时，优先归入keyword类别
-- 标签应该简洁、准确
+	- 优先提取专业术语和技术概念，而非泛化描述词
+	- event类标签必须是语义完整的名词短语，能独立传达事件内容
+	- 拒绝语义片段：不要把裸日期、无主体动作、无归属状态、裸地名、泛化活动名当作event，应归入keyword
+	- 无法判断语义完整性时，优先归入keyword类别
+	- 最多返回 8 个标签
+	- 标签必须按优先级从高到低排序，最重要的标签放前面
+	- 标签应该简洁、准确
 
 每个标签输出格式：
 {"label": "标签名称", "category": "event|person|keyword", "confidence": 0.0-1.0, "aliases": ["别名1"], "evidence": "提取依据"}`
@@ -346,6 +373,11 @@ func buildResolutionSystemPrompt() string {
 2. 如果新标签是已有标签的别名，复用已有标签
 3. 如果标签含义明显不同，创建新标签
 4. 如果标签存在细微差异（如版本号、地区），根据上下文判断
+
+对于 event（事件）类别的标签，请特别注意：
+- 同一事件可能有完全不同的表述方式，例如"伊朗维护霍尔木兹权益"和"伊朗袭击霍尔木兹海峡船只"可能是同一事件
+- 重点比较事件的核心主体（谁）和核心行为（做了什么），而非字面文本相似度
+- 如果两个标签指向同一核心事件，即使表述差异很大，也应复用
 
 返回JSON格式：
 {"decision": "reuse|create_new", "reuse_tag_id": 123, "reason": "决策理由", "new_label": "调整后的标签名", "new_category": "event|person|keyword"}`
@@ -546,4 +578,12 @@ func tagResolutionSchema() *airouter.JSONSchema {
 		},
 		Required: []string{"decision", "reason"},
 	}
+}
+
+func truncateString(s string, maxRunes int) string {
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	return string(runes[:maxRunes])
 }

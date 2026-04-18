@@ -33,10 +33,10 @@ func GetSummaries(c *gin.Context) {
 	query := database.DB.Model(&models.AISummary{})
 
 	if feedID > 0 {
-		query = query.Where("feed_id = ?", feedID)
+		query = query.Where("ai_summaries.feed_id = ?", feedID)
 	}
 	if categoryID > 0 {
-		query = query.Where("category_id = ?", categoryID)
+		query = query.Where("ai_summaries.category_id = ?", categoryID)
 	}
 
 	var total int64
@@ -44,7 +44,7 @@ func GetSummaries(c *gin.Context) {
 
 	var summaries []models.AISummary
 	offset := (page - 1) * perPage
-	if err := query.Preload("Feed").Preload("Category").Order("created_at DESC").Offset(offset).Limit(perPage).Find(&summaries).Error; err != nil {
+	if err := query.Preload("Feed").Preload("Category").Order("ai_summaries.created_at DESC").Offset(offset).Limit(perPage).Find(&summaries).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
 			"error":   err.Error(),

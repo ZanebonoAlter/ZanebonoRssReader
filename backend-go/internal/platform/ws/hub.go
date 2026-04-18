@@ -115,6 +115,25 @@ type AutoRefreshCompleteMessage struct {
 	Timestamp       string  `json:"timestamp"`
 }
 
+// OrganizeProgressMessage 标签整理进度消息
+type OrganizeProgressMessage struct {
+	Type             string             `json:"type"`
+	Status           string             `json:"status"`
+	TotalUnclassified int               `json:"total_unclassified"`
+	Processed         int               `json:"processed"`
+	CurrentGroup      *OrganizeGroupInfo `json:"current_group,omitempty"`
+	Groups            []OrganizeGroupInfo `json:"groups,omitempty"`
+	Category          string             `json:"category,omitempty"`
+}
+
+// OrganizeGroupInfo 单个整理分组信息
+type OrganizeGroupInfo struct {
+	NewLabel       string  `json:"new_label"`
+	CandidateCount int     `json:"candidate_count"`
+	Action         string  `json:"action"`
+	Similarity     float64 `json:"similarity,omitempty"`
+}
+
 var hubInstance *Hub
 var hubOnce sync.Once
 

@@ -195,6 +195,15 @@ func TestGenerateNarratives_EmptyInput(t *testing.T) {
 	}
 }
 
+func TestNarrativeSystemPrompt_RequiresWrappedNarrativesObject(t *testing.T) {
+	if !strings.Contains(narrativeSystemPrompt, `{"narratives":[]}`) {
+		t.Fatalf("system prompt should include wrapped narratives object example, got %q", narrativeSystemPrompt)
+	}
+	if strings.Contains(narrativeSystemPrompt, "返回JSON数组") {
+		t.Fatalf("system prompt should not ask for a direct JSON array")
+	}
+}
+
 func TestStripMarkdownFence(t *testing.T) {
 	tests := []struct {
 		name  string

@@ -284,11 +284,11 @@ func FetchTopicArticles(slug string, kind string, anchor time.Time, page, pageSi
 
 func fetchSummaries(start time.Time, end time.Time, categoryID, feedID *uint) ([]models.AISummary, error) {
 	var summaries []models.AISummary
-	query := database.DB.Where("created_at >= ? AND created_at < ?", start, end).
+	query := database.DB.Where("ai_summaries.created_at >= ? AND ai_summaries.created_at < ?", start, end).
 		Preload("Feed").
 		Preload("Category").
 		Preload("SummaryTopics.TopicTag").
-		Order("created_at DESC")
+		Order("ai_summaries.created_at DESC")
 
 	if feedID != nil {
 		query = query.Where("ai_summaries.feed_id = ?", *feedID)

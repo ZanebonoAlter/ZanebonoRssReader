@@ -17,6 +17,8 @@
 
 ### GET /api/ai/settings
 
+优先从 AI Router 获取当前 summary 能力的主 Provider 和 Route，回退到 legacy 配置。
+
 ```json
 {
   "success": true,
@@ -32,6 +34,8 @@
 }
 ```
 
+无配置时 `data` 为 `null`。
+
 ### POST /api/ai/settings
 
 | 字段 | 类型 | 必填 | 说明 |
@@ -39,6 +43,8 @@
 | `api_key` | string | 是 | API Key |
 | `base_url` | string | 否 | 默认 `https://api.openai.com/v1` |
 | `model` | string | 否 | 默认 `gpt-4o-mini` |
+
+同时更新 legacy 配置和 AI Provider/Route，并热更新 content completion 的 AI 凭据。
 
 ### POST /api/ai/summarize
 
@@ -51,6 +57,8 @@
 | `model` | string | 否 | 覆盖模型名 |
 | `language` | string | 否 | 默认 `zh` |
 
+若 `base_url`/`api_key`/`model` 均提供则直接调用，否则走 AI Router。
+
 ### POST /api/ai/test
 
 | 字段 | 类型 | 必填 | 说明 |
@@ -62,7 +70,7 @@
 
 ### GET /api/ai/providers
 
-提供商列表，含 `id`, `name`, `provider_type`, `base_url`, `model`, `enabled`, `timeout_seconds`, `max_tokens`, `temperature`, `api_key_configured` 等。
+提供商列表，含 `id`, `name`, `provider_type`, `base_url`, `model`, `enabled`, `timeout_seconds`, `max_tokens`, `temperature`, `metadata`, `api_key_configured` 等。
 
 ### POST /api/ai/providers
 
@@ -77,9 +85,11 @@
 | `provider_type` | string | 否 | 类型 |
 | `enabled` | bool | 否 | 默认 `true` |
 | `timeout_seconds` | int | 否 | 超时 |
-| `max_tokens` | int | 否 | 最大 tokens |
-| `temperature` | float64 | 否 | 温度 |
+| `max_tokens` | int* | 否 | 最大 tokens |
+| `temperature` | float64* | 否 | 温度 |
 | `metadata` | string | 否 | 附加元数据 |
+
+返回 `{"success": true, "data": {"id": ...}}`。
 
 ### PUT /api/ai/providers/:provider_id
 
@@ -91,14 +101,14 @@
 
 ### GET /api/ai/routes
 
-所有路由及关联提供商。
+所有路由及关联提供商。每条路由包含 `id`, `name`, `capability`, `enabled`, `strategy`, `description`, `route_providers`（含 provider 详情和优先级）。
 
 ### PUT /api/ai/routes/:capability
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `provider_ids` | uint[] | 是 | 关联提供商 ID |
-| `name` | string | 否 | 路由名称 |
+| `name` | string | 否 | 路由名称（空则用默认） |
 | `enabled` | bool | 否 | 默认 `true` |
 | `description` | string | 否 | 描述 |
 

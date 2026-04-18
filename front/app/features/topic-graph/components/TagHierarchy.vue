@@ -4,6 +4,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useAbstractTagApi } from '~/api/abstractTags'
 import { useWatchedTagsApi } from '~/api/watchedTags'
 import type { TopicCategory } from '~/api/topicGraph'
+import { useOrganizeWebSocket } from '~/features/topic-graph/composables/useOrganizeWebSocket'
 import TagHierarchyRow from '~/features/topic-graph/components/TagHierarchyRow.vue'
 import type { TagHierarchyNode } from '~/types/topicTag'
 
@@ -55,6 +56,10 @@ const reassignModal = ref<{ tagId: number; tagLabel: string } | null>(null)
 const reassignCandidates = ref<TagHierarchyNode[]>([])
 const reassignLoading = ref(false)
 const reassignError = ref<string | null>(null)
+
+const organizing = ref(false)
+const organizeResult = ref<{ total_unclassified: number; processed: number } | null>(null)
+const organizeWs = useOrganizeWebSocket()
 
 const tagCategories = ['event', 'person', 'keyword'] as const
 
@@ -309,6 +314,38 @@ function handleSelectNode(node: TagHierarchyNode) {
   emit('select-tag', node.slug, normalizeHierarchyCategory(node.category))
 }
 
+async function organizeUnclassified() {
+  organizing.value = true
+  organizeResult.value = null
+  error.value = null
+  organizeWs.reset()
+  try {
+    const apiCategory = selectedCategory.value || undefined
+    const response = await abstractTagApi.organizeTags(apiCategory)
+    if (!response.success) {
+      error.value = response.error || '整理失败'
+      organizing.value = false
+    }
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '整理失败'
+    organizing.value = false
+  }
+}
+
+watch(() => organizeWs.status.value, (newStatus) => {
+  if (newStatus === 'completed') {
+    organizing.value = false
+    organizeResult.value = {
+      total_unclassified: organizeWs.totalUnclassified.value,
+      processed: organizeWs.processed.value,
+    }
+    if (organizeWs.processed.value > 0) {
+      showUnclassified.value = true
+      void loadHierarchy()
+    }
+  }
+})
+
 onMounted(() => {
   void loadHierarchy()
   void loadWatchedTags()
@@ -330,21 +367,42 @@ watch(timeRange, (newVal) => {
   <div class="tag-hierarchy">
     <!-- Header with category filter -->
     <div class="flex items-center justify-between gap-3 mb-2">
-      <div>
-        <h3 class="font-serif text-lg text-white">标签层级</h3>
-        <p class="text-xs text-white/50 mt-0.5">
-          {{ totalCount }} 个标签
-        </p>
+      <div class="flex items-center gap-2">
+        <div>
+          <h3 class="font-serif text-lg text-white">标签层级</h3>
+          <p class="text-xs text-white/50 mt-0.5">
+            {{ totalCount }} 个标签
+          </p>
+        </div>
       </div>
-      <button
-        type="button"
-        class="th-category-btn"
-        :class="{ 'th-category-btn--active': showUnclassified }"
-        @click="showUnclassified = !showUnclassified; void loadHierarchy()"
-      >
-        <Icon icon="mdi:label-off-outline" width="12" class="mr-1" />
-        未分类
-      </button>
+      <div class="flex items-center gap-2 flex-shrink-0">
+        <button
+          type="button"
+          class="th-category-btn"
+          :class="{ 'th-category-btn--active': showUnclassified }"
+          @click="showUnclassified = !showUnclassified; void loadHierarchy()"
+        >
+          <Icon icon="mdi:label-off-outline" width="12" class="mr-1" />
+          未分类
+        </button>
+        <button
+          type="button"
+          class="th-category-btn th-organize-btn"
+          :disabled="organizing"
+          @click="void organizeUnclassified()"
+        >
+          <Icon :icon="organizing ? 'mdi:loading' : 'mdi:auto-fix'" width="12" class="mr-1" :class="{ 'animate-spin': organizing }" />
+          {{ organizing ? '整理中...' : '整理标签' }}
+        </button>
+        <div v-if="organizing && organizeWs.totalUnclassified.value > 0" class="th-organize-result">
+          <Icon icon="mdi:loading" width="12" class="animate-spin text-blue-400" />
+          <span>{{ organizeWs.processed.value }} / {{ organizeWs.totalUnclassified.value }}</span>
+        </div>
+        <div v-else-if="organizeResult && !organizing" class="th-organize-result">
+          <Icon icon="mdi:check-circle-outline" width="12" class="text-green-400" />
+          <span>{{ organizeResult.processed }} 组已归类</span>
+        </div>
+      </div>
     </div>
 
     <!-- Category tabs + search -->
@@ -585,6 +643,34 @@ watch(timeRange, (newVal) => {
 }
 .th-category-btn:hover { border-color: rgba(255, 255, 255, 0.25); color: rgba(255, 255, 255, 0.8); }
 .th-category-btn--active { border-color: rgba(240, 138, 75, 0.5); background: rgba(240, 138, 75, 0.12); color: rgba(255, 220, 200, 0.9); }
+
+.th-organize-btn {
+  border-color: rgba(99, 179, 237, 0.3);
+  color: rgba(147, 197, 253, 0.8);
+}
+.th-organize-btn:hover:not(:disabled) {
+  border-color: rgba(99, 179, 237, 0.5);
+  background: rgba(99, 179, 237, 0.1);
+  color: rgba(191, 219, 254, 0.95);
+}
+.th-organize-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.th-organize-result {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.68rem;
+  color: rgba(134, 239, 172, 0.8);
+  animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 
 .th-search-wrap {
   position: relative;

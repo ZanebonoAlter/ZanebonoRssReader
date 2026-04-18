@@ -18,7 +18,7 @@
 - Go 1.21
 - Gin
 - GORM
-- SQLite
+- PostgreSQL + pgvector
 - Viper
 - Gorilla WebSocket
 - robfig/cron
@@ -38,10 +38,13 @@
 ```text
 backend-go/
 ├── cmd/
+│   ├── migrate-db/
 │   ├── migrate-digest/
+│   ├── migrate-embedding-queue/
 │   ├── migrate-tags/
 │   ├── server/
-│   └── test-digest/
+│   ├── test-digest/
+│   └── test-embedding/
 ├── configs/
 ├── internal/
 │   ├── app/
@@ -54,6 +57,7 @@ backend-go/
 │   │   ├── digest/
 │   │   ├── feeds/
 │   │   ├── models/
+│   │   ├── narrative/
 │   │   ├── preferences/
 │   │   ├── summaries/
 │   │   ├── topicanalysis/
@@ -67,8 +71,10 @@ backend-go/
 │       ├── aisettings/
 │       ├── config/
 │       ├── database/
+│       ├── logging/
 │       ├── middleware/
 │       ├── opennotebook/
+│       ├── tracing/
 │       └── ws/
 ```
 
@@ -79,7 +85,10 @@ backend-go/
 - `server/`：HTTP 服务真实入口
 - `migrate-digest/`：digest 配置/表迁移命令
 - `migrate-tags/`：主题标签相关迁移命令
+- `migrate-db/`：数据库迁移命令
+- `migrate-embedding-queue/`：embedding 队列迁移命令
 - `test-digest/`：digest 联调入口
+- `test-embedding/`：embedding 联调入口
 
 ### `internal/app/`
 
@@ -96,7 +105,7 @@ backend-go/
 这是共享基础设施层，不承载具体业务语义。
 
 - `config/`：读取 `configs/config.yaml`
-- `database/`：初始化 SQLite、建表、索引、字段补丁
+- `database/`：初始化 PostgreSQL、建表、索引、字段补丁
 - `logging/`：轻量日志门面，负责把 info/warn 与 error/fatal/panic 分流到 stdout / stderr
 - `middleware/`：Gin 中间件，例如 CORS
 - `ws/`：WebSocket hub，给前端推送异步任务状态
@@ -119,9 +128,10 @@ backend-go/
 - `digest/`：digest 配置、预览、手动运行、导出、定时调度
 - `topictypes/`：主题图谱共享类型和窗口工具
 - `topicextraction/`：摘要/文章标签提取
-- `topicanalysis/`：主题分析任务与分析结果 API
+- `topicanalysis/`：主题分析任务与分析结果 API、embedding 向量化、标签合并、关注标签、抽象标签
 - `topicgraph/`：主题图谱、主题详情、主题相关文章查询
 - `models/`：共享 GORM 模型和部分格式化 helper
+- `narrative/`：叙事摘要生成、按日期查询、历史版本
 
 ### `internal/jobs/`
 
@@ -133,7 +143,10 @@ backend-go/
 - `firecrawl.go`：轮询待抓取文章并执行 Firecrawl
 - `tag_quality_score.go`：每小时重算 `topic_tags.quality_score`，支持统一 scheduler 状态查询和手动触发
 - `preference_update.go`：阅读偏好更新任务
-- `handler.go`：部分 scheduler 状态查询与手动触发 API
+- `blocked_article_recovery.go`：恢复因 Firecrawl 配置变更等原因阻塞的文章
+- `auto_tag_merge.go`：基于 embedding 相似度自动合并相似标签
+- `narrative_summary.go`：基于活跃主题标签生成每日叙事摘要
+- `handler.go`：scheduler 状态查询与手动触发 API
 
 ## 当前主要子系统
 
@@ -168,8 +181,14 @@ digest 现在已经是正式子系统，不是边角工具。
 
 - `topictypes`：共享类型和窗口解析
 - `topicextraction`：从摘要/文章提取 topic tag
-- `topicanalysis`：生成并查询 topic analysis
+- `topicanalysis`：生成并查询 topic analysis，同时承担 embedding 向量化、标签合并、关注标签、抽象标签管理
 - `topicgraph`：返回图谱节点边、详情、相关文章、相关 digest
+
+当前 `topicanalysis` 里的抽象标签整理链路有三层保护，避免重复抽象标签和错误扁平化：
+
+- `processAbstractJudgment` 在创建新 abstract tag 前，会先用临时 semantic embedding 做 shortlist，再让 LLM 判断是否应复用已有同概念 abstract tag
+- `MatchAbstractTagHierarchy` 会遍历多个高相似 abstract 候选；高相似时优先判断“合并还是上下位关系”，而不是默认继续嵌套
+- 新建或复用 abstract tag 并挂上子标签后，会异步执行 `adoptNarrowerAbstractChildren`，主动把更窄的已有 abstract tag 收养进来；如果候选已经有更具体的中间父节点，则保留中间层，只补更宽的父子关系
 
 依赖方向大致是：
 
@@ -177,9 +196,18 @@ digest 现在已经是正式子系统，不是边角工具。
 topictypes
     ↑
     ├── topicgraph
-    ├── topicanalysis
+    ├── topicanalysis (含 embedding、tag merge、watched tags、abstract tags)
     └── topicextraction -> topicanalysis
 ```
+
+### 叙事摘要
+
+叙事摘要（`narrative/`）基于活跃主题标签生成每日叙事摘要。
+
+- `NarrativeService` 负责采集活跃标签相关文章，调用 AI 生成叙事
+- `NarrativeSummaryScheduler` 每天（86400 秒）定时触发
+- 支持按日期查询叙事列表、单条叙事详情树、叙事历史版本
+- 前端通过 `/api/narratives` 接口消费
 
 ## 数据模型重点
 
@@ -236,7 +264,13 @@ topictypes
 - `/api/import-opml` / `/api/export-opml`
 - `/ws`
 
-其中 `topic-graph` 组下面还挂了 `analysis` 子路由，AI 管理则已经扩展到 provider 和 route 级别，而不是只有“摘要设置”一个入口。
+其中 `topic-graph` 组下面还挂了 `analysis` 子路由，AI 管理则已经扩展到 provider 和 route 级别，而不是只有"摘要设置"一个入口。
+
+此外还有以下独立注册的路由组：
+
+- `/api/topic-tags`：关注标签、标签合并预览、抽象标签管理（由 `topicanalysis` 包注册）
+- `/api/embedding`：embedding 配置与队列管理（由 `topicanalysis` 包注册）
+- `/api/narratives`：叙事摘要列表、详情、历史（由 `narrative` 包注册）
 
 ## 具体数据链路示例
 
@@ -336,6 +370,7 @@ topictypes
 4. 前端文章详情支持手动打标签 / 重新打标签，接口为 `POST /api/articles/:article_id/tags`
 	- 手动接口现在只 enqueue 队列并返回 `job_id`
 	- `TagQueue` 完成后通过 WebSocket 广播 `tag_completed`
+	- LLM 提示词明确要求最多返回 `8` 个标签，并按优先级从高到低排序；后端在写入 `article_topic_tags` 前也会只保留前 `8` 个，作为兜底
 5. `TagQueue.Start()` 首次启动失败时不会阻塞应用；它会后台按 30 秒间隔重试最多 10 次
 
 当前正文提取优先级为：

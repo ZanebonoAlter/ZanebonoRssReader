@@ -116,6 +116,15 @@ func TagSummary(summary *models.AISummary, feedName, categoryName string) error 
 		if err := database.DB.Create(&link).Error; err != nil {
 			return err
 		}
+
+		if dbTag.Category == "event" {
+			qs := getEmbeddingQueueService()
+			if qs != nil {
+				if err := qs.Enqueue(dbTag.ID); err != nil {
+					logging.Warnf("Failed to enqueue re-embedding for event tag %d: %v", dbTag.ID, err)
+				}
+			}
+		}
 	}
 
 	return nil
@@ -145,6 +154,7 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 	slug := topictypes.Slugify(tag.Label)
 	category := NormalizeDisplayCategory(tag.Kind, tag.Category)
 	kind := NormalizeTopicKind(tag.Kind, category)
+	logging.Infof("findOrCreateTag: start label=%q slug=%q category=%s source=%s", tag.Label, slug, category, source)
 
 	// Build aliases string for TagMatch
 	aliases := tag.Aliases
@@ -164,6 +174,7 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 			switch matchResult.MatchType {
 			case "exact":
 				if matchResult.ExistingTag != nil {
+					logging.Infof("findOrCreateTag: label=%q category=%s matchType=exact existingID=%d existingLabel=%q", tag.Label, category, matchResult.ExistingTag.ID, matchResult.ExistingTag.Label)
 					existing := matchResult.ExistingTag
 					existing.Label = tag.Label
 					existing.Category = category
@@ -186,17 +197,58 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 
 			case "candidates":
 				candidates := matchResult.Candidates
-				logging.Infof("Batch tag judgment for %q: %d candidates (top similarity %.2f)", tag.Label, len(candidates), matchResult.Similarity)
-				result, judgmentErr := topicanalysis.ExtractAbstractTag(ctx, candidates, tag.Label, category)
-				if judgmentErr != nil || result == nil {
-					logging.Warnf("Tag judgment failed for %q, falling back to new tag creation: %v", tag.Label, judgmentErr)
+				logging.Infof("findOrCreateTag: label=%q category=%s matchType=candidates candidateCount=%d topSimilarity=%.4f", tag.Label, category, len(candidates), matchResult.Similarity)
+				result, judgmentErr := topicanalysis.ExtractAbstractTag(ctx, candidates, tag.Label, category, topicanalysis.WithCaller("findOrCreateTag"))
+				if judgmentErr != nil || result == nil || !result.HasAction() {
+					logging.Infof("findOrCreateTag: label=%q category=%s judgment=no_action err=%v", tag.Label, category, judgmentErr)
+
+					if category == "event" && len(candidates) > 0 && candidates[0].Tag != nil {
+						topSim := candidates[0].Similarity
+						thresholds := es.GetThresholds()
+						if topSim >= thresholds.LowSimilarity {
+							logging.Infof("findOrCreateTag: label=%q category=%s event_fallback: reusing top candidate (sim=%.4f)", tag.Label, category, topSim)
+							existing := candidates[0].Tag
+							existing.Label = tag.Label
+							existing.Category = category
+							existing.Source = source
+							if len(tag.Aliases) > 0 {
+								aJSON, _ := json.Marshal(tag.Aliases)
+								existing.Aliases = string(aJSON)
+							}
+							if tag.Icon != "" {
+								existing.Icon = tag.Icon
+							}
+							existing.Kind = kind
+							if err := database.DB.Save(existing).Error; err != nil {
+								logging.Warnf("Failed to save event fallback tag %d: %v", existing.ID, err)
+							} else {
+								go ensureTagEmbedding(es, existing.ID)
+								go backfillTagDescription(existing.ID, existing.Label, existing.Category, existing.Description, articleContext)
+								return existing, nil
+							}
+						}
+					}
+
 					break
 				}
 
-				if result.Action == topicanalysis.ActionMerge {
-					existing := result.MergeTarget
-					if result.MergeLabel != "" {
-						existing.Label = result.MergeLabel
+				actionType := "none"
+				if result.HasMerge() {
+					actionType = "merge"
+				}
+				if result.HasAbstract() {
+					if actionType == "merge" {
+						actionType = "merge+abstract"
+					} else {
+						actionType = "abstract"
+					}
+				}
+				logging.Infof("findOrCreateTag: label=%q category=%s judgment=%s", tag.Label, category, actionType)
+
+				if result.HasMerge() {
+					existing := result.Merge.Target
+					if result.Merge.Label != "" {
+						existing.Label = result.Merge.Label
 					} else {
 						existing.Label = tag.Label
 					}
@@ -216,31 +268,48 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 					}
 					go ensureTagEmbedding(es, existing.ID)
 					go backfillTagDescription(existing.ID, existing.Label, existing.Category, existing.Description, articleContext)
-					return existing, nil
-				}
 
-				if result.Action == topicanalysis.ActionNone {
-					logging.Infof("Tag judgment: none — tag %q is independent from %d candidates, creating new tag", tag.Label, len(candidates))
-					break
-				}
-
-				for _, c := range candidates {
-					if c.Tag != nil {
-						if delErr := topicanalysis.DeleteTagEmbedding(c.Tag.ID); delErr != nil {
-							logging.Warnf("Failed to delete embedding for child tag %d: %v", c.Tag.ID, delErr)
+					for _, child := range result.MergeChildren {
+						if child.ID != existing.ID {
+							if mergeErr := topicanalysis.MergeTags(child.ID, existing.ID); mergeErr != nil {
+								logging.Warnf("Failed to merge child tag %d into %d: %v", child.ID, existing.ID, mergeErr)
+							}
 						}
 					}
+
+					if !result.HasAbstract() {
+						return existing, nil
+					}
 				}
-				newTag, childErr := createChildOfAbstract(ctx, es, tag, category, kind, source, articleContext, string(aliasesJSON), result.AbstractTag)
-				if childErr != nil {
-					logging.Warnf("Failed to create child of abstract %d: %v", result.AbstractTag.ID, childErr)
-					break
+
+				if result.HasAbstract() {
+					mergeTargetID := uint(0)
+					if result.HasMerge() {
+						mergeTargetID = result.Merge.Target.ID
+					}
+					for _, c := range candidates {
+						if c.Tag != nil && c.Tag.ID != mergeTargetID {
+							if delErr := topicanalysis.DeleteTagEmbedding(c.Tag.ID); delErr != nil {
+								logging.Warnf("Failed to delete embedding for child tag %d: %v", c.Tag.ID, delErr)
+							}
+						}
+					}
+					newTag, childErr := createChildOfAbstract(ctx, es, tag, category, kind, source, articleContext, string(aliasesJSON), result.Abstract.Tag)
+					if childErr != nil {
+						logging.Warnf("Failed to create child of abstract %d: %v", result.Abstract.Tag.ID, childErr)
+						break
+					}
+					return newTag, nil
 				}
-				return newTag, nil
+
+				logging.Infof("findOrCreateTag: label=%q category=%s matchType=no_match creating new tag", tag.Label, category)
 
 			case "no_match":
+				logging.Infof("findOrCreateTag: label=%q category=%s matchType=no_match", tag.Label, category)
 			}
 		}
+	} else {
+		logging.Infof("findOrCreateTag: label=%q category=%s embeddingService=nil fallback=slug_or_create", tag.Label, category)
 	}
 
 	// Fallback: exact slug+category match (when embedding unavailable)
@@ -248,6 +317,7 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 	var dbTag models.TopicTag
 	err := database.DB.Where("slug = ? AND category = ?", slug, category).First(&dbTag).Error
 	if err == nil {
+		logging.Infof("findOrCreateTag: label=%q category=%s fallback=existing_by_slug existingID=%d existingLabel=%q", tag.Label, category, dbTag.ID, dbTag.Label)
 		// Found existing tag - update label and source if needed
 		dbTag.Label = tag.Label
 		dbTag.Category = category
@@ -272,6 +342,7 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 	}
 
 	// Create new tag
+	logging.Infof("findOrCreateTag: label=%q category=%s fallback=create_new", tag.Label, category)
 	newTag := models.TopicTag{
 		Slug:        slug,
 		Label:       tag.Label,
@@ -356,6 +427,7 @@ func backfillTagDescription(tagID uint, label, category, currentDesc, articleCon
 
 // generateTagDescription generates a description for a tag via LLM and updates the database.
 // Runs in a goroutine — never blocks tag creation. Failures are logged and swallowed.
+// Retries up to 3 times on LLM call or parse failure.
 func generateTagDescription(tagID uint, label, category, articleContext string) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -401,24 +473,43 @@ Respond with JSON: {"description": "your answer"}`, label, category, articleCont
 			Required: []string{"description"},
 		},
 		Temperature: func() *float64 { f := 0.3; return &f }(),
+		Metadata: map[string]any{
+			"operation": "tag_description",
+			"tag_id":    tagID,
+			"tag_label": label,
+			"category":  category,
+		},
 	}
 
-	result, err := router.Chat(context.Background(), req)
-	if err != nil {
-		logging.Warnf("Description LLM call failed for tag %d: %v", tagID, err)
+	const maxRetries = 3
+	var desc string
+	var success bool
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		result, err := router.Chat(context.Background(), req)
+		if err != nil {
+			logging.Warnf("Description LLM call failed for tag %d (attempt %d/%d): %v", tagID, attempt, maxRetries, err)
+			continue
+		}
+
+		var parsed struct {
+			Description string `json:"description"`
+		}
+		if err := json.Unmarshal([]byte(result.Content), &parsed); err != nil || parsed.Description == "" {
+			logging.Warnf("Failed to parse description for tag %d (attempt %d/%d)", tagID, attempt, maxRetries)
+			continue
+		}
+
+		desc = parsed.Description
+		success = true
+		break
+	}
+
+	if !success {
+		logging.Warnf("Failed to generate description for tag %d after %d attempts", tagID, maxRetries)
 		return
 	}
 
-	var parsed struct {
-		Description string `json:"description"`
-	}
-	if err := json.Unmarshal([]byte(result.Content), &parsed); err != nil || parsed.Description == "" {
-		logging.Warnf("Failed to parse description for tag %d", tagID)
-		return
-	}
-
-	// Truncate to 500 chars (threat model T-08-01)
-	desc := parsed.Description
 	if len([]rune(desc)) > 500 {
 		desc = string([]rune(desc)[:500])
 	}
@@ -487,38 +578,57 @@ Respond with JSON: {"description": "your answer", "person_attrs": {"country": ".
 			Required: []string{"description", "person_attrs"},
 		},
 		Temperature: func() *float64 { f := 0.3; return &f }(),
+		Metadata: map[string]any{
+			"operation": "tag_description_person",
+			"tag_id":    tagID,
+			"tag_label": label,
+		},
 	}
 
-	result, err := router.Chat(context.Background(), req)
-	if err != nil {
-		logging.Warnf("Person description LLM call failed for tag %d: %v", tagID, err)
+	const maxRetries = 3
+	var desc string
+	var metadataMap map[string]any
+	var success bool
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		result, err := router.Chat(context.Background(), req)
+		if err != nil {
+			logging.Warnf("Person description LLM call failed for tag %d (attempt %d/%d): %v", tagID, attempt, maxRetries, err)
+			continue
+		}
+
+		var parsed struct {
+			Description string `json:"description"`
+			PersonAttrs struct {
+				Country      string   `json:"country"`
+				Organization string   `json:"organization"`
+				Role         string   `json:"role"`
+				Domains      []string `json:"domains"`
+			} `json:"person_attrs"`
+		}
+		if err := json.Unmarshal([]byte(result.Content), &parsed); err != nil || parsed.Description == "" {
+			logging.Warnf("Failed to parse person description for tag %d (attempt %d/%d)", tagID, attempt, maxRetries)
+			continue
+		}
+
+		desc = parsed.Description
+		metadataMap = map[string]any{
+			"country":      parsed.PersonAttrs.Country,
+			"organization": parsed.PersonAttrs.Organization,
+			"role":         parsed.PersonAttrs.Role,
+			"domains":      parsed.PersonAttrs.Domains,
+		}
+		success = true
+		break
+	}
+
+	if !success {
+		logging.Warnf("Failed to generate person description for tag %d after %d attempts", tagID, maxRetries)
 		return
 	}
 
-	var parsed struct {
-		Description string `json:"description"`
-		PersonAttrs struct {
-			Country      string   `json:"country"`
-			Organization string   `json:"organization"`
-			Role         string   `json:"role"`
-			Domains      []string `json:"domains"`
-		} `json:"person_attrs"`
-	}
-	if err := json.Unmarshal([]byte(result.Content), &parsed); err != nil || parsed.Description == "" {
-		logging.Warnf("Failed to parse person description for tag %d", tagID)
-		return
-	}
-
-	desc := parsed.Description
 	if len([]rune(desc)) > 500 {
 		desc = string([]rune(desc)[:500])
-	}
-
-	metadataMap := map[string]any{
-		"country":      parsed.PersonAttrs.Country,
-		"organization": parsed.PersonAttrs.Organization,
-		"role":         parsed.PersonAttrs.Role,
-		"domains":      parsed.PersonAttrs.Domains,
 	}
 
 	if err := database.DB.Model(&models.TopicTag{}).Where("id = ?", tagID).Updates(map[string]any{

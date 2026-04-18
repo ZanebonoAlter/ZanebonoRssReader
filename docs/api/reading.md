@@ -16,15 +16,19 @@
 | `feed_id` | uint | 是 | 订阅源 ID |
 | `session_id` | string | 是 | 会话 ID |
 | `event_type` | string | 是 | open, close, scroll, favorite 等 |
-| `category_id` | uint | 否 | 留空自动填充 |
+| `category_id` | uint* | 否 | 留空自动从 feed 填充 |
 | `scroll_depth` | int | 否 | 滚动深度 |
 | `reading_time` | int | 否 | 秒 |
+
+返回创建的记录。
 
 ### POST /api/reading-behavior/track-batch
 
 ```json
 { "events": [ { ...同 track 格式... }, ... ] }
 ```
+
+返回 `{ "success": true, "message": 5 }`（`message` 为写入条数）。
 
 ### GET /api/reading-behavior/stats
 
@@ -57,8 +61,10 @@
 |------|------|------|
 | `type` | string | `feed`/`category`，留空返回全部 |
 
-按偏好分数降序，含关联 Feed/Category 信息。
+按偏好分数降序，含关联 Feed/Category 信息。自动过滤已删除的 Feed/Category。
 
 ### POST /api/user-preferences/update
 
-后台执行偏好重算。
+后台执行偏好重算。若调度器可用则通过 `TriggerNow()` 触发，否则启动 goroutine 异步执行。
+
+调度器正忙时返回 `409`。

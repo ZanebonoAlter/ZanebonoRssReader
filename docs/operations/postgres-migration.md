@@ -20,7 +20,7 @@
 ## 第一步：启动 PostgreSQL 容器
 
 ```bash
-docker compose -f docker-compose.pgvector.yml up -d
+docker compose up -d
 ```
 
 容器启动后：
@@ -33,14 +33,14 @@ docker compose -f docker-compose.pgvector.yml up -d
 确认容器健康：
 
 ```bash
-docker compose -f docker-compose.pgvector.yml ps
+docker compose ps
 # 状态应为 healthy
 ```
 
 也可手动连接确认：
 
 ```bash
-docker exec -it my-robot-pgvector psql -U postgres -d rss_reader -c "SELECT extname FROM pg_extension WHERE extname = 'vector';"
+docker exec -it zanebono-rssreader-pgvector psql -U postgres -d rss_reader -c "SELECT extname FROM pg_extension WHERE extname = 'vector';"
 ```
 
 ## 第二步：配置后端连接
@@ -72,7 +72,7 @@ go run cmd/server/main.go
 | 序号 | 版本号 | 说明 |
 |------|--------|------|
 | 1 | `20260403_0001` | 启用 pgvector 扩展（`CREATE EXTENSION IF NOT EXISTS vector`） |
-| 2 | `20260403_0002` | 创建全部基础表结构（GORM AutoMigrate 20 个模型表 + 列类型调整 + 10 个性能索引） |
+| 2 | `20260403_0002` | 创建全部基础表结构（GORM AutoMigrate 21 个模型表 + 列类型调整 + 10 个性能索引） |
 | 3 | `20260403_0003` | 为 `topic_tag_embeddings` 表添加 `embedding vector(1536)` 列 |
 | 4 | `20260413_0001` | 为 `topic_tag_embeddings.embedding` 创建 HNSW 向量索引 |
 | 5 | `20260413_0002` | 创建 `embedding_config` 表并写入默认配置 |
@@ -81,7 +81,8 @@ go run cmd/server/main.go
 | 8 | `20260413_0005` | 创建 `merge_reembedding_queues` 表 |
 | 9 | `20260414_0001` | 为 `topic_tags` 增加 `description` 字段 |
 | 10 | `20260414_0002` | 创建 `topic_tag_relations` 表 |
-| 11 | `20260414_0003` | 为 `articles` 增加 feed summary 标记字段和索引，避免重复聚合旧文章 |
+| 11 | `20260414_0003` | 为 `articles` 增加 `feed_summary_id`、`feed_summary_generated_at` 及对应索引 |
+| 12 | `20260415_0001` | 为 `topic_tags` 增加 `is_watched`、`watched_at` 字段 |
 
 迁移记录写入 `schema_migrations` 表，每个版本只会执行一次。
 
@@ -189,12 +190,12 @@ go run cmd/server/main.go
 4. PostgreSQL 容器可停止或保留用于事后分析
 
 ```bash
-docker compose -f docker-compose.pgvector.yml down
+docker compose down
 ```
 
 > SQLite 数据库文件在迁移过程中只读不写，始终保留完整备份。
 
-## 迁移涉及的 23 张表
+## 迁移涉及的 25 张表
 
 按导入顺序：
 
@@ -224,23 +225,26 @@ docker compose -f docker-compose.pgvector.yml down
 | `digest_configs` | 摘要配置（可选） |
 | `topic_analysis_jobs` | 主题分析任务（可选） |
 
+> 迁移后新增的表（如 `topic_tag_relations`、`embedding_config`、`embedding_queues`、`merge_reembedding_queues`、`narrative_summaries`）不涉及 SQLite 数据导入，由版本化迁移自动创建。
+
 ## 关键代码位置
 
 | 文件 | 职责 |
 |------|------|
-| `backend-go/internal/platform/database/db.go` | 数据库初始化入口，按驱动分发连接 |
+| `backend-go/internal/platform/database/db.go` | 数据库初始化入口，连接 PostgreSQL |
 | `backend-go/internal/platform/database/migrator.go` | 版本化迁移框架，`schema_migrations` 追踪表 |
-| `backend-go/internal/platform/database/postgres_migrations.go` | 3 个 PostgreSQL 迁移注册 |
+| `backend-go/internal/platform/database/postgres_migrations.go` | 12 个 PostgreSQL 迁移注册 |
 | `backend-go/internal/platform/database/bootstrap_postgres.go` | Postgres schema 引导：AutoMigrate + 索引 |
 | `backend-go/internal/platform/database/connect_postgres.go` | PostgreSQL 连接与连接池配置 |
-| `backend-go/internal/platform/database/datamigrate/types.go` | 数据迁移类型定义和 23 张表规格 |
+| `backend-go/internal/platform/database/datamigrate/types.go` | 数据迁移类型定义和表规格 |
 | `backend-go/cmd/migrate-db/main.go` | 数据迁移 CLI 工具入口 |
-| `docker-compose.pgvector.yml` | PostgreSQL 容器定义 |
+| `docker-compose.yml` | PostgreSQL 容器定义 |
 
 ## 注意事项
 
 - **停机操作**：数据迁移期间后端必须停机，否则会出现数据不一致
 - **不可重复执行**：`execute` 模式会先 TRUNCATE 目标表，重复运行会清空已有数据
 - **pgvector 版本**：容器镜像为 `pgvector/pgvector:pg18-trixie`，基于 PostgreSQL 18
-- **连接池**：PostgreSQL 默认 5 空闲 / 25 最大连接，可在 `config.yaml` 中调整
+- **连接池**：PostgreSQL 连接池参数可在 `config.yaml` 中配置（`max_idle_conns`、`max_open_conns`、`conn_max_lifetime_minutes`、`conn_max_idle_time_minutes`）
 - **环境变量优先**：`DATABASE_DRIVER` 和 `DATABASE_DSN` 环境变量会覆盖配置文件
+- **容器名称**：docker-compose 中 PostgreSQL 容器名为 `zanebono-rssreader-pgvector`

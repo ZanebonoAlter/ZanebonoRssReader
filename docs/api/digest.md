@@ -56,15 +56,35 @@
 | `obsidian_daily_digest` | bool | 是 | 导出日报 |
 | `obsidian_weekly_digest` | bool | 是 | 导出周报 |
 
+启用时校验时间格式和星期值。保存后自动重载调度器。返回更新后的完整配置。
+
 ### GET /api/digest/status
 
-Digest 调度器运行状态。
+优先从 Digest 调度器获取实时状态；否则返回配置基础信息：
+
+```json
+{
+  "success": true,
+  "data": {
+    "running": false,
+    "daily_enabled": true,
+    "weekly_enabled": false,
+    "daily_time": "09:00",
+    "weekly_day": 1,
+    "weekly_time": "09:00",
+    "next_runs": [],
+    "active_jobs": 0
+  }
+}
+```
 
 ### GET /api/digest/preview/:type
 
 `type`：`daily` 或 `weekly`。查询参数：`date`（`YYYY-MM-DD`，可选）。
 
-返回 `type`, `title`, `period_label`, `generated_at`, `anchor_date`, `category_count`, `summary_count`, `markdown`, `categories` 等。
+返回 `type`, `title`, `period_label`, `generated_at`, `anchor_date`, `category_count`, `summary_count`, `markdown`, `categories`, `default_category_id`, `default_summary_id` 等。
+
+`categories` 包含每条 summary 的 `topics`（标签信息）和 `aggregated_tags`（聚合标签）。
 
 ### POST /api/digest/run/:type
 
@@ -85,7 +105,24 @@ Digest 调度器运行状态。
 
 ### GET /api/digest/open-notebook/config
 
-Open Notebook 集成配置。
+Open Notebook 集成配置：
+
+```json
+{
+  "success": true,
+  "data": {
+    "enabled": false,
+    "base_url": "http://192.168.5.27:5055",
+    "api_key": "",
+    "model": "",
+    "target_notebook": "",
+    "prompt_mode": "digest_summary",
+    "auto_send_daily": false,
+    "auto_send_weekly": false,
+    "export_back_to_obsidian": false
+  }
+}
+```
 
 ### PUT /api/digest/open-notebook/config
 
@@ -101,9 +138,13 @@ Open Notebook 集成配置。
 | `auto_send_weekly` | bool | 是 | 自动发送周报 |
 | `export_back_to_obsidian` | bool | 是 | 导出到 Obsidian |
 
+保存后返回更新后的配置。
+
 ### POST /api/digest/open-notebook/:type
 
 手动发送到 Open Notebook。`type`：`daily`/`weekly`。查询参数：`date`（可选）。
+
+返回 `digest_type`, `anchor_date`, `source_markdown`, `summary_markdown`, `remote_id`, `remote_url`。
 
 ### POST /api/digest/test-feishu
 

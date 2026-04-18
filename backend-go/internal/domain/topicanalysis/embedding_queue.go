@@ -59,11 +59,25 @@ func (s *EmbeddingQueueService) Enqueue(tagID uint) error {
 	}
 
 	var existing models.TopicTagEmbedding
-	err = s.db.Where("topic_tag_id = ?", tagID).First(&existing).Error
+	err = s.db.Where("topic_tag_id = ? AND embedding_type = ?", tagID, EmbeddingTypeIdentity).First(&existing).Error
 	if err == nil {
-		currentHash := hashText(buildTagEmbeddingText(&tag))
+		currentHash := hashText(EmbeddingTypeIdentity + "\n" + buildTagEmbeddingText(&tag, EmbeddingTypeIdentity))
 		if existing.TextHash == currentHash {
-			return nil
+			var semanticExisting models.TopicTagEmbedding
+			semErr := s.db.Where("topic_tag_id = ? AND embedding_type = ?", tagID, EmbeddingTypeSemantic).First(&semanticExisting).Error
+			if semErr == nil {
+				var semOpts []EmbeddingTextOptions
+				if tag.Category == "event" {
+					titles := GetTagContextTitles(tag.ID, 5)
+					if len(titles) > 0 {
+						semOpts = append(semOpts, EmbeddingTextOptions{ContextTitles: titles})
+					}
+				}
+				semHash := hashText(EmbeddingTypeSemantic + "\n" + buildTagEmbeddingText(&tag, EmbeddingTypeSemantic, semOpts...))
+				if semanticExisting.TextHash == semHash {
+					return nil
+				}
+			}
 		}
 	}
 
@@ -241,14 +255,32 @@ func (s *EmbeddingQueueService) processNext() {
 
 	// Generate and save embedding
 	ctx := context.Background()
-	embedding, err := s.embedding.GenerateEmbedding(ctx, &tag)
+	identityEmb, err := s.embedding.GenerateEmbedding(ctx, &tag, EmbeddingTypeIdentity)
 	if err != nil {
-		s.markFailed(task.ID, "failed to generate embedding: "+err.Error())
+		s.markFailed(task.ID, "failed to generate identity embedding: "+err.Error())
 		return
 	}
 
-	if err := s.embedding.SaveEmbedding(embedding); err != nil {
-		s.markFailed(task.ID, "failed to save embedding: "+err.Error())
+	if err := s.embedding.SaveEmbedding(identityEmb); err != nil {
+		s.markFailed(task.ID, "failed to save identity embedding: "+err.Error())
+		return
+	}
+
+	var semOpts []EmbeddingTextOptions
+	if tag.Category == "event" {
+		titles := GetTagContextTitles(tag.ID, 5)
+		if len(titles) > 0 {
+			semOpts = append(semOpts, EmbeddingTextOptions{ContextTitles: titles})
+		}
+	}
+	semanticEmb, semErr := s.embedding.GenerateEmbedding(ctx, &tag, EmbeddingTypeSemantic, semOpts...)
+	if semErr != nil {
+		s.markFailed(task.ID, "failed to generate semantic embedding: "+semErr.Error())
+		return
+	}
+
+	if err := s.embedding.SaveEmbedding(semanticEmb); err != nil {
+		s.markFailed(task.ID, "failed to save semantic embedding: "+semErr.Error())
 		return
 	}
 

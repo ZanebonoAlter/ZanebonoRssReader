@@ -237,13 +237,29 @@ func (s *AbstractTagUpdateQueueService) refreshAbstractTag(abstractTagID uint) e
 			}()))
 	}
 
-	emb, err := s.embedding.GenerateEmbedding(context.Background(), &tag)
+	emb, err := s.embedding.GenerateEmbedding(context.Background(), &tag, EmbeddingTypeIdentity)
 	if err != nil {
 		return fmt.Errorf("generate embedding for abstract tag %d: %w", abstractTagID, err)
 	}
 	emb.TopicTagID = abstractTagID
 	if err := s.embedding.SaveEmbedding(emb); err != nil {
 		return fmt.Errorf("save embedding for abstract tag %d: %w", abstractTagID, err)
+	}
+
+	var semOpts []EmbeddingTextOptions
+	if tag.Category == "event" {
+		titles := GetTagContextTitles(tag.ID, 5)
+		if len(titles) > 0 {
+			semOpts = append(semOpts, EmbeddingTextOptions{ContextTitles: titles})
+		}
+	}
+	semanticEmb, semErr := s.embedding.GenerateEmbedding(context.Background(), &tag, EmbeddingTypeSemantic, semOpts...)
+	if semErr != nil {
+		return fmt.Errorf("generate semantic embedding for abstract tag %d: %w", abstractTagID, semErr)
+	}
+	semanticEmb.TopicTagID = abstractTagID
+	if err := s.embedding.SaveEmbedding(semanticEmb); err != nil {
+		return fmt.Errorf("save semantic embedding for abstract tag %d: %w", abstractTagID, err)
 	}
 
 	go MatchAbstractTagHierarchy(context.Background(), abstractTagID)
@@ -400,6 +416,9 @@ Respond with JSON: {"label": "your answer", "description": "your answer"}`,
 
 func EnqueueAbstractTagUpdate(abstractTagID uint, triggerReason string) {
 	if abstractTagID == 0 {
+		return
+	}
+	if database.DB == nil {
 		return
 	}
 	svc := getAbstractTagUpdateQueueService()

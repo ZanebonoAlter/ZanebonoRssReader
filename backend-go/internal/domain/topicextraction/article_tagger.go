@@ -12,6 +12,8 @@ import (
 	"my-robot-backend/internal/platform/logging"
 )
 
+const maxArticleTags = 8
+
 func FeedCategoryName(feed models.Feed) string {
 	if feed.Category != nil && strings.TrimSpace(feed.Category.Name) != "" {
 		return feed.Category.Name
@@ -95,6 +97,11 @@ func tagArticle(article *models.Article, feedName, categoryName string, options 
 		return nil
 	}
 
+	tags = limitArticleTags(tags)
+	if len(tags) == 0 {
+		return nil
+	}
+
 	// Build article context for description generation
 	articleContext := ""
 	if article.Title != "" {
@@ -137,9 +144,25 @@ func tagArticle(article *models.Article, feedName, categoryName string, options 
 		if err := database.DB.Create(&link).Error; err != nil {
 			return err
 		}
+
+		if dbTag.Category == "event" {
+			qs := getEmbeddingQueueService()
+			if qs != nil {
+				if err := qs.Enqueue(dbTag.ID); err != nil {
+					logging.Warnf("Failed to enqueue re-embedding for event tag %d: %v", dbTag.ID, err)
+				}
+			}
+		}
 	}
 
 	return nil
+}
+
+func limitArticleTags(tags []topictypes.TopicTag) []topictypes.TopicTag {
+	if len(tags) <= maxArticleTags {
+		return tags
+	}
+	return tags[:maxArticleTags]
 }
 
 const maxSummaryRunesForTagging = 2000

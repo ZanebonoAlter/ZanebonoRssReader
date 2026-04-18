@@ -4,7 +4,7 @@
 
 ## 当前结论
 
-- 后端已经接入 OpenTelemetry，Span 会落到 SQLite 的 `otel_spans` 表
+- 后端已经接入 OpenTelemetry，Span 会落到 PostgreSQL 的 `otel_spans` 表
 - HTTP 请求入口已接入 `otelgin`，调度器入口已接入手动 root span
 - 第一版 `go-instrument` 已经把一批 exported 方法改成自动创建 span
 - 业务语义型 attributes / events 目前只在少量手动 span 中补充，自动注入的方法大多还是基础 span
@@ -18,7 +18,7 @@
 | HTTP 中间件 | `otelgin` | 为 Gin 请求自动创建 `SERVER` span |
 | 自动注入 | `go-instrument` 生成后的代码已提交到仓库 | 当前不是运行时 agent，而是直接把生成代码写回 `.go` 文件 |
 | Context 传播 | W3C Trace Context | 前端请求会带 `traceparent`，后端全局注册 `TraceContext + Baggage` propagator |
-| Exporter | `SQLiteSpanExporter` | 自定义 exporter，直接写 SQLite |
+| Exporter | `SQLiteSpanExporter`（名称保留历史，实际写入 PostgreSQL） | 自定义 exporter，通过 GORM 写入 PostgreSQL |
 | 调试输出 | `stdouttrace` | `Config.Debug=true` 时额外输出到控制台 |
 
 ## 初始化与入口
@@ -89,13 +89,15 @@ tracing.TraceSchedulerTick("auto_refresh", "cron", func(ctx context.Context) {
 })
 ```
 
-当前已接入的 scheduler 入口共 5 个：
+当前已接入的 scheduler 入口共 7 个：
 
 - `auto_refresh`
 - `auto_summary`
 - `firecrawl`
 - `content_completion`
 - `preference_update`
+- `auto_tag_merge`
+- `narrative_summary`
 
 这类 span 的特点：
 
@@ -162,7 +164,7 @@ tracing.TraceSchedulerTick("auto_refresh", "cron", func(ctx context.Context) {
 
 ## 数据落库模型
 
-所有 span 目前写入 SQLite 表 `otel_spans`。
+所有 span 目前写入 PostgreSQL 表 `otel_spans`（通过 GORM）。
 
 核心字段如下：
 
@@ -219,7 +221,7 @@ tracing.TraceSchedulerTick("auto_refresh", "cron", func(ctx context.Context) {
 - `BufferSize`
 - `Debug`
 
-清理策略由 `SQLiteSpanExporter.cleanupLoop()` 负责：
+清理策略由 `SQLiteSpanExporter.cleanupLoop()` 负责（名称保留历史，实际通过 GORM 操作 PostgreSQL）：
 
 - 进程启动后起一个后台 goroutine
 - 每 24 小时执行一次清理
@@ -288,7 +290,7 @@ tracing.TraceSchedulerTick("auto_refresh", "cron", func(ctx context.Context) {
 |------|------|
 | `config.go` | tracing 默认配置 |
 | `model.go` | `otel_spans` 表结构与 JSON 序列化辅助 |
-| `exporter.go` | SQLite exporter、入库、过期清理 |
+| `exporter.go` | `SQLiteSpanExporter`（名称保留历史，实际写入 PostgreSQL）、入库、过期清理 |
 | `provider.go` | 初始化全局 `TracerProvider` 与 propagator |
 | `helpers.go` | `Tracer`、`StartSpan`、`GoWithTrace` 等工具 |
 | `scheduler.go` | scheduler / async 的包装入口 |

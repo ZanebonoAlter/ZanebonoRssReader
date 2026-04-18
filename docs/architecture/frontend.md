@@ -1,4 +1,4 @@
-﻿# 前端架构
+# 前端架构
 
 ## 技术栈
 
@@ -51,7 +51,7 @@ front/
 - `features/digest`：日报、周报、详情页、配置抽屉
 - `features/feeds`：自动刷新和刷新轮询
 - `features/preferences`：阅读行为埋点与偏好相关逻辑
-- `features/topic-graph`：主题图谱、热点标签、话题详情、analysis、timeline
+- `features/topic-graph`：主题图谱、热点标签、话题详情、analysis、timeline、标签层级（TagHierarchy）、标签合并预览、叙事面板
 
 这套结构已经替代旧的“业务都堆在 `components/`”的方式。新功能优先进入 `features/*`。
 
@@ -77,6 +77,14 @@ front/
 - `reading_behavior.ts`
 - `firecrawl.ts`
 - `scheduler.ts`
+- `aiAdmin.ts`
+- `topicGraph.ts`
+- `abstractTags.ts`
+- `embeddingConfig.ts`
+- `embeddingQueue.ts`
+- `mergeReembeddingQueue.ts`
+- `tagMergePreview.ts`
+- `watchedTags.ts`
 
 ### Store 层
 

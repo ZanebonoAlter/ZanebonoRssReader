@@ -6,44 +6,111 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
+
 	"my-robot-backend/internal/domain/models"
+	"my-robot-backend/internal/platform/database"
 )
+
+func setupEmbeddingTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+
+	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+
+	if err := db.Exec("PRAGMA foreign_keys = ON").Error; err != nil {
+		t.Fatalf("enable foreign keys: %v", err)
+	}
+
+	database.DB = db
+
+	if err := db.AutoMigrate(&models.TopicTag{}, &models.TopicTagEmbedding{}); err != nil {
+		t.Fatalf("migrate test tables: %v", err)
+	}
+
+	return db
+}
 
 func TestBuildTagEmbeddingText(t *testing.T) {
 	tests := []struct {
-		name     string
-		tag      *models.TopicTag
-		expected string
+		name          string
+		tag           *models.TopicTag
+		embeddingType string
+		expected      string
 	}{
 		{
-			name:     "label only",
-			tag:      &models.TopicTag{Label: "AI", Category: "event"},
-			expected: "AI event",
+			name:          "identity label only",
+			tag:           &models.TopicTag{Label: "AI", Category: "event"},
+			embeddingType: EmbeddingTypeIdentity,
+			expected:      "AI event",
 		},
 		{
-			name:     "with JSON aliases",
-			tag:      &models.TopicTag{Label: "AI", Category: "event", Aliases: `["Artificial Intelligence","Machine Learning"]`},
-			expected: "AI Artificial Intelligence Machine Learning event",
+			name:          "identity excludes description",
+			tag:           &models.TopicTag{Label: "AI", Category: "event", Description: "Artificial Intelligence"},
+			embeddingType: EmbeddingTypeIdentity,
+			expected:      "AI event",
 		},
 		{
-			name:     "with comma-separated aliases",
-			tag:      &models.TopicTag{Label: "AI", Category: "event", Aliases: "Artificial Intelligence, ML"},
-			expected: "AI Artificial Intelligence, ML event",
+			name:          "semantic includes description",
+			tag:           &models.TopicTag{Label: "AI", Category: "event", Description: "Artificial Intelligence"},
+			embeddingType: EmbeddingTypeSemantic,
+			expected:      "AI. Artificial Intelligence event",
 		},
 		{
-			name:     "empty aliases",
-			tag:      &models.TopicTag{Label: "Go", Category: "technology"},
-			expected: "Go technology",
+			name:          "identity with JSON aliases",
+			tag:           &models.TopicTag{Label: "AI", Category: "event", Aliases: `["Artificial Intelligence","Machine Learning"]`},
+			embeddingType: EmbeddingTypeIdentity,
+			expected:      "AI Artificial Intelligence Machine Learning event",
+		},
+		{
+			name:          "identity with comma-separated aliases",
+			tag:           &models.TopicTag{Label: "AI", Category: "event", Aliases: "Artificial Intelligence, ML"},
+			embeddingType: EmbeddingTypeIdentity,
+			expected:      "AI Artificial Intelligence, ML event",
+		},
+		{
+			name:          "identity empty aliases",
+			tag:           &models.TopicTag{Label: "Go", Category: "technology"},
+			embeddingType: EmbeddingTypeIdentity,
+			expected:      "Go technology",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := buildTagEmbeddingText(tt.tag)
+			result := buildTagEmbeddingText(tt.tag, tt.embeddingType)
 			if result != tt.expected {
 				t.Errorf("buildTagEmbeddingText() = %q, want %q", result, tt.expected)
 			}
 		})
+	}
+}
+
+func TestBuildTagEmbeddingTextIdentityVsSemantic(t *testing.T) {
+	tag := &models.TopicTag{
+		Label:       "ChatGPT",
+		Category:    "keyword",
+		Aliases:     `["GPT-4"]`,
+		Description: "OpenAI的对话式AI助手",
+	}
+
+	identity := buildTagEmbeddingText(tag, EmbeddingTypeIdentity)
+	semantic := buildTagEmbeddingText(tag, EmbeddingTypeSemantic)
+
+	if strings.Contains(identity, "OpenAI") {
+		t.Errorf("identity text should not contain description, got %q", identity)
+	}
+	if !strings.Contains(semantic, "OpenAI") {
+		t.Errorf("semantic text should contain description, got %q", semantic)
+	}
+
+	identityHash := hashText(EmbeddingTypeIdentity + "\n" + identity)
+	semanticHash := hashText(EmbeddingTypeSemantic + "\n" + semantic)
+	if identityHash == semanticHash {
+		t.Errorf("identity and semantic hashes should differ for same tag")
 	}
 }
 
@@ -90,6 +157,45 @@ func TestHashTextDeterministic(t *testing.T) {
 	c := hashText("different input")
 	if a == c {
 		t.Errorf("hashText collision for different inputs")
+	}
+}
+
+func TestBuildTagEmbeddingTextWithContextTitles(t *testing.T) {
+	tag := &models.TopicTag{
+		Label:       "伊朗袭击霍尔木兹海峡船只",
+		Category:    "event",
+		Description: "指伊朗在霍尔木兹海峡对多艘船只发动的三次袭击事件",
+	}
+
+	text := buildTagEmbeddingText(tag, EmbeddingTypeSemantic)
+	if strings.Contains(text, "相关报道") {
+		t.Errorf("without opts, should not contain context marker, got %q", text)
+	}
+
+	text = buildTagEmbeddingText(tag, EmbeddingTypeSemantic, EmbeddingTextOptions{
+		ContextTitles: []string{"伊朗在霍尔木兹海峡的军事行动", "霍尔木兹海峡局势升级"},
+	})
+	if !strings.Contains(text, "相关报道") {
+		t.Errorf("with opts, should contain context marker, got %q", text)
+	}
+	if !strings.Contains(text, "伊朗在霍尔木兹海峡的军事行动") {
+		t.Errorf("should contain first title, got %q", text)
+	}
+
+	tag.Category = "person"
+	text = buildTagEmbeddingText(tag, EmbeddingTypeSemantic, EmbeddingTextOptions{
+		ContextTitles: []string{"some title"},
+	})
+	if strings.Contains(text, "相关报道") {
+		t.Errorf("non-event should not include context even with opts, got %q", text)
+	}
+
+	tag.Category = "event"
+	text = buildTagEmbeddingText(tag, EmbeddingTypeIdentity, EmbeddingTextOptions{
+		ContextTitles: []string{"some title"},
+	})
+	if strings.Contains(text, "相关报道") {
+		t.Errorf("identity embedding should not include context, got %q", text)
 	}
 }
 
@@ -204,4 +310,45 @@ func TestGenerateEmbeddingBuildsCorrectDimension(t *testing.T) {
 	}
 
 	_ = len(pgVec)
+}
+
+func TestSaveEmbeddingReturnsTagNotFoundWhenParentDeleted(t *testing.T) {
+	db := setupEmbeddingTestDB(t)
+	service := NewEmbeddingService()
+
+	tag := models.TopicTag{
+		Slug:     "deleted-tag",
+		Label:    "Deleted Tag",
+		Category: models.TagCategoryKeyword,
+		Status:   "active",
+	}
+	if err := db.Create(&tag).Error; err != nil {
+		t.Fatalf("create tag: %v", err)
+	}
+
+	if err := db.Delete(&tag).Error; err != nil {
+		t.Fatalf("delete tag: %v", err)
+	}
+
+	err := service.SaveEmbedding(&models.TopicTagEmbedding{
+		TopicTagID:   tag.ID,
+		EmbeddingType: EmbeddingTypeIdentity,
+		Vector:       "[0.1,0.2]",
+		Model:        "test-model",
+		TextHash:     "abc123",
+	})
+	if err == nil {
+		t.Fatal("expected missing parent tag error, got nil")
+	}
+	if err != ErrTopicTagNotFound {
+		t.Fatalf("expected ErrTopicTagNotFound, got %v", err)
+	}
+
+	var count int64
+	if err := db.Model(&models.TopicTagEmbedding{}).Count(&count).Error; err != nil {
+		t.Fatalf("count embeddings: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("embedding count = %d, want 0", count)
+	}
 }

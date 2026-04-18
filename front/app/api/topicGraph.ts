@@ -262,7 +262,7 @@ export function useTopicGraphApi() {
       }))
     },
 
-    async getTopicDetail(slug: string, type: TopicGraphType, date?: string, filters?: TopicGraphFilters) {
+    async getTopicDetail(slug: string, type?: TopicGraphType, date?: string, filters?: TopicGraphFilters) {
       return apiClient.get<TopicGraphDetailPayload>(withQuery(`/topic-graph/topic/${slug}`, {
         type,
         date,
@@ -316,7 +316,7 @@ export function useTopicGraphApi() {
       }))
     },
 
-    async getDigestsByArticleTag(slug: string, type: TopicGraphType, date?: string, limit?: number) {
+    async getDigestsByArticleTag(slug: string, type?: TopicGraphType, date?: string, limit?: number) {
       return apiClient.get<HotspotDigestsResponse>(withQuery(`/topic-graph/tag/${slug}/digests`, {
         type,
         date,
@@ -342,7 +342,7 @@ export function useTopicGraphApi() {
       )
     },
 
-    async getPendingArticlesByTag(slug: string, type: TopicGraphType, date?: string) {
+    async getPendingArticlesByTag(slug: string, type?: TopicGraphType, date?: string) {
       return apiClient.get<PendingArticlesResponse>(withQuery(`/topic-graph/tag/${slug}/pending-articles`, {
         type,
         date,
@@ -364,4 +364,50 @@ export function useTopicGraphApi() {
       })
     },
   }
+}
+
+export interface NarrativeItem {
+  id: number
+  title: string
+  summary: string
+  status: 'emerging' | 'continuing' | 'splitting' | 'merging' | 'ending'
+  period: string
+  period_date: string
+  generation: number
+  parent_ids: number[]
+  related_tags: { id: number; slug: string; label: string; category: TopicCategory; kind?: TopicKind }[]
+  child_ids: number[]
+}
+
+export interface NarrativeTimelineDay {
+  date: string
+  narratives: NarrativeItem[]
+}
+
+export function useNarrativeApi() {
+  const getNarratives = async (date: string) => {
+    return apiClient.get<NarrativeItem[]>(
+      `/narratives?date=${date}`
+    )
+  }
+
+  const getNarrativeTimeline = async (date: string, days = 7) => {
+    return apiClient.get<NarrativeTimelineDay[]>(
+      `/narratives/timeline?date=${date}&days=${days}`
+    )
+  }
+
+  const getNarrativeHistory = async (id: number) => {
+    return apiClient.get<NarrativeItem[]>(
+      `/narratives/${id}/history`
+    )
+  }
+
+  const deleteNarratives = async (date: string) => {
+    return apiClient.delete<{ deleted: number }>(
+      `/narratives?date=${date}`
+    )
+  }
+
+  return { getNarratives, getNarrativeTimeline, getNarrativeHistory, deleteNarratives }
 }

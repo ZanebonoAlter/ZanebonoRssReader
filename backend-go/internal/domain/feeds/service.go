@@ -116,7 +116,7 @@ func (s *FeedService) RefreshFeed(ctx context.Context, feedID uint) (err error) 
 		}
 	}
 
-	s.cleanupOldArticles(&feed)
+	s.CleanupOldArticles(&feed)
 
 	if err := database.DB.Save(&feed).Error; err != nil {
 		return err
@@ -146,11 +146,19 @@ func (s *FeedService) updateFeedError(feed *models.Feed, err error) {
 	database.DB.Save(feed)
 }
 
-func (s *FeedService) cleanupOldArticles(feed *models.Feed) {
+func (s *FeedService) CleanupOldArticles(feed *models.Feed) {
+	maxArticles := feed.MaxArticles
+	if maxArticles <= 0 {
+		maxArticles = 100
+	}
+
 	var articleCount int64
 	database.DB.Model(&models.Article{}).Where("feed_id = ?", feed.ID).Count(&articleCount)
 
-	if int(articleCount) <= feed.MaxArticles {
+	logging.Infof("[cleanup] feed %d: max=%d, current=%d", feed.ID, maxArticles, articleCount)
+
+	if int(articleCount) <= maxArticles {
+		logging.Infof("[cleanup] feed %d: skip, article count within limit", feed.ID)
 		return
 	}
 
@@ -170,31 +178,31 @@ func (s *FeedService) cleanupOldArticles(feed *models.Feed) {
 	candidates := make([]uint, 0)
 
 	for _, a := range allArticles {
-		isActive := a.FirecrawlStatus == "pending" || a.FirecrawlStatus == "processing" ||
-			a.SummaryStatus == "incomplete" || a.SummaryStatus == "pending"
-
-		if a.Favorite || isActive {
+		if a.Favorite {
 			keepIDs = append(keepIDs, a.ID)
 		} else {
 			candidates = append(candidates, a.ID)
 		}
 	}
 
-	remaining := feed.MaxArticles - len(keepIDs)
-	if remaining > 0 {
-		keepFromCandidates := candidates
-		if len(candidates) > remaining {
-			keepFromCandidates = candidates[:remaining]
+	logging.Infof("[cleanup] feed %d: keep=%d (favorite), candidates=%d", feed.ID, len(keepIDs), len(candidates))
+
+	remaining := maxArticles - len(keepIDs)
+	if len(candidates) > 0 {
+		toDelete := candidates
+		if remaining > 0 && len(candidates) > remaining {
+			keepFromCandidates := candidates[:remaining]
+			keepIDs = append(keepIDs, keepFromCandidates...)
+			toDelete = candidates[remaining:]
 		}
-		keepIDs = append(keepIDs, keepFromCandidates...)
+		if len(toDelete) > 0 {
+			logging.Infof("[cleanup] feed %d: deleting %d articles, IDs=%v", feed.ID, len(toDelete), toDelete)
+			database.DB.Where("article_id IN (SELECT id FROM articles WHERE feed_id = ? AND id IN ?)", feed.ID, toDelete).Delete(&models.ReadingBehavior{})
+			database.DB.Where("feed_id = ? AND id IN ?", feed.ID, toDelete).Delete(&models.Article{})
+		} else {
+			logging.Infof("[cleanup] feed %d: no articles to delete", feed.ID)
+		}
 	}
-
-	if len(keepIDs) == 0 {
-		return
-	}
-
-	database.DB.Where("article_id IN (SELECT id FROM articles WHERE feed_id = ? AND id NOT IN ?)", feed.ID, keepIDs).Delete(&models.ReadingBehavior{})
-	database.DB.Where("feed_id = ? AND id NOT IN ?", feed.ID, keepIDs).Delete(&models.Article{})
 }
 
 func (s *FeedService) FetchFeedPreview(feedURL string) (title, description string, err error) {
@@ -203,15 +211,16 @@ func (s *FeedService) FetchFeedPreview(feedURL string) (title, description strin
 
 func (s *FeedService) buildArticleFromEntry(feed models.Feed, entry ParsedEntry) models.Article {
 	article := models.Article{
-		FeedID:        feed.ID,
-		Title:         entry.Title,
-		Description:   entry.Description,
-		Content:       entry.Content,
-		Link:          entry.Link,
-		ImageURL:      entry.ImageURL,
-		PubDate:       entry.PubDate,
-		Author:        entry.Author,
-		SummaryStatus: "complete",
+		FeedID:          feed.ID,
+		Title:           entry.Title,
+		Description:     entry.Description,
+		Content:         entry.Content,
+		Link:            entry.Link,
+		ImageURL:        entry.ImageURL,
+		PubDate:         entry.PubDate,
+		Author:          entry.Author,
+		SummaryStatus:   "complete",
+		FirecrawlStatus: "complete",
 	}
 
 	if feed.FirecrawlEnabled {
@@ -220,7 +229,6 @@ func (s *FeedService) buildArticleFromEntry(feed models.Feed, entry ParsedEntry)
 			article.SummaryStatus = "incomplete"
 		}
 	} else if feed.ArticleSummaryEnabled {
-		// STAT-03: 只开启摘要不开启Firecrawl时，设置为pending等待手动触发摘要
 		article.SummaryStatus = "pending"
 	}
 

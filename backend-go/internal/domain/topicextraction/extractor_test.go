@@ -1,6 +1,7 @@
 package topicextraction
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -124,6 +125,13 @@ func TestParseExtractedTagsWithUnescapedQuotes(t *testing.T) {
 	parsed, err := parseExtractedTags(input)
 	require.NoError(t, err, "valid JSON should parse fine")
 	require.Len(t, parsed, 2)
+}
+
+func TestBuildExtractionSystemPromptLimitsAndOrdersTags(t *testing.T) {
+	prompt := buildExtractionSystemPrompt()
+
+	require.True(t, strings.Contains(prompt, "最多返回 8 个标签") || strings.Contains(prompt, "最多返回8个标签"))
+	require.True(t, strings.Contains(prompt, "按优先级从高到低排序") || strings.Contains(prompt, "按优先级排序"))
 }
 
 func TestFixBrokenJSONWithUnescapedQuotes(t *testing.T) {

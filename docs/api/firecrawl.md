@@ -30,7 +30,7 @@
 { "enabled": true }
 ```
 
-启用时将该订阅源下未抓取的文章标记为 `pending`。
+启用时将该订阅源下未抓取的文章标记为 `pending`。返回 `{ "success": true, "data": { "firecrawl_enabled": true } }`。
 
 ### GET /api/firecrawl/status
 
@@ -58,3 +58,5 @@
 | `mode` | string | 否 | 默认 `scrape` |
 | `timeout` | int | 否 | 默认 `60` |
 | `max_content_length` | int | 否 | 默认 `50000` |
+
+保存成功后返回更新后的配置（含 `api_key_configured`）。

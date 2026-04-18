@@ -1,4 +1,4 @@
-﻿# 前端组件分工
+# 前端组件分工
 
 ## 路由层
 
@@ -154,7 +154,9 @@
 - `components/feed/*`：feed 图标和刷新状态
 - `components/category/*`：分类卡片
 - `components/common/*`：通用 UI 小组件
+- `components/layout/*`：布局相关组件
 - `components/ai/AISummary.vue`：临时 AI 分析卡片
+- `components/article/*`：文章相关通用组件
 
 ## 约定
 

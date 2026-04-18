@@ -9,6 +9,7 @@ import {
   type TopicGraphDetailPayload,
   type TopicGraphFilters,
   type TopicGraphType,
+  type TopicKind,
   type TopicsByCategoryPayload,
 } from '~/api/topicGraph'
 import type { Article } from '~/types'
@@ -24,6 +25,7 @@ import TopicGraphFooterPanels from '~/features/topic-graph/components/TopicGraph
 import TopicGraphHeader from '~/features/topic-graph/components/TopicGraphHeader.vue'
 import TopicGraphSidebar from '~/features/topic-graph/components/TopicGraphSidebar.vue'
 import TopicTimeline from '~/features/topic-graph/components/TopicTimeline.vue'
+import NarrativePanel from '~/features/topic-graph/components/NarrativePanel.vue'
 import TagHierarchy from '~/features/topic-graph/components/TagHierarchy.vue'
 import { buildDisplayedTopicGraph, collectRelatedTopicSlugs } from '~/features/topic-graph/utils/buildDisplayedTopicGraph'
 import { buildTopicGraphViewModel } from '~/features/topic-graph/utils/buildTopicGraphViewModel'
@@ -150,7 +152,7 @@ watch(timelineOpen, (open) => {
 })
 
 // Active view tab state (graph / hierarchy)
-const activeTab = ref<'graph' | 'hierarchy'>('graph')
+const activeTab = ref<'graph' | 'hierarchy' | 'narrative'>('graph')
 
 const viewModel = computed(() => graphPayload.value
   ? buildTopicGraphViewModel(graphPayload.value)
@@ -666,7 +668,7 @@ async function loadTopicDetail(slug: string) {
   loadingDetail.value = true
 
   try {
-    const response = await topicGraphApi.getTopicDetail(slug, selectedType.value, selectedDate.value, buildCurrentFilters())
+    const response = await topicGraphApi.getTopicDetail(slug, undefined, undefined, buildCurrentFilters())
     if (response.success && response.data) {
       detail.value = response.data
       selectedCategory.value = normalizeTopicCategory(response.data.topic.category, response.data.topic.kind)
@@ -737,8 +739,8 @@ async function loadHotspotDigests(tagSlug: string) {
   try {
     const response = await topicGraphApi.getDigestsByArticleTag(
       tagSlug,
-      selectedType.value,
-      selectedDate.value,
+      undefined,
+      undefined,
       20
     )
     if (response.success && response.data) {
@@ -760,7 +762,7 @@ async function loadAbstractTagDigests(childSlugs: string[]) {
   try {
     const results = await Promise.all(
       childSlugs.map(slug =>
-        topicGraphApi.getDigestsByArticleTag(slug, selectedType.value, selectedDate.value, 20)
+        topicGraphApi.getDigestsByArticleTag(slug, undefined, undefined, 20)
       )
     )
     const seenIds = new Set<number>()
@@ -817,6 +819,11 @@ async function handleChildTagSelect(childSlug: string, childLabel: string) {
   selectedPendingNode.value = false
 }
 
+function handleNarrativeTagSelect(tag: { id: number; slug: string; label: string; category: string; kind?: string }) {
+  const category = normalizeTopicCategory(tag.category as TopicCategory, tag.kind as TopicKind | undefined)
+  handleTagSelect(tag.slug, category)
+}
+
 async function handleAbstractTagSelect(abstractSlug: string) {
   selectedChildTagSlug.value = null
 
@@ -868,9 +875,7 @@ async function loadPendingArticles(tagSlug: string) {
   loadingPendingArticles.value = true
   try {
     const response = await topicGraphApi.getPendingArticlesByTag(
-      tagSlug,
-      selectedType.value,
-      selectedDate.value
+      tagSlug
     )
     if (response.success && response.data) {
       pendingArticles.value = (response.data.articles || []).map(article => ({
@@ -1114,6 +1119,15 @@ await loadGraph()
                     <Icon icon="mdi:file-tree-outline" width="14" />
                     <span>标签层级</span>
                   </button>
+                  <button
+                    type="button"
+                    class="th-tab-btn"
+                    :class="{ 'th-tab-btn--active': activeTab === 'narrative' }"
+                    @click="activeTab = 'narrative'"
+                  >
+                    <Icon icon="mdi:book-open-page-variant-outline" width="14" />
+                    <span>叙事</span>
+                  </button>
                 </div>
 
               </aside>
@@ -1299,13 +1313,23 @@ await loadGraph()
                 </template>
 
                 <!-- Hierarchy view -->
-                <template v-else>
+                <template v-else-if="activeTab === 'hierarchy'">
                   <article class="rounded-[30px] p-4 md:p-5 border border-[rgba(255,255,255,0.08)] bg-[rgba(11,18,24,0.4)] backdrop-blur-xl">
                     <TagHierarchy
                       :feed-id="selectedFilterFeedId"
                       :category-id="selectedFilterCategoryId"
                       :anchor-date="selectedDate"
                       @select-tag="handleTagSelect"
+                    />
+                  </article>
+                </template>
+
+                <!-- Narrative view -->
+                <template v-else-if="activeTab === 'narrative'">
+                  <article class="rounded-[30px] p-4 md:p-5 border border-[rgba(255,255,255,0.08)] bg-[rgba(11,18,24,0.4)] backdrop-blur-xl">
+                    <NarrativePanel
+                      :date="selectedDate"
+                      @select-tag="handleNarrativeTagSelect"
                     />
                   </article>
                 </template>

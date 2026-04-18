@@ -1,5 +1,7 @@
 # 主题图谱 Topic Graph
 
+## 图谱查询
+
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/api/topic-graph/:type` | 获取图谱 |
@@ -115,7 +117,11 @@
 
 查询参数：`type`（默认 `daily`）、`date`、`limit`（默认 `20`，上限 100）
 
+返回包含该标签文章的 digest 列表，附带 `total`。
+
 ### GET /api/topic-graph/tag/:slug/pending-articles
+
+查询参数：`type`（默认 `daily`）、`date`
 
 指定标签下未收录到任何 Digest 的文章。
 
@@ -155,7 +161,9 @@ GET `/api/topic-graph/analysis/:tagID/:analysisType`：
 | `tagID` | 标签 ID |
 | `analysisType` | 分析类型 |
 
-查询参数：`windowType`、`anchorDate`（或 `date`）
+查询参数：`windowType`（或 `window_type`/`window`）、`anchorDate`（或 `anchor_date`/`date`）
+
+POST 请求还支持 JSON body 传入 `windowType` 和 `anchorDate`。
 
 ### 分析状态响应
 
@@ -164,9 +172,209 @@ GET `/api/topic-graph/analysis/:tagID/:analysisType`：
   "success": true,
   "data": {
     "status": "processing",
-    "progress": 65,
-    "error": null,
-    "result": null
+    "progress": 65
   }
 }
 ```
+
+---
+
+## 标签管理 Topic Tags
+
+路由注册在 `/api/topic-tags` 下：
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/topic-tags/search` | 搜索标签 |
+| POST | `/api/topic-tags/merge` | 合并标签 |
+| POST | `/api/topic-tags/merge-with-name` | 合并标签并重命名 |
+| GET | `/api/topic-tags/merge-preview` | 扫描相似标签对 |
+| GET | `/api/topic-tags/hierarchy` | 获取标签层级树 |
+| POST | `/api/topic-tags/organize` | 异步整理未分类标签 |
+| PUT | `/api/topic-tags/:tag_id/abstract-name` | 重命名抽象标签 |
+| POST | `/api/topic-tags/:tag_id/detach` | 从抽象父标签分离子标签 |
+| POST | `/api/topic-tags/:tag_id/reassign` | 将标签移到新父标签 |
+| GET | `/api/topic-tags/watched` | 列出关注标签 |
+| POST | `/api/topic-tags/:tag_id/watch` | 关注标签 |
+| POST | `/api/topic-tags/:tag_id/unwatch` | 取消关注 |
+
+### GET /api/topic-tags/search
+
+| 参数 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `q` | string | - | 搜索关键词（必填，空则返回空列表） |
+| `category` | string | - | 按分类过滤 |
+| `limit` | int | 20 | 上限 100 |
+
+### POST /api/topic-tags/merge
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `source_tag_id` | uint | 是 | 源标签 ID（将被合并） |
+| `target_tag_id` | uint | 是 | 目标标签 ID（保留） |
+
+返回合并后的 `source_id`、`target_id`、`target_label`。
+
+### POST /api/topic-tags/merge-with-name
+
+合并标签并可选重命名目标标签：
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `source_tag_id` | uint | 是 | 源标签 ID |
+| `target_tag_id` | uint | 是 | 目标标签 ID |
+| `new_name` | string | 是 | 目标标签新名称 |
+
+### GET /api/topic-tags/merge-preview
+
+| 参数 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `limit` | int | 50 | 上限 100 |
+| `include_articles` | string | false | `true` 附带文章标题 |
+| `feed_id` | uint | - | 按订阅源过滤 |
+| `category_id` | uint | - | 按分类过滤 |
+
+返回相似标签候选列表。
+
+### GET /api/topic-tags/hierarchy
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `category` | string | 按分类过滤 |
+| `unclassified` | string | `true` 查未分类标签 |
+| `time_range` | string | 时间范围 |
+| `feed_id` | uint | 按订阅源 |
+| `category_id` | uint | 按分类 |
+
+返回 `nodes`（层级节点列表）和 `total`。
+
+### POST /api/topic-tags/organize
+
+异步整理未分类标签。接口接受请求后返回 `202`，实际整理进度通过 WebSocket 推送 `organize_progress` 消息。
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `category` | string | 可选。指定时只整理该分类；不指定时按每个标签自身分类查找相似候选 |
+
+整理流程会先用 embedding 查找同分类相似标签，过滤当前标签自身和低相似度候选，再交给 LLM 判断是否合并或创建抽象父标签。LLM 判定为 merge 时会调用标签合并流程落库；判定为 abstract 时会创建抽象标签关系。
+
+### PUT /api/topic-tags/:tag_id/abstract-name
+
+重命名抽象标签：
+
+```json
+{ "new_name": "新名称" }
+```
+
+名称不能超过 160 字符。标签名冲突时返回 `409`。
+
+### POST /api/topic-tags/:tag_id/detach
+
+从抽象父标签分离子标签：
+
+```json
+{ "child_id": 42 }
+```
+
+### POST /api/topic-tags/:tag_id/reassign
+
+将标签移到新的抽象父标签：
+
+```json
+{ "parent_id": 10 }
+```
+
+### GET /api/topic-tags/watched
+
+列出所有关注标签，含抽象标签元数据。
+
+### POST /api/topic-tags/:tag_id/watch
+
+关注指定标签。返回 `id`、`is_watched`、`watched_at`。
+
+### POST /api/topic-tags/:tag_id/unwatch
+
+取消关注指定标签。返回 `id`、`is_watched`。
+
+---
+
+## Embedding 配置
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/embedding/config` | 获取所有 embedding 配置 |
+| PUT | `/api/embedding/config/:key` | 更新单个配置项 |
+
+### GET /api/embedding/config
+
+返回所有 embedding 配置项列表。
+
+### PUT /api/embedding/config/:key
+
+```json
+{ "value": "新值" }
+```
+
+---
+
+## Embedding 队列
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/embedding/queue/status` | 队列状态 |
+| GET | `/api/embedding/queue/tasks` | 任务列表 |
+| POST | `/api/embedding/queue/retry` | 重试失败任务 |
+
+### GET /api/embedding/queue/tasks
+
+| 参数 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `status` | string | - | 按状态过滤 |
+| `limit` | int | 50 | 上限 200 |
+| `offset` | int | 0 | 偏移 |
+
+返回 `tasks` 和 `total`。
+
+---
+
+## Merge Reembedding 队列
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/embedding/merge-reembedding/status` | 队列状态 |
+| GET | `/api/embedding/merge-reembedding/tasks` | 任务列表 |
+| POST | `/api/embedding/merge-reembedding/retry` | 重试失败任务 |
+
+### GET /api/embedding/merge-reembedding/tasks
+
+| 参数 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `status` | string | - | `pending`/`processing`/`completed`/`failed` |
+| `limit` | int | 50 | 上限 200 |
+| `offset` | int | 0 | 偏移 |
+
+返回 `tasks` 和 `total`。
+
+---
+
+## 叙事 Narratives
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/narratives` | 按日期获取叙事列表 |
+| GET | `/api/narratives/:id` | 叙事详情（含树形结构） |
+| GET | `/api/narratives/:id/history` | 叙事历史 |
+
+### GET /api/narratives
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `date` | string | `YYYY-MM-DD`，默认今天 |
+
+### GET /api/narratives/:id
+
+返回完整的叙事树形结构。
+
+### GET /api/narratives/:id/history
+
+返回指定叙事的历史记录列表。
