@@ -65,6 +65,7 @@ Topic Graph 的前端数据面主要集中在 `useTopicGraphApi()`。
 ### 相关文章
 
 - `getTopicArticles(...)` -> `/topic-graph/topic/:slug/articles`
+- `getPendingArticlesByTag(...)` -> `/topic-graph/tag/:slug/pending-articles`
 
 另外文章预览不会走 topic graph API，而是复用 `useArticlesApi().getArticle(articleId)` 拉标准 article 详情。
 
@@ -274,9 +275,10 @@ Topic Graph 当前的状态主源放在 `TopicGraphPage.vue`，不是 Pinia。
 
 ### Footer Panels
 
-- 当前显示占位信息，分析功能已禁用
-- 后续将提供独立的主题分析看板入口
-- 分析相关 API 和逻辑保留在后端，前端入口待后续实现
+- AI analysis 面板：根据 topic category 自动加载对应类型的分析（事件 / 人物 / 关键词）
+- 历史面板：展示分析历史记录
+- 轮询机制：分析请求 pending/processing 时每 1800ms 轮询一次，完成后停止
+- 每种分析类型独立缓存（`analysisDataByType / statusByType / progressByType`）
 
 ## 当前与 Pinia 的关系
 
@@ -403,42 +405,45 @@ IsLowQuality = (Source != "abstract") && (QualityScore < 0.3)
 
 ### 概述
 
-新标签从文章/摘要中提取后，经过 `findOrCreateTag` 的三阈值匹配流程决定是复用、归入抽象、还是新建。抽象标签建立后还会触发层级匹配，形成多级分类树。整个过程围绕 embedding 相似度驱动。
+新标签从文章/摘要中提取后，经过 `findOrCreateTag` 的统一匹配流程决定是复用、归入抽象、还是新建。匹配结果分为三种：`exact`（完全匹配）、`candidates`（有相似候选）、`no_match`（无匹配）。当存在候选时，系统分批将候选送 LLM 进行 per-candidate 判断，由 LLM 决定每个候选的 merge/abstract/none 动作。前批判断结果作为后续批次的上下文，保持一致性。抽象标签建立后还会触发层级匹配，形成多级分类树。
 
 核心代码：`backend-go/internal/domain/topicextraction/tagger.go`、`backend-go/internal/domain/topicanalysis/abstract_tag_service.go`、`backend-go/internal/domain/topicanalysis/embedding.go`
 
-### 三阈值匹配流程
+### 统一匹配流程
 
-`findOrCreateTag` 对每个提取出的标签执行以下匹配：
+`findOrCreateTag` 不再区分高/中/低阈值，统一由 LLM per-candidate 判断：
 
 ```
 新标签 → TagMatch() 生成 embedding → FindSimilarTags 搜索
     ↓
-┌─────────────────────────────────────────────────────────┐
-│ exact（slug 完全匹配）      → 复用现有标签，更新元信息    │
-│ >= 0.97 + 普通标签          → 复用，更新别名              │
-│ >= 0.97 + 抽象标签          → 创建子标签，建立父子关系    │
-│ 0.78~0.97 + 普通标签        → LLM 抽象提取，两个子标签    │
-│ 0.78~0.97 + 抽象标签        → 创建子标签，建立父子关系    │
-│ < 0.78                     → 全新标签，生成 embedding     │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│ exact（slug/别名完全匹配）        → 复用现有标签，更新元信息        │
+│ 有候选 >= 0.78                   → 分批送 LLM per-candidate 判断:  │
+│                                    merge: 合并到 LLM 指定的候选    │
+│                                    abstract: 创建抽象标签+子标签   │
+│                                    none: 候选独立，创建新标签      │
+│                                    多批处理，前批结果作为下批上下文 │
+│ 无候选或全部 < 0.78              → 全新标签，生成 embedding        │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 阈值可在 `embedding_config` 表配置，默认值：
 
 | 阈值 | 默认值 | 含义 |
 |------|--------|------|
-| `HighSimilarity` | 0.97 | 自动复用 |
-| `LowSimilarity` | 0.78 | 自动新建 |
+| `LowSimilarity` | 0.78 | 候选搜索下限 |
 
-### 抽象标签创建（middle band + 普通标签）
+### Per-candidate 批量判断
 
-当两个普通标签在 0.78~0.97 之间相似时，`ExtractAbstractTag` 通过 LLM 提取公共概念：
+当有候选标签（相似度 >= 0.78）时，`callLLMForTagJudgment` 分批将候选送 LLM 判断：
 
-1. LLM 生成抽象名称和描述
-2. 创建抽象标签（`source = "abstract"`），异步生成 embedding
-3. 两个普通标签成为抽象的子标签
-4. 触发 `MatchAbstractTagHierarchy` 搜索更高级抽象
+1. 每批最多处理 8 个候选标签
+2. LLM 对每个候选独立返回 `action`：`merge`（合并）、`abstract`（创建抽象父标签）或 `none`（无关）
+3. `merge` 动作附带 `merge_target` 字段，指定合并到哪个候选
+4. `abstract` 动作附带 `merge_label` 字段，作为抽象父标签名称
+5. 后续批次通过 `previousResults` 参数接收前批结果，保持判断一致性
+6. `processJudgments` 遍历所有判断结果，`selectMergeTarget` 选择最佳合并目标（优先非抽象候选）
+7. 若 LLM 返回非数组格式，`parseSingleJudgmentFallback` 兼容处理
 
 ### 抽象层级匹配
 
@@ -498,9 +503,242 @@ Embedding 的保留/删除直接决定标签能否被未来的相似标签匹配
 
 | 文件 | 职责 |
 |------|------|
-| `backend-go/internal/domain/topicextraction/tagger.go` | `findOrCreateTag` 三阈值匹配主流程 |
+| `backend-go/internal/domain/topicextraction/tagger.go` | `findOrCreateTag` 统一匹配主流程，exact/candidates/no_match 三分支 |
 | `backend-go/internal/domain/topicanalysis/embedding.go` | `TagMatch`、`FindSimilarTags`、`FindSimilarAbstractTags`、`DeleteTagEmbedding` |
 | `backend-go/internal/domain/topicanalysis/abstract_tag_service.go` | `ExtractAbstractTag`、`MatchAbstractTagHierarchy`、`linkAbstractParentChild`、`enqueueEmbeddingsForNormalChildren` |
+
+### 抽象标签的 label、description 和 embedding 刷新
+
+#### 问题背景
+
+抽象标签的 `label`、`description` 和 `embedding` 在首次创建时由 LLM 生成，后续新子标签加入时不会自动更新。这导致：
+
+- 随着子标签不断增多，label 可能不再准确概括所有子标签的主题范围
+- description 只反映最初几个子标签的主题范围
+- embedding 基于旧 label/description 生成，与抽象标签实际涵盖的内容范围产生偏差
+- `MergeTags` 合并标签后，如果 target 是抽象标签，其 embedding 虽然会通过 `MergeReembeddingQueue` 重新生成，但 description 仍然是旧的
+- 抽象标签间层级关系可能因为 embedding 偏差而错失匹配机会
+
+#### 解决方案：abstract_tag_update_queues 持久化队列
+
+引入 `abstract_tag_update_queues` 表驱动的异步队列，在子标签变化时触发抽象标签的 label、description 和 embedding 增量刷新，并在刷新完成后触发 `MatchAbstractTagHierarchy` 重新参与抽象标签间层级匹配。
+
+#### 触发时机
+
+队列在以下三种场景入队：
+
+| 触发点 | `trigger_reason` | 场景说明 |
+|--------|-------------------|----------|
+| `ExtractAbstractTag` 完成 | `new_child_added` | 抽象标签新建或复用后，子标签集合发生变化 |
+| `linkAbstractParentChild` 完成 | `hierarchy_linked` | 抽象标签通过 `MatchAbstractTagHierarchy` 被链接到另一个抽象下，父级子标签集合变化 |
+| `MergeTags` 完成（target 是抽象标签） | `tag_merged` | 合并后 target 抽象标签的文章覆盖范围变化 |
+
+#### 去重机制
+
+同一个 `abstract_tag_id` 如果已有 `pending` 或 `processing` 状态的任务，不会重复入队。这保证了：
+
+- 短时间内多次子标签变化只会触发一次 LLM 调用
+- 即使进程中断，pending 任务在重启后继续处理
+
+#### Worker 处理流程
+
+```
+队列 worker（3s 轮询）
+  ↓
+取出 pending 任务
+  ↓
+加载抽象标签 + 所有子标签
+  ↓
+收集子标签 label + description
+  ↓
+LLM 重新生成抽象标签 label 和 description
+（prompt 包含所有子标签信息，要求中文描述、客观概括全部子标签，
+  label 只在子标签范围明显偏移时才建议修改）
+  ↓
+对比新旧 label 和 description：
+  - label 变化时检查新 slug 唯一性，无冲突则更新 label + slug
+  - description 变化则直接更新
+  ↓
+基于新 label/description 重新生成 embedding
+  ↓
+保存 embedding 到数据库
+  ↓
+触发 MatchAbstractTagHierarchy（异步）
+  ↑  让刷新后的 embedding 重新参与抽象标签间层级匹配
+  ↑  可能触发：成为更高级抽象的子标签、与相似抽象标签建立关系、
+  ↑  或被 AI 判断为更宽泛而成为其他抽象的父标签
+  ↓
+标记任务 completed
+```
+
+#### Label 更新的保护机制
+
+label 更新带有以下保护：
+
+- **slug 唯一性检查**：新 label 生成的 slug 如果已被其他 active 标签占用，跳过 label 更新
+- **LLM 倾向保守**：prompt 中明确要求只在子标签范围明显偏移时才修改 label，避免不必要的名称变化
+- **前端路由兼容**：label 更新会同步更新 slug，前端 `/topics` 页面通过 slug 匹配，因此旧的 slug 链接可能失效，但这是可接受的代价（单用户部署场景）
+
+#### 层级匹配再触发
+
+`MatchAbstractTagHierarchy` 在每次刷新完成后异步调用，可能触发以下结果：
+
+| 新 embedding 与其他抽象标签的相似度 | 行为 |
+|--------------------------------------|------|
+| >= 0.97 | 成为现有抽象的子标签 |
+| 0.78~0.97 | AI 判断谁更宽泛，建立父子关系 |
+| < 0.78 | 无操作 |
+
+这意味着刷新后的抽象标签有更多机会被正确归入更高级别层级，或吸收新的子抽象标签。
+
+#### 失败处理
+
+失败时标记 `failed`，`retry_count` 递增，可通过 `/api/embedding/abstract-tag-update/retry` 手动重试。
+
+#### 数据模型
+
+```sql
+CREATE TABLE abstract_tag_update_queues (
+    id BIGSERIAL PRIMARY KEY,
+    abstract_tag_id BIGINT NOT NULL REFERENCES topic_tags(id) ON DELETE CASCADE,
+    trigger_reason VARCHAR(50) NOT NULL,
+    status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending','processing','completed','failed')),
+    error_message TEXT,
+    retry_count INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT NOW(),
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP
+);
+```
+
+#### API 端点
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/embedding/abstract-tag-update/status` | 查看队列状态计数 |
+| POST | `/api/embedding/abstract-tag-update/retry` | 重试所有失败任务 |
+
+#### 相关代码
+
+| 文件 | 职责 |
+|------|------|
+| `backend-go/internal/domain/models/abstract_tag_update_queue.go` | 队列表模型定义 |
+| `backend-go/internal/domain/topicanalysis/abstract_tag_update_queue.go` | 队列服务、worker、`refreshAbstractTag`、`regenerateAbstractLabelAndDescription` |
+| `backend-go/internal/domain/topicanalysis/abstract_tag_update_queue_handler.go` | REST API handler、全局单例、`Start/Stop` |
+| `backend-go/internal/domain/topicanalysis/abstract_tag_service.go` | `MatchAbstractTagHierarchy`、`linkAbstractParentChild`、`ExtractAbstractTag` |
+| `backend-go/internal/app/runtime.go` | worker 生命周期管理 |
+| `backend-go/internal/platform/database/postgres_migrations.go` | `20260416_0001` 建表迁移 |
+
+### 人物标签结构化属性
+
+TopicTag 模型新增 `metadata` JSONB 字段（类型 `MetadataMap = map[string]any`），用于存储人物标签的结构化属性：
+
+- `country`：国籍或主要活动国家
+- `organization`：主要组织或机构
+- `role`：主要职务或头衔
+- `domains`：专业领域数组
+
+人物标签描述生成时（`generatePersonTagDescription`），LLM 同时提取这些属性并写入 metadata。已有的 person 标签可通过 `POST /api/embedding/queue/person-metadata/backfill` 触发批量补填。
+
+### Embedding 语义锚定
+
+`buildTagEmbeddingText` 对 person 标签做了身份属性前置优化：role、country、organization 紧跟 label 之后、description 之前。embedding 模型对文本开头的权重更高，"贝森特 + 财政部长 + 美国" 靠前能最大化同一人物不同称谓的向量接近度。domains 放在末尾（权重较低）。
+
+### 按 Category 分化的 Prompt 策略
+
+抽象标签相关的三个 prompt 构建点均按 `category` 分化：
+
+- `regenerateAbstractLabelAndDescription`：person 聚焦身份、event 聚焦事实经过、keyword 用通用英文 prompt
+- `buildAbstractTagPrompt`（ExtractAbstractTag 调用）：person 用中文人物专用 prompt、event 用事件专用 prompt
+- `ExtractAbstractTag` 支持 functional options（`WithNarrativeContext`），允许叙事上下文注入到 prompt 中
+
+### 叙事反馈到事件标签合并
+
+叙事生成后，`feedbackNarrativesToTags` 异步检查每条叙事关联的 event 标签：
+
+1. 过滤出无父子关系的未聚类 event 标签
+2. 计算标签对间的 embedding 余弦相似度
+3. 落在 middle band（≥ LowSimilarity 且 < HighSimilarity）的标签对，触发 `ExtractAbstractTag` 并注入叙事上下文
+4. 每条叙事最多处理 5 对标签对（`maxPairsPerNarrative`）
+
+### 关注标签叙事维度总结
+
+`GenerateWatchedTagNarratives` 在每次叙事生成后异步执行：
+
+1. 获取所有 watched 标签及其子标签
+2. 查询最近 3 天有 ≥2 篇活跃文章的 watched 标签
+3. 为每个活跃 watched 标签生成独立的发展脉络总结（300-800 字）
+4. 结果保存到 `narrative_summaries` 表，`period = "watched_tag"`
+
+## 叙事脉络（Narrative）
+
+### 概述
+
+叙事功能追踪话题从兴起到演化的完整生命周期。系统每天自动生成叙事摘要，将活跃标签组织成连贯的故事线，并追踪叙事之间的继承/分化/融合关系。
+
+### 后端架构
+
+| 文件 | 职责 |
+|------|------|
+| `backend-go/internal/domain/models/narrative.go` | 数据模型 `NarrativeSummary`，状态常量 |
+| `backend-go/internal/domain/narrative/collector.go` | 数据采集：标签输入、前日叙事 |
+| `backend-go/internal/domain/narrative/generator.go` | AI 生成叙事 |
+| `backend-go/internal/domain/narrative/service.go` | 服务编排：生成、保存、查询、历史追溯 |
+| `backend-go/internal/domain/narrative/handler.go` | REST API 路由注册 |
+| `backend-go/internal/jobs/narrative_summary.go` | 定时调度器，支持手动触发 |
+
+### 叙事状态
+
+| 状态 | 含义 |
+|------|------|
+| `emerging` | 新兴话题 |
+| `continuing` | 持续发展 |
+| `splitting` | 分化 |
+| `merging` | 融合 |
+| `ending` | 终结 |
+
+### 生成流程
+
+1. `CollectTagInputs` 采集当日活跃标签（根抽象标签 + 未分类活跃标签）
+2. `CollectPreviousNarratives` 采集前一天的叙事作为上下文
+3. `GenerateNarratives` 调用 LLM 生成新叙事（含状态判断和父子关系）
+4. `saveNarratives` 批量保存到数据库
+5. `markEndedNarratives` 将未被引用的前日叙事标记为 `ending`
+
+### 调度与手动触发
+
+- 自动调度：`NarrativeSummaryScheduler` 按配置间隔运行，使用 `GenerateAndSave`（追加模式）
+- 手动触发：`POST /api/schedulers/trigger/narrative_summary?date=YYYY-MM-DD`
+- 手动触发使用 `RegenerateAndSave`：先删除目标日期已有叙事，再重新生成
+- 调度器支持 `TriggerNow()` 和 `TriggerNowWithDate(date)` 两种触发方式
+
+### API 端点
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/narratives?date=YYYY-MM-DD` | 获取指定日期的叙事列表 |
+| DELETE | `/api/narratives?date=YYYY-MM-DD` | 删除指定日期的所有叙事 |
+| GET | `/api/narratives/:id` | 获取单条叙事详情（含子叙事） |
+| GET | `/api/narratives/:id/history` | 获取叙事的完整历史链（递归追溯 parent） |
+
+### 前端组件
+
+- `NarrativePanel.vue`：叙事面板，展示当日叙事列表，支持展开/收起摘要、查看历史脉络、重新整理（先删后建）
+- `TopicGraphPage.vue` 中 `activeTab === 'narrative'` 时展示 NarrativePanel
+
+### 标签点击交互
+
+叙事卡片中的标签点击直接使用后端返回的 `TagBrief`（含 `slug`、`category`、`kind`），不再依赖 `hotspotData` 查找，确保所有标签都能正确跳转。
+
+### 数据流
+
+```
+NarrativePanel
+  ├─ loadNarratives(date) → GET /api/narratives?date=...
+  ├─ triggerGeneration() → DELETE /api/narratives?date=... + POST /api/schedulers/trigger/narrative_summary?date=...
+  ├─ loadHistory(id) → GET /api/narratives/:id/history
+  └─ emit('select-tag', tag) → TopicGraphPage.handleNarrativeTagSelect → handleTagSelect(slug, category)
+```
 
 ## 相关文件
 
@@ -510,6 +748,7 @@ Embedding 的保留/删除直接决定标签能否被未来的相似标签匹配
 - `front/app/features/topic-graph/components/TopicGraphCanvas.client.vue`
 - `front/app/features/topic-graph/components/TopicGraphSidebar.vue`
 - `front/app/features/topic-graph/components/TopicGraphFooterPanels.vue`
+- `front/app/features/topic-graph/components/NarrativePanel.vue`
 - `front/app/features/topic-graph/utils/buildTopicGraphViewModel.ts`
 
 ## 建议阅读顺序
