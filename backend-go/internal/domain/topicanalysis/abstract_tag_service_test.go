@@ -10,8 +10,6 @@ import (
 	"testing"
 )
 
-// --- Mock airouter for testing ---
-
 type mockChatFn func(ctx context.Context, req airouter.ChatRequest) (*airouter.ChatResult, error)
 
 type mockRouter struct {
@@ -33,318 +31,180 @@ func (m *mockRouter) Embed(ctx context.Context, req airouter.EmbeddingRequest, c
 	return nil, fmt.Errorf("mock embed not configured")
 }
 
-// Helper to create a mock chat result with JSON abstract_name
 func mockAbstractNameResult(name string) *airouter.ChatResult {
 	b, _ := json.Marshal(map[string]string{"abstract_name": name, "reason": "test"})
 	return &airouter.ChatResult{Content: string(b)}
 }
 
-// TestExtractAbstractTagSuccess tests that ExtractAbstractTag creates an abstract tag
-// and parent-child relations when LLM returns valid JSON.
 func TestExtractAbstractTagSuccess(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
-	// This test needs a real DB, skip if not available
-	// For now test the core logic flow through the service
-	// We test with mock router that returns a valid abstract name
 }
 
-// TestExtractAbstractTagDeduplication tests that if an abstract tag with same slug already exists,
-// it reuses the existing tag instead of creating a duplicate.
 func TestExtractAbstractTagDeduplication(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 }
 
-// TestExtractAbstractTagLLMFailure tests graceful degradation when LLM call fails.
 func TestExtractAbstractTagLLMFailure(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 }
 
-// --- Unit tests for prompt construction ---
-
-func TestBuildAbstractTagPrompt(t *testing.T) {
+func TestBuildBatchTagJudgmentPrompt(t *testing.T) {
 	candidates := []TagCandidate{
-		{Tag: &models.TopicTag{Label: "大语言模型"}, Similarity: 0.92},
-		{Tag: &models.TopicTag{Label: "GPT-4"}, Similarity: 0.88},
-		{Tag: &models.TopicTag{Label: "Claude"}, Similarity: 0.85},
+		{Tag: &models.TopicTag{Label: "大语言模型", Source: "abstract"}, Similarity: 0.92},
+		{Tag: &models.TopicTag{Label: "GPT-4", Source: "heuristic"}, Similarity: 0.88},
 	}
 	newLabel := "Gemini Pro"
 
-	prompt := buildAbstractTagPrompt(candidates, newLabel)
-
-	if !strings.Contains(prompt, "大语言模型") {
-		t.Error("prompt should contain candidate label '大语言模型'")
-	}
-	if !strings.Contains(prompt, "GPT-4") {
-		t.Error("prompt should contain candidate label 'GPT-4'")
-	}
-	if !strings.Contains(prompt, "Gemini Pro") {
-		t.Error("prompt should contain new label 'Gemini Pro'")
-	}
-	if !strings.Contains(prompt, "abstract_name") {
-		t.Error("prompt should instruct JSON output with abstract_name field")
-	}
-}
-
-func TestParseAbstractNameFromJSON(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		expected string
-		hasError bool
-	}{
-		{
-			name:     "valid JSON",
-			input:    `{"abstract_name": "AI技术", "reason": "all about AI"}`,
-			expected: "AI技术",
-			hasError: false,
-		},
-		{
-			name:     "empty abstract_name",
-			input:    `{"abstract_name": "", "reason": "none"}`,
-			expected: "",
-			hasError: true,
-		},
-		{
-			name:     "invalid JSON",
-			input:    `not json`,
-			expected: "",
-			hasError: true,
-		},
-		{
-			name:     "missing abstract_name field",
-			input:    `{"reason": "something"}`,
-			expected: "",
-			hasError: true,
-		},
-		{
-			name:     "abstract_name with whitespace",
-			input:    `{"abstract_name": "  AI 技术  ", "reason": "x"}`,
-			expected: "AI 技术",
-			hasError: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result, err := parseAbstractNameFromJSON(tt.input)
-			if tt.hasError && err == nil {
-				t.Errorf("expected error, got nil")
+	for _, category := range []string{"person", "event", "keyword"} {
+		t.Run(category, func(t *testing.T) {
+			prompt := buildBatchTagJudgmentPrompt(candidates, newLabel, category, nil)
+			if !strings.Contains(prompt, "大语言模型") {
+				t.Error("prompt should contain candidate label")
 			}
-			if !tt.hasError && err != nil {
-				t.Errorf("unexpected error: %v", err)
+			if !strings.Contains(prompt, "Gemini Pro") {
+				t.Error("prompt should contain new label")
 			}
-			if result != tt.expected {
-				t.Errorf("expected %q, got %q", tt.expected, result)
+			if !strings.Contains(prompt, "merge_target") {
+				t.Error("prompt should instruct merge_target field")
+			}
+			if !strings.Contains(prompt, "candidate_label") {
+				t.Error("prompt should instruct per-candidate judgment")
+			}
+			if !strings.Contains(prompt, "type: abstract") {
+				t.Error("prompt should mark abstract candidates")
 			}
 		})
 	}
 }
 
-func TestParseAbstractNameTooLong(t *testing.T) {
-	longName := strings.Repeat("很", 200) // 200 chars, exceeds limit
-	input := fmt.Sprintf(`{"abstract_name": "%s", "reason": "x"}`, longName)
-	_, err := parseAbstractNameFromJSON(input)
-	if err == nil {
-		t.Error("expected error for name exceeding 160 chars")
+func TestBuildBatchTagJudgmentPromptWithPreviousResults(t *testing.T) {
+	candidates := []TagCandidate{
+		{Tag: &models.TopicTag{Label: "Svelte", Slug: "svelte"}, Similarity: 0.82},
+	}
+	previousResults := []previousRoundResult{
+		{CandidateLabel: "React", Action: ActionMerge, TargetLabel: "React"},
+		{CandidateLabel: "Vue", Action: ActionNone},
+	}
+	prompt := buildBatchTagJudgmentPrompt(candidates, "SolidJS", "keyword", previousResults)
+	if !strings.Contains(prompt, `"React" → merge`) {
+		t.Error("prompt should include previous round merge result")
+	}
+	if !strings.Contains(prompt, `"Vue" → none`) {
+		t.Error("prompt should include previous round none result")
 	}
 }
 
-// --- Tests for parseAbstractTagResponse (returns name + description) ---
-
-func TestParseAbstractTagResponse(t *testing.T) {
-	tests := []struct {
-		name         string
-		input        string
-		expectedName string
-		expectedDesc string
-		hasError     bool
-	}{
-		{
-			name:         "valid JSON with description",
-			input:        `{"abstract_name": "AI技术", "description": "人工智能相关技术的总称", "reason": "all about AI"}`,
-			expectedName: "AI技术",
-			expectedDesc: "人工智能相关技术的总称",
-			hasError:     false,
-		},
-		{
-			name:         "valid JSON without description",
-			input:        `{"abstract_name": "编程语言", "reason": "x"}`,
-			expectedName: "编程语言",
-			expectedDesc: "",
-			hasError:     false,
-		},
-		{
-			name:         "description truncated to 500 chars",
-			input:        fmt.Sprintf(`{"abstract_name": "测试", "description": "%s", "reason": "x"}`, strings.Repeat("A", 600)),
-			expectedName: "测试",
-			expectedDesc: strings.Repeat("A", 500),
-			hasError:     false,
-		},
-		{
-			name:     "empty abstract_name",
-			input:    `{"abstract_name": "", "description": "some desc", "reason": "none"}`,
-			hasError: true,
-		},
-		{
-			name:     "invalid JSON",
-			input:    `not json`,
-			hasError: true,
-		},
-		{
-			name:         "whitespace trimmed on both fields",
-			input:        `{"abstract_name": "  AI  ", "description": "  some desc  ", "reason": "x"}`,
-			expectedName: "AI",
-			expectedDesc: "some desc",
-			hasError:     false,
-		},
-		{
-			name:     "abstract_name exceeds 160 chars",
-			input:    fmt.Sprintf(`{"abstract_name": "%s", "description": "ok", "reason": "x"}`, strings.Repeat("很", 200)),
-			hasError: true,
-		},
+func TestBuildCandidateList(t *testing.T) {
+	candidates := []TagCandidate{
+		{Tag: &models.TopicTag{Label: "React", Source: "abstract"}, Similarity: 0.96},
+		{Tag: &models.TopicTag{Label: "Vue", Source: "heuristic"}, Similarity: 0.93},
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			name, desc, err := parseAbstractTagResponse(tt.input)
-			if tt.hasError && err == nil {
-				t.Errorf("expected error, got nil")
-			}
-			if !tt.hasError && err != nil {
-				t.Errorf("unexpected error: %v", err)
-			}
-			if name != tt.expectedName {
-				t.Errorf("expected name %q, got %q", tt.expectedName, name)
-			}
-			if desc != tt.expectedDesc {
-				t.Errorf("expected desc %q, got %q", tt.expectedDesc, desc)
-			}
-		})
+	result := buildCandidateList(candidates, "Svelte")
+	if !strings.Contains(result, `type: abstract`) {
+		t.Error("should mark abstract candidates")
+	}
+	if !strings.Contains(result, `type: normal`) {
+		t.Error("should mark non-abstract candidates as normal")
+	}
+	if !strings.Contains(result, `"Svelte" (new tag)`) {
+		t.Error("should include new tag")
 	}
 }
 
-// --- Tests for resolveActiveTagIDs time range validation ---
-
-func TestResolveActiveTagIDsNoFilter(t *testing.T) {
-	candidates := map[uint]bool{1: true, 2: true, 3: true}
-	result := resolveActiveTagIDs("", candidates)
-	if len(result) != 3 {
-		t.Errorf("expected 3 active tags with no filter, got %d", len(result))
+func TestParseBatchTagJudgmentResponse(t *testing.T) {
+	input := `[{"candidate_label":"GPT-4","action":"merge","merge_target":"GPT-4","merge_label":"GPT-4","reason":"same"},{"candidate_label":"Vue","action":"none","reason":"different"}]`
+	results, err := parseBatchTagJudgmentResponse(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	for id := range candidates {
-		if !result[id] {
-			t.Errorf("tag %d should be active with no filter", id)
-		}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 judgments, got %d", len(results))
 	}
-}
-
-func TestResolveActiveTagIDsInvalidValue(t *testing.T) {
-	// Invalid values are treated as no filter per T-08-04
-	candidates := map[uint]bool{1: true, 2: true}
-	result := resolveActiveTagIDs("invalid", candidates)
-	if len(result) != 2 {
-		t.Errorf("expected 2 active tags with invalid time_range, got %d", len(result))
+	if results[0].Action != ActionMerge {
+		t.Errorf("expected merge, got %s", results[0].Action)
 	}
-	for id := range candidates {
-		if !result[id] {
-			t.Errorf("tag %d should be active with invalid time_range (treated as no filter)", id)
-		}
+	if results[0].MergeTarget != "GPT-4" {
+		t.Errorf("expected merge target 'GPT-4', got %q", results[0].MergeTarget)
+	}
+	if results[1].Action != ActionNone {
+		t.Errorf("expected none, got %s", results[1].Action)
 	}
 }
 
-func TestCandidateIDSetToSlice(t *testing.T) {
-	m := map[uint]bool{10: true, 20: true, 30: true}
-	slice := candidateIDSetToSlice(m)
-	if len(slice) != 3 {
-		t.Errorf("expected 3 elements, got %d", len(slice))
+func TestParseBatchTagJudgmentResponseFallback(t *testing.T) {
+	input := `{"action":"merge","merge_label":"GPT-4","reason":"same"}`
+	results, err := parseSingleJudgmentFallback(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	set := make(map[uint]bool, len(slice))
-	for _, id := range slice {
-		set[id] = true
+	if len(results) != 1 {
+		t.Fatalf("expected 1 judgment, got %d", len(results))
 	}
-	for id := range m {
-		if !set[id] {
-			t.Errorf("expected id %d in slice", id)
-		}
+	if results[0].Action != ActionMerge {
+		t.Errorf("expected merge, got %s", results[0].Action)
 	}
 }
 
-// --- Tests for ReassignTagParent validation ---
-
-func TestReassignTagParentZeroTagID(t *testing.T) {
-	err := ReassignTagParent(0, 5)
-	if err == nil {
-		t.Error("expected error for tag_id = 0")
+func TestBuildPreviousResultsSummary(t *testing.T) {
+	results := []previousRoundResult{
+		{CandidateLabel: "React", Action: ActionMerge, TargetLabel: "React"},
+		{CandidateLabel: "Vue", Action: ActionNone},
+	}
+	summary := buildPreviousResultsSummary(results)
+	if !strings.Contains(summary, `"React" → merge`) {
+		t.Error("should show merge result")
+	}
+	if !strings.Contains(summary, `"Vue" → none`) {
+		t.Error("should show none result")
 	}
 }
 
-func TestReassignTagParentZeroNewParentID(t *testing.T) {
-	err := ReassignTagParent(5, 0)
-	if err == nil {
-		t.Error("expected error for new_parent_id = 0")
-	}
-}
-
-func TestReassignTagParentSameIDs(t *testing.T) {
-	err := ReassignTagParent(5, 5)
-	if err == nil {
-		t.Error("expected error for tag_id == new_parent_id")
-	}
-}
-
-// --- Tests for cycle detection ---
-
-func TestReassignTagParentCycleDetection(t *testing.T) {
-	// This is a unit test for the cycle detection logic
-	// The actual database integration would require a test DB setup
-	t.Skip("cycle detection unit test requires mocked DB; skipping for now")
-}
-
-func TestExtractAbstractTagSkipsCyclicCandidates(t *testing.T) {
-	// This test verifies that ExtractAbstractTag skips candidates that would create cycles
-	t.Skip("requires DB setup for full integration test")
-}
-
-// --- Tests for buildAbstractTagPrompt with description ---
-
-func TestBuildAbstractTagPromptWithDescription(t *testing.T) {
-	t.Run("includes candidate descriptions in prompt", func(t *testing.T) {
+func TestSelectMergeTarget(t *testing.T) {
+	t.Run("matches by merge target slug", func(t *testing.T) {
 		candidates := []TagCandidate{
-			{Tag: &models.TopicTag{Label: "大语言模型", Description: "大型语言模型技术"}, Similarity: 0.92},
-			{Tag: &models.TopicTag{Label: "GPT-4", Description: ""}, Similarity: 0.88},
+			{Tag: &models.TopicTag{ID: 1, Label: "GPT-4", Slug: "gpt-4"}},
+			{Tag: &models.TopicTag{ID: 2, Label: "ChatGPT", Slug: "chatgpt"}},
 		}
-		prompt := buildAbstractTagPrompt(candidates, "Gemini")
-
-		if !strings.Contains(prompt, "description: 大型语言模型技术") {
-			t.Error("prompt should contain candidate description '大型语言模型技术'")
-		}
-		if !strings.Contains(prompt, "description") && strings.Contains(prompt, "GPT-4") {
-			// GPT-4 has no description, so no "description:" should appear after its entry
-			t.Log("GPT-4 entry without description is fine")
-		}
-		// Should contain description instruction in the prompt
-		if !strings.Contains(prompt, "description") {
-			t.Error("prompt should mention description field")
+		target := selectMergeTarget(candidates, "GPT-4", "GPT-4o")
+		if target == nil || target.ID != 1 {
+			t.Errorf("expected tag ID 1, got %v", target)
 		}
 	})
 
-	t.Run("degrades gracefully when no descriptions", func(t *testing.T) {
+	t.Run("matches by merge label slug when target not found", func(t *testing.T) {
 		candidates := []TagCandidate{
-			{Tag: &models.TopicTag{Label: "Rust"}, Similarity: 0.90},
+			{Tag: &models.TopicTag{ID: 1, Label: "React", Slug: "react"}},
 		}
-		prompt := buildAbstractTagPrompt(candidates, "Go")
+		target := selectMergeTarget(candidates, "React.js", "React")
+		if target == nil || target.ID != 1 {
+			t.Errorf("expected tag ID 1 via merge label, got %v", target)
+		}
+	})
 
-		if !strings.Contains(prompt, "Rust") {
-			t.Error("prompt should contain label 'Rust'")
+	t.Run("prefers non-abstract candidate", func(t *testing.T) {
+		candidates := []TagCandidate{
+			{Tag: &models.TopicTag{ID: 1, Label: "编程语言", Slug: "bian-cheng-yu-yan", Source: "abstract"}},
+			{Tag: &models.TopicTag{ID: 2, Label: "Python", Slug: "python", Source: "heuristic"}},
 		}
-		if !strings.Contains(prompt, "Go") {
-			t.Error("prompt should contain label 'Go'")
+		target := selectMergeTarget(candidates, "未知", "Python")
+		if target == nil {
+			t.Fatal("expected non-nil target")
+		}
+		if target.ID != 2 {
+			t.Errorf("expected non-abstract tag ID 2, got %d", target.ID)
+		}
+	})
+
+	t.Run("returns nil for empty candidates", func(t *testing.T) {
+		target := selectMergeTarget(nil, "anything", "anything")
+		if target != nil {
+			t.Error("expected nil for empty candidates")
 		}
 	})
 }
