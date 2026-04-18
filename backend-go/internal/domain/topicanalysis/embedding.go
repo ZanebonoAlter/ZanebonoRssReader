@@ -13,8 +13,7 @@ import (
 	"my-robot-backend/internal/domain/topictypes"
 	"my-robot-backend/internal/platform/airouter"
 	"my-robot-backend/internal/platform/database"
-
-	"log"
+	"my-robot-backend/internal/platform/logging"
 
 	"gorm.io/gorm"
 )
@@ -42,11 +41,10 @@ var DefaultThresholds = EmbeddingMatchThresholds{
 
 // TagMatchResult represents a tag match result
 type TagMatchResult struct {
-	MatchType    string // "exact", "high_similarity", "low_similarity", "ai_judgment", "no_match"
-	ExistingTag  *models.TopicTag
-	Similarity   float64
-	Candidates   []TagCandidate // For AI judgment mode
-	ShouldCreate bool
+	MatchType   string          // "exact", "candidates", "no_match"
+	ExistingTag *models.TopicTag
+	Similarity  float64
+	Candidates  []TagCandidate
 }
 
 // TagCandidate represents a candidate tag for AI judgment
@@ -204,91 +202,71 @@ func (s *EmbeddingService) FindSimilarTags(ctx context.Context, tag *models.Topi
 
 // TagMatch decides how to handle a candidate tag
 func (s *EmbeddingService) TagMatch(ctx context.Context, label, category string, aliases string) (*TagMatchResult, error) {
-	// Step 1: Check for exact match by slug in the same category (active tags only)
 	slug := topictypes.Slugify(label)
 	var existingTag models.TopicTag
 	err := database.DB.Scopes(activeTagFilter).Where("slug = ? AND category = ?", slug, category).First(&existingTag).Error
 	if err == nil {
-		// Exact slug match
 		return &TagMatchResult{
-			MatchType:    "exact",
-			ExistingTag:  &existingTag,
-			Similarity:   1.0,
-			ShouldCreate: false,
+			MatchType:   "exact",
+			ExistingTag: &existingTag,
+			Similarity:  1.0,
 		}, nil
 	}
 
-	// Step 2: Check for alias match (active tags only)
 	if aliases != "" {
 		var aliasTags []models.TopicTag
 		if err := database.DB.Scopes(activeTagFilter).Where("category = ?", category).Find(&aliasTags).Error; err == nil {
 			for _, t := range aliasTags {
 				if containsAlias(t.Aliases, label) {
 					return &TagMatchResult{
-						MatchType:    "exact",
-						ExistingTag:  &t,
-						Similarity:   1.0,
-						ShouldCreate: false,
+						MatchType:   "exact",
+						ExistingTag: &t,
+						Similarity:  1.0,
 					}, nil
 				}
 			}
 		}
 	}
 
-	// Step 3: Vector similarity matching
 	candidate := &models.TopicTag{
 		Label:    label,
 		Category: category,
 		Aliases:  aliases,
 	}
 
-	candidates, err := s.FindSimilarTags(ctx, candidate, category, 5)
+	candidates, err := s.FindSimilarTags(ctx, candidate, category, 20)
 	if err != nil {
-		// Fall back to creating new tag on embedding failure
 		return &TagMatchResult{
-			MatchType:    "no_match",
-			ShouldCreate: true,
+			MatchType: "no_match",
 		}, nil
 	}
 
-	if len(candidates) == 0 {
+	var validCandidates []TagCandidate
+	for _, c := range candidates {
+		if c.Similarity >= s.thresholds.LowSimilarity {
+			validCandidates = append(validCandidates, c)
+		}
+	}
+
+	if len(validCandidates) == 0 {
 		return &TagMatchResult{
-			MatchType:    "no_match",
-			ShouldCreate: true,
+			MatchType:  "no_match",
+			Similarity: bestSimilarity(candidates),
 		}, nil
 	}
 
-	best := candidates[0]
-
-	// Step 4: Apply thresholds
-	if best.Similarity >= s.thresholds.HighSimilarity {
-		// High similarity - auto-reuse
-		return &TagMatchResult{
-			MatchType:    "high_similarity",
-			ExistingTag:  best.Tag,
-			Similarity:   best.Similarity,
-			ShouldCreate: false,
-		}, nil
-	}
-
-	if best.Similarity < s.thresholds.LowSimilarity {
-		// Low similarity - auto-create
-		return &TagMatchResult{
-			MatchType:    "low_similarity",
-			ExistingTag:  best.Tag,
-			Similarity:   best.Similarity,
-			ShouldCreate: true,
-		}, nil
-	}
-
-	// Middle band - candidates populated for abstract tag extraction by caller
 	return &TagMatchResult{
-		MatchType:    "ai_judgment",
-		ExistingTag:  best.Tag,
-		Similarity:   best.Similarity,
-		Candidates:   candidates[:min(3, len(candidates))],
-		ShouldCreate: false,
+		MatchType:  "candidates",
+		Similarity: validCandidates[0].Similarity,
+		Candidates: validCandidates,
 	}, nil
+}
+
+func bestSimilarity(candidates []TagCandidate) float64 {
+	if len(candidates) == 0 {
+		return 0
+	}
+	return candidates[0].Similarity
 }
 
 // FindSimilarAbstractTags finds existing abstract tags with similar embeddings using pgvector SQL.
@@ -307,7 +285,7 @@ func (s *EmbeddingService) FindSimilarAbstractTags(ctx context.Context, tagID ui
 		Distance float64 `gorm:"column:distance"`
 	}
 	var rows []simRow
-	args := []interface{}{pgVecStr, tagID, tagID, tagID, pgVecStr}
+	args := []interface{}{pgVecStr, tagID, tagID, tagID}
 	sqlQuery := `
 		SELECT t.id AS tag_id, e.embedding <=> ?::vector AS distance
 		FROM topic_tag_embeddings e
@@ -330,7 +308,7 @@ func (s *EmbeddingService) FindSimilarAbstractTags(ctx context.Context, tagID ui
 		ORDER BY e.embedding <=> ?::vector
 		LIMIT ?
 	`
-	args = append(args, limit)
+	args = append(args, pgVecStr, limit)
 	if err := database.DB.Raw(sqlQuery, args...).Scan(&rows).Error; err != nil {
 		return nil, fmt.Errorf("failed to query similar abstract tags: %w", err)
 	}
@@ -491,6 +469,8 @@ func MergeTags(sourceTagID, targetTagID uint) error {
 		return fmt.Errorf("enqueue merge re-embedding task: %w", err)
 	}
 
+	go enqueueAbstractTagUpdateIfTargetIsAbstract(targetTagID, "tag_merged")
+
 	return nil
 }
 
@@ -605,7 +585,7 @@ func ensureVectorDimension(dim int) error {
 		return nil
 	}
 
-	log.Printf("[INFO] Altering embedding column from %s to %s", typeStr, expected)
+	logging.Infof("Altering embedding column from %s to %s", typeStr, expected)
 
 	// Drop index first — it depends on the column type
 	_ = database.DB.Exec("DROP INDEX IF EXISTS idx_topic_tag_embeddings_embedding").Error
@@ -621,10 +601,10 @@ func ensureVectorDimension(dim int) error {
 		if err := database.DB.Exec(
 			"CREATE INDEX idx_topic_tag_embeddings_embedding ON topic_tag_embeddings USING hnsw (embedding vector_cosine_ops)",
 		).Error; err != nil {
-			log.Printf("[WARN] Failed to recreate HNSW index: %v", err)
+			logging.Warnf("Failed to recreate HNSW index: %v", err)
 		}
 	} else {
-		log.Printf("[INFO] Dimension %d exceeds HNSW limit (2000), skipping vector index", dim)
+		logging.Infof("Dimension %d exceeds HNSW limit (2000), skipping vector index", dim)
 	}
 
 	return nil
@@ -726,4 +706,15 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func enqueueAbstractTagUpdateIfTargetIsAbstract(targetTagID uint, reason string) {
+	var tag models.TopicTag
+	if err := database.DB.First(&tag, targetTagID).Error; err != nil {
+		return
+	}
+	if tag.Source != "abstract" {
+		return
+	}
+	EnqueueAbstractTagUpdate(targetTagID, reason)
 }
