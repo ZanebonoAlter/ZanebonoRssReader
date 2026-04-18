@@ -1,23 +1,23 @@
 package digest
 
 import (
-	"log"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/logging"
 )
 
 // Migrate 执行摘要配置相关的数据库迁移
 func Migrate() error {
 	// 自动迁移 DigestConfig 表
 	if err := database.DB.AutoMigrate(&DigestConfig{}); err != nil {
-		log.Printf("❌ Failed to migrate digest models: %v", err)
+		logging.Errorf("Failed to migrate digest models: %v", err)
 		return err
 	}
-	log.Println("✅ Digest models migrated successfully")
+	logging.Infof("Digest models migrated successfully")
 
 	// 创建默认配置（如果表为空）
 	var count int64
 	if err := database.DB.Model(&DigestConfig{}).Count(&count).Error; err != nil {
-		log.Printf("❌ Failed to count digest configs: %v", err)
+		logging.Errorf("Failed to count digest configs: %v", err)
 		return err
 	}
 
@@ -39,12 +39,12 @@ func Migrate() error {
 		}
 
 		if err := database.DB.Create(&defaultConfig).Error; err != nil {
-			log.Printf("❌ Failed to create default digest config: %v", err)
+			logging.Errorf("Failed to create default digest config: %v", err)
 			return err
 		}
-		log.Println("✅ Default digest config created")
+		logging.Infof("Default digest config created")
 	} else {
-		log.Printf("ℹ️  Digest config table already has %d record(s)", count)
+		logging.Infof("Digest config table already has %d record(s)", count)
 	}
 
 	return nil

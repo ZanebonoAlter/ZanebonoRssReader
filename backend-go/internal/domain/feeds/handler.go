@@ -127,6 +127,9 @@ func GetFeeds(c *gin.Context) {
 		resultPage = 1
 		resultPerPage = len(feeds)
 	}
+	if resultPerPage == 0 {
+		resultPerPage = 1
+	}
 
 	pages := int(total) / resultPerPage
 	if int(total)%resultPerPage > 0 {
@@ -399,6 +402,14 @@ func DeleteFeed(c *gin.Context) {
 		return
 	}
 
+	if err := database.DB.Where("feed_id = ?", feed.ID).Delete(&models.ReadingBehavior{}).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+
 	if err := database.DB.Delete(&feed).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
@@ -505,17 +516,22 @@ func RefreshAllFeeds(c *gin.Context) {
 		return
 	}
 
-	for _, feed := range feeds {
-		now := time.Now()
-		feed.RefreshStatus = "refreshing"
-		feed.LastRefreshAt = &now
-		feed.RefreshError = ""
-		database.DB.Save(&feed)
+	feedIDs := make([]uint, len(feeds))
+	for i, feed := range feeds {
+		feedIDs[i] = feed.ID
 	}
 
-	go func() {
-		refreshAllFeedsWorker()
-	}()
+	now := time.Now()
+	database.DB.Model(&models.Feed{}).Where("id IN ?", feedIDs).
+		Updates(map[string]interface{}{
+			"refresh_status":  "refreshing",
+			"last_refresh_at": &now,
+			"refresh_error":   "",
+		})
+
+	go func(ids []uint) {
+		refreshAllFeedsWorker(ids)
+	}(feedIDs)
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"success": true,
@@ -526,13 +542,10 @@ func RefreshAllFeeds(c *gin.Context) {
 	})
 }
 
-func refreshAllFeedsWorker() {
-	var feeds []models.Feed
-	database.DB.Find(&feeds)
-
+func refreshAllFeedsWorker(feedIDs []uint) {
 	feedService := NewFeedService()
-	for _, feed := range feeds {
-		if err := feedService.RefreshFeed(context.Background(), feed.ID); err != nil {
+	for _, id := range feedIDs {
+		if err := feedService.RefreshFeed(context.Background(), id); err != nil {
 			continue
 		}
 	}

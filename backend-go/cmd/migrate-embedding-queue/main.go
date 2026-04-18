@@ -1,24 +1,23 @@
 package main
 
 import (
-	"fmt"
-	"log"
 	"my-robot-backend/internal/platform/config"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/logging"
 )
 
 func main() {
 	if err := config.LoadConfig("./configs"); err != nil {
-		log.Printf("Warning: Failed to load config: %v", err)
+		logging.Warnf("Warning: Failed to load config: %v", err)
 	}
 
 	if err := database.InitDB(config.AppConfig); err != nil {
-		log.Fatalf("Failed to initialize database: %v", err)
+		logging.Fatalf("Failed to initialize database: %v", err)
 	}
 
 	db := database.DB
 	if db == nil {
-		log.Fatal("Database connection is nil")
+		logging.Errorln("Database connection is nil")
 	}
 
 	if err := db.Exec(`
@@ -33,23 +32,23 @@ func main() {
 			completed_at TIMESTAMP
 		)
 	`).Error; err != nil {
-		log.Fatalf("Failed to create embedding_queues table: %v", err)
+		logging.Fatalf("Failed to create embedding_queues table: %v", err)
 	}
-	log.Println("✅ embedding_queues table created (or already exists)")
+	logging.Infoln("✅ embedding_queues table created (or already exists)")
 
 	if err := db.Exec(`
 		CREATE INDEX IF NOT EXISTS idx_embedding_queues_status ON embedding_queues(status)
 	`).Error; err != nil {
-		log.Fatalf("Failed to create idx_embedding_queues_status index: %v", err)
+		logging.Fatalf("Failed to create idx_embedding_queues_status index: %v", err)
 	}
-	log.Println("✅ idx_embedding_queues_status index created (or already exists)")
+	logging.Infoln("✅ idx_embedding_queues_status index created (or already exists)")
 
 	if err := db.Exec(`
 		CREATE INDEX IF NOT EXISTS idx_embedding_queues_tag_id ON embedding_queues(tag_id)
 	`).Error; err != nil {
-		log.Fatalf("Failed to create idx_embedding_queues_tag_id index: %v", err)
+		logging.Fatalf("Failed to create idx_embedding_queues_tag_id index: %v", err)
 	}
-	log.Println("✅ idx_embedding_queues_tag_id index created (or already exists)")
+	logging.Infoln("✅ idx_embedding_queues_tag_id index created (or already exists)")
 
-	fmt.Println("Embedding queue migration completed successfully")
+	logging.Infoln("Embedding queue migration completed successfully")
 }

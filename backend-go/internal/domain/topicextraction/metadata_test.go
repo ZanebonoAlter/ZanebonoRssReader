@@ -70,7 +70,7 @@ func TestTagSummaryLogsSummaryMetadata(t *testing.T) {
 	}
 	summary.Feed = &feed
 
-	if err := TagSummary(&summary); err != nil {
+	if err := TagSummary(&summary, "Feed", ""); err != nil {
 		t.Fatalf("tag summary: %v", err)
 	}
 

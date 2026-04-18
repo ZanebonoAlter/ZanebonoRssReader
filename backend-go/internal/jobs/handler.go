@@ -3,7 +3,6 @@ package jobs
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"time"
 
@@ -12,6 +11,7 @@ import (
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/domain/summaries"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/logging"
 )
 
 type UpdateSchedulerIntervalRequest struct {
@@ -115,6 +115,14 @@ func schedulerDescriptors() []schedulerDescriptor {
 				return runtimeinfo.TagQualityScoreSchedulerInterface
 			},
 		},
+		{
+			Name:        "narrative_summary",
+			DisplayName: "Narrative Summary",
+			Description: "Generate daily narrative summaries from active topic tags",
+			Get: func() interface{} {
+				return runtimeinfo.NarrativeSummarySchedulerInterface
+			},
+		},
 	}
 }
 
@@ -139,7 +147,7 @@ func safeGetStatus(scheduler interface{}, displayName string) *SchedulerStatusRe
 
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("Panic in %s scheduler GetStatus: %v", displayName, r)
+			logging.Errorf("Panic in %s scheduler GetStatus: %v", displayName, r)
 		}
 	}()
 
@@ -199,13 +207,21 @@ func TriggerScheduler(c *gin.Context) {
 		return
 	}
 
+	if triggerable, ok := scheduler.(interface {
+		TriggerNowWithDate(dateStr string) map[string]interface{}
+	}); ok {
+		dateStr := c.Query("date")
+		respondTriggerResult(c, descriptor.Name, triggerable.TriggerNowWithDate(dateStr))
+		return
+	}
+
 	if triggerable, ok := scheduler.(interface{ TriggerNow() map[string]interface{} }); ok {
 		respondTriggerResult(c, descriptor.Name, triggerable.TriggerNow())
 		return
 	}
 
 	if triggerable, ok := scheduler.(interface{ Trigger() }); ok {
-		log.Printf("Triggering %s scheduler manually", descriptor.Name)
+		logging.Infof("Triggering %s scheduler manually", descriptor.Name)
 		triggerable.Trigger()
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,

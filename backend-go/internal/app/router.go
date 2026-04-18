@@ -8,9 +8,11 @@ import (
 	contentprocessingdomain "my-robot-backend/internal/domain/contentprocessing"
 	digestdomain "my-robot-backend/internal/domain/digest"
 	feedsdomain "my-robot-backend/internal/domain/feeds"
+	narrativedomain "my-robot-backend/internal/domain/narrative"
 	preferencesdomain "my-robot-backend/internal/domain/preferences"
 	summariesdomain "my-robot-backend/internal/domain/summaries"
 	topicanalysisdomain "my-robot-backend/internal/domain/topicanalysis"
+	topicextractiondomain "my-robot-backend/internal/domain/topicextraction"
 	topicgraphdomain "my-robot-backend/internal/domain/topicgraph"
 	"my-robot-backend/internal/jobs"
 	"my-robot-backend/internal/platform/database"
@@ -164,10 +166,14 @@ func SetupRoutes(r *gin.Engine) {
 		topicanalysisdomain.RegisterEmbeddingConfigRoutes(api)
 		topicanalysisdomain.RegisterEmbeddingQueueRoutes(api)
 		topicanalysisdomain.RegisterMergeReembeddingQueueRoutes(api)
+		topicanalysisdomain.RegisterAbstractTagUpdateQueueRoutes(api)
+		topicextractiondomain.RegisterTagQueueRoutes(api)
 		topicanalysisdomain.RegisterTagManagementRoutes(api)
 		topicanalysisdomain.RegisterWatchedTagsRoutes(api)
 		topicanalysisdomain.RegisterTagMergePreviewRoutes(api)
 		topicanalysisdomain.RegisterAbstractTagRoutes(api)
+
+		narrativedomain.RegisterNarrativeRoutes(api)
 
 		digestGroup := api.Group("/digest")
 		{

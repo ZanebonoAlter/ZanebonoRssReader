@@ -12,6 +12,7 @@ import (
 	"my-robot-backend/internal/domain/topicextraction"
 	"my-robot-backend/internal/domain/topictypes"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/logging"
 
 	"gorm.io/gorm"
 )
@@ -77,13 +78,13 @@ func BuildTopicDetail(kind string, slug string, anchor time.Time, categoryID, fe
 	relatedTags, err := getRelatedTags(topic.ID, 20)
 	if err != nil {
 		// Log warning but don't fail
-		fmt.Printf("Warning: failed to get related tags: %v\n", err)
+		logging.Warnf("Warning: failed to get related tags: %v", err)
 	}
 
 	// 4. Get AI summaries (optional, kept for backward compatibility)
 	summaries, err := fetchSummaries(windowStart, windowEnd, categoryID, feedID)
 	if err != nil {
-		fmt.Printf("Warning: failed to fetch summaries: %v\n", err)
+		logging.Warnf("Warning: failed to fetch summaries: %v", err)
 	}
 
 	matchedSourceSummaries := make([]models.AISummary, 0)

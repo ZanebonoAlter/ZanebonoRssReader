@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -14,6 +13,7 @@ import (
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/domain/topicextraction"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/logging"
 	"my-robot-backend/internal/platform/tracing"
 	"my-robot-backend/internal/platform/ws"
 )
@@ -51,7 +51,7 @@ func (s *FirecrawlScheduler) Start() error {
 	s.nextRun = &nextRun
 	s.wg.Add(1)
 	go s.run()
-	log.Printf("[Firecrawl] Scheduler started")
+	logging.Infof("[Firecrawl] Scheduler started")
 	return nil
 }
 
@@ -59,7 +59,7 @@ func (s *FirecrawlScheduler) Stop() {
 	close(s.stopChan)
 	s.wg.Wait()
 	s.nextRun = nil
-	log.Printf("[Firecrawl] Scheduler stopped")
+	logging.Infof("[Firecrawl] Scheduler stopped")
 }
 
 func (s *FirecrawlScheduler) TriggerNow() map[string]interface{} {
@@ -124,7 +124,7 @@ func (s *FirecrawlScheduler) run() {
 func (s *FirecrawlScheduler) checkAndCrawl() {
 	tracing.TraceSchedulerTick("firecrawl", "cron", func(ctx context.Context) {
 		if !s.executionMutex.TryLock() {
-			log.Println("[Firecrawl] Scheduler already running, skipping this cycle")
+			logging.Infof("[Firecrawl] Scheduler already running, skipping this cycle")
 			return
 		}
 
@@ -150,7 +150,7 @@ func (s *FirecrawlScheduler) runCrawlCycle(batchID string) {
 	config, err := contentprocessing.GetFirecrawlConfig()
 	if err != nil {
 		s.lastError = err.Error()
-		log.Printf("[Firecrawl] Config error: %v", err)
+		logging.Errorf("[Firecrawl] Config error: %v", err)
 		return
 	}
 
@@ -163,7 +163,7 @@ func (s *FirecrawlScheduler) runCrawlCycle(batchID string) {
 	jobs, err := s.queue.Claim(50, s.leaseDuration(config))
 	if err != nil {
 		s.lastError = err.Error()
-		log.Printf("[Firecrawl] Claim error: %v", err)
+		logging.Errorf("[Firecrawl] Claim error: %v", err)
 		return
 	}
 
@@ -175,7 +175,7 @@ func (s *FirecrawlScheduler) runCrawlCycle(batchID string) {
 
 	atomic.StoreInt32(&s.queueSize, int32(len(jobs)))
 	atomic.StoreInt32(&s.processingCount, 0)
-	log.Printf("[Firecrawl] Starting sequential processing of %d jobs (concurrency=1)", len(jobs))
+	logging.Infof("[Firecrawl] Starting sequential processing of %d jobs (concurrency=1)", len(jobs))
 
 	completed := 0
 	failed := 0
@@ -230,7 +230,7 @@ func (s *FirecrawlScheduler) runCrawlCycle(batchID string) {
 				Status: "failed",
 				Error:  crawlErr.Error(),
 			})
-			log.Printf("[Firecrawl] Failed to crawl %s: %v", art.Link, crawlErr)
+			logging.Errorf("[Firecrawl] Failed to crawl %s: %v", art.Link, crawlErr)
 			continue
 		}
 
@@ -246,20 +246,21 @@ func (s *FirecrawlScheduler) runCrawlCycle(batchID string) {
 		database.DB.Model(&art).Updates(updates)
 
 		if err := topicextraction.NewTagJobQueue(database.DB).Enqueue(topicextraction.TagJobRequest{
-			ArticleID:  art.ID,
-			FeedName:   feed.Title,
-			ForceRetag: true,
-			Reason:     "firecrawl_completed",
+			ArticleID:    art.ID,
+			FeedName:     feed.Title,
+			CategoryName: topicextraction.FeedCategoryName(feed),
+			ForceRetag:   true,
+			Reason:       "firecrawl_completed",
 		}); err != nil {
 			failed++
 			_ = s.queue.MarkFailed(job, err.Error(), time.Minute)
-			log.Printf("[Firecrawl] Failed to enqueue retag for article %d after crawl: %v", art.ID, err)
+			logging.Warnf("[Firecrawl] Failed to enqueue retag for article %d after crawl: %v", art.ID, err)
 			continue
 		}
 
 		if err := s.queue.MarkCompleted(job.ID); err != nil {
 			failed++
-			log.Printf("[Firecrawl] Failed to mark job %d completed: %v", job.ID, err)
+			logging.Errorf("[Firecrawl] Failed to mark job %d completed: %v", job.ID, err)
 			continue
 		}
 
@@ -282,7 +283,7 @@ func (s *FirecrawlScheduler) runCrawlCycle(batchID string) {
 	atomic.StoreInt32(&s.processingCount, 0)
 
 	duration := time.Since(startTime).Seconds()
-	log.Printf("[Firecrawl] Sequential crawl completed: %d completed, %d failed out of %d jobs in %.2fs", completed, failed, len(jobs), duration)
+	logging.Infof("[Firecrawl] Sequential crawl completed: %d completed, %d failed out of %d jobs in %.2fs", completed, failed, len(jobs), duration)
 
 	s.broadcastProgress(batchID, "completed", len(jobs), completed, failed, nil)
 	s.lastError = ""
@@ -328,7 +329,7 @@ func (s *FirecrawlScheduler) broadcastProgress(batchID, status string, total, co
 
 	data, err := json.Marshal(msg)
 	if err != nil {
-		log.Printf("[Firecrawl] Failed to marshal progress: %v", err)
+		logging.Warnf("[Firecrawl] Failed to marshal progress: %v", err)
 		return
 	}
 	hub.BroadcastRaw(data)
@@ -359,6 +360,6 @@ func (s *FirecrawlScheduler) GetTaskStatusDetails() map[string]interface{} {
 }
 
 func (s *FirecrawlScheduler) Trigger() {
-	log.Println("[Firecrawl] Manual trigger received")
+	logging.Infof("[Firecrawl] Manual trigger received")
 	go s.checkAndCrawl()
 }

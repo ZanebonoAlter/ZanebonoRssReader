@@ -115,5 +115,7 @@ func autoMigrateModels(db *gorm.DB) error {
 		&models.UserPreference{},
 		&models.FirecrawlJob{},
 		&models.TagJob{},
+		&models.NarrativeSummary{},
+		&models.AbstractTagUpdateQueue{},
 	)
 }

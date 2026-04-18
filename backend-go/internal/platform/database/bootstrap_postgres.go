@@ -28,6 +28,12 @@ func bootstrapPostgresSchema(db *gorm.DB) error {
 		}
 	}
 
+	for _, statement := range postgresForeignKeyCascadeStatements() {
+		if err := db.Exec(statement).Error; err != nil {
+			return fmt.Errorf("apply postgres fk cascade %q: %w", statement, err)
+		}
+	}
+
 	return nil
 }
 
@@ -51,5 +57,17 @@ func postgresBaselineIndexStatements() []string {
 		"CREATE INDEX IF NOT EXISTS idx_firecrawl_jobs_lease_expires_at ON firecrawl_jobs(lease_expires_at)",
 		"CREATE INDEX IF NOT EXISTS idx_tag_jobs_status_available_at ON tag_jobs(status, available_at)",
 		"CREATE INDEX IF NOT EXISTS idx_tag_jobs_lease_expires_at ON tag_jobs(lease_expires_at)",
+	}
+}
+
+func postgresForeignKeyCascadeStatements() []string {
+	return []string{
+		`DO $$
+		BEGIN
+			IF EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'fk_reading_behaviors_article' AND table_name = 'reading_behaviors') THEN
+				ALTER TABLE reading_behaviors DROP CONSTRAINT fk_reading_behaviors_article;
+			END IF;
+		END$$`,
+		`ALTER TABLE reading_behaviors ADD CONSTRAINT fk_reading_behaviors_article FOREIGN KEY (article_id) REFERENCES articles(id) ON DELETE CASCADE`,
 	}
 }

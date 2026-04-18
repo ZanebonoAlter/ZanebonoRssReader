@@ -3,12 +3,12 @@ package jobs
 import (
 	"context"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/logging"
 	"my-robot-backend/internal/platform/tracing"
 )
 
@@ -62,13 +62,13 @@ func (s *BlockedArticleRecoveryScheduler) Start() error {
 				s.runRecoveryCycle()
 				s.updateNextRun(time.Now().Add(time.Duration(s.checkInterval) * time.Second))
 			case <-s.stopChan:
-				log.Println("Blocked article recovery scheduler stopped")
+				logging.Infof("Blocked article recovery scheduler stopped")
 				return
 			}
 		}
 	}()
 
-	log.Printf("Blocked article recovery scheduler started (interval: %d seconds)", s.checkInterval)
+	logging.Infof("Blocked article recovery scheduler started (interval: %d seconds)", s.checkInterval)
 	return nil
 }
 
@@ -105,7 +105,7 @@ func (s *BlockedArticleRecoveryScheduler) runRecoveryCycle() {
 			s.mu.Unlock()
 		}()
 
-		log.Println("Running blocked article recovery...")
+		logging.Infof("Running blocked article recovery...")
 
 		// STAT-04: Recover blocked articles (per D-04, D-05, D-06)
 		var blockedArticles []models.Article
@@ -120,7 +120,7 @@ func (s *BlockedArticleRecoveryScheduler) runRecoveryCycle() {
 			s.failedRuns++
 			s.lastError = err.Error()
 			s.mu.Unlock()
-			log.Printf("[ERROR] BlockedArticleRecovery: failed to query blocked articles: %v", err)
+			logging.Errorf("BlockedArticleRecovery: failed to query blocked articles: %v", err)
 			return
 		}
 
@@ -140,13 +140,13 @@ func (s *BlockedArticleRecoveryScheduler) runRecoveryCycle() {
 
 				if result.Error == nil && result.RowsAffected > 0 {
 					recoveredCount++
-					log.Printf("[INFO] BlockedArticleRecovery: recovered article %d from feed %d", article.ID, feed.ID)
+					logging.Infof("BlockedArticleRecovery: recovered article %d from feed %d", article.ID, feed.ID)
 				}
 			}
 		}
 
 		if recoveredCount > 0 {
-			log.Printf("[INFO] BlockedArticleRecovery: recovered %d blocked articles", recoveredCount)
+			logging.Infof("BlockedArticleRecovery: recovered %d blocked articles", recoveredCount)
 		}
 
 		// STAT-05: Blocked count warning (per D-07, D-08)
@@ -159,9 +159,9 @@ func (s *BlockedArticleRecoveryScheduler) runRecoveryCycle() {
 			Count(&blockedCount).Error
 
 		if err != nil {
-			log.Printf("[ERROR] BlockedArticleRecovery: failed to count blocked articles: %v", err)
+			logging.Errorf("BlockedArticleRecovery: failed to count blocked articles: %v", err)
 		} else if blockedCount > blockedArticleThreshold {
-			log.Printf("[WARN] ContentCompletion blocked articles exceeded threshold: %d > %d", blockedCount, blockedArticleThreshold)
+			logging.Warnf("ContentCompletion blocked articles exceeded threshold: %d > %d", blockedCount, blockedArticleThreshold)
 		}
 
 		s.mu.Lock()
@@ -169,7 +169,7 @@ func (s *BlockedArticleRecoveryScheduler) runRecoveryCycle() {
 		s.successRuns++
 		s.lastError = ""
 		s.mu.Unlock()
-		log.Println("Blocked article recovery completed successfully")
+		logging.Infof("Blocked article recovery completed successfully")
 	})
 }
 
@@ -187,7 +187,7 @@ func (s *BlockedArticleRecoveryScheduler) TriggerNow() map[string]interface{} {
 	}
 	s.mu.Unlock()
 
-	log.Println("Manual blocked article recovery triggered")
+	logging.Infof("Manual blocked article recovery triggered")
 	s.runRecoveryCycle()
 
 	return map[string]interface{}{

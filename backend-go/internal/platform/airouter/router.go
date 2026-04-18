@@ -12,6 +12,16 @@ import (
 	"my-robot-backend/internal/platform/database"
 )
 
+const maxResponseSnippet = 10000
+
+func truncateSnippet(s string) string {
+	runes := []rune(s)
+	if len(runes) > maxResponseSnippet {
+		return string(runes[:maxResponseSnippet]) + "..."
+	}
+	return s
+}
+
 type Router struct {
 	store   *Store
 	clients map[string]ProviderClient
@@ -81,13 +91,14 @@ func (r *Router) Chat(ctx context.Context, req ChatRequest) (result *ChatResult,
 		latencyMs := int(time.Since(start).Milliseconds())
 		if callErr == nil {
 			r.store.LogCall(&models.AICallLog{
-				Capability:   string(req.Capability),
-				RouteName:    route.Name,
-				ProviderName: provider.Name,
-				Success:      true,
-				IsFallback:   idx > 0,
-				LatencyMs:    latencyMs,
-				RequestMeta:  encodeMeta(req.Metadata),
+				Capability:      string(req.Capability),
+				RouteName:       route.Name,
+				ProviderName:    provider.Name,
+				Success:         true,
+				IsFallback:      idx > 0,
+				LatencyMs:       latencyMs,
+				RequestMeta:     encodeMeta(req.Metadata),
+				ResponseSnippet: truncateSnippet(content),
 			})
 
 			return &ChatResult{Content: content, ProviderID: provider.ID, ProviderName: provider.Name, RouteName: route.Name, UsedFallback: idx > 0, AttemptCount: idx + 1}, nil
@@ -101,15 +112,16 @@ func (r *Router) Chat(ctx context.Context, req ChatRequest) (result *ChatResult,
 			}
 		}
 		r.store.LogCall(&models.AICallLog{
-			Capability:   string(req.Capability),
-			RouteName:    route.Name,
-			ProviderName: provider.Name,
-			Success:      false,
-			IsFallback:   idx > 0,
-			LatencyMs:    latencyMs,
-			ErrorCode:    code,
-			ErrorMessage: callErr.Error(),
-			RequestMeta:  encodeMeta(req.Metadata),
+			Capability:      string(req.Capability),
+			RouteName:       route.Name,
+			ProviderName:    provider.Name,
+			Success:         false,
+			IsFallback:      idx > 0,
+			LatencyMs:       latencyMs,
+			ErrorCode:       code,
+			ErrorMessage:    callErr.Error(),
+			RequestMeta:     encodeMeta(req.Metadata),
+			ResponseSnippet: truncateSnippet(callErr.Error()),
 		})
 		attemptErrors = append(attemptErrors, fmt.Errorf("%s: %w", provider.Name, callErr))
 	}

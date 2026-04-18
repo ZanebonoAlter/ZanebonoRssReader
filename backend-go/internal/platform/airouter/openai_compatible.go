@@ -26,7 +26,8 @@ type JSONSchema struct {
 }
 
 type SchemaProperty struct {
-	Type        string                    `json:"type"`
+	Type        string                    `json:"type,omitempty"`
+	Enum        []string                  `json:"enum,omitempty"`
 	Items       *SchemaProperty           `json:"items,omitempty"`
 	Properties  map[string]SchemaProperty `json:"properties,omitempty"`
 	Required    []string                  `json:"required,omitempty"`

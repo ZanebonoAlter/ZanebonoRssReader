@@ -14,6 +14,7 @@ import (
 	"my-robot-backend/internal/domain/topicanalysis"
 	"my-robot-backend/internal/platform/airouter"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/jsonutil"
 )
 
 var errNoAIAvailable = errors.New("no AI provider available for tagging")
@@ -86,7 +87,7 @@ func (te *TagExtractor) extractCandidates(ctx context.Context, input topictypes.
 	systemPrompt := buildExtractionSystemPrompt()
 	userPrompt := buildExtractionUserPrompt(input)
 
-	maxTokens := 600
+	maxTokens := 2048
 	temperature := 0.2
 	metadata := map[string]any{
 		"title": input.Title,
@@ -176,80 +177,22 @@ func (te *TagExtractor) resolveCandidate(ctx context.Context, candidate topictyp
 				MatchedTo: matchResult.ExistingTag.ID,
 			}, false, nil
 
-		case "high_similarity":
-			// Auto-reuse
-			return &topictypes.TopicTag{
-				Label:     matchResult.ExistingTag.Label,
-				Slug:      matchResult.ExistingTag.Slug,
-				Category:  matchResult.ExistingTag.Category,
-				Icon:      matchResult.ExistingTag.Icon,
-				Aliases:   parseAliases(matchResult.ExistingTag.Aliases),
-				Score:     candidate.Confidence * matchResult.Similarity,
-				IsNew:     false,
-				MatchedTo: matchResult.ExistingTag.ID,
-			}, false, nil
-
-		case "low_similarity":
-			// Auto-create new tag
-			return &topictypes.TopicTag{
-				Label:    candidate.Label,
-				Slug:     slug,
-				Category: category,
-				Aliases:  candidate.Aliases,
-				Score:    candidate.Confidence,
-				IsNew:    true,
-			}, false, nil
-
-		case "ai_judgment":
-			// Need AI to decide
-			decision, err := te.aiJudgment(ctx, candidate, matchResult.Candidates, input)
-			if err != nil {
-				// On AI failure, default to creating new
+		case "candidates":
+			if len(matchResult.Candidates) > 0 && matchResult.Candidates[0].Tag != nil {
+				best := matchResult.Candidates[0]
 				return &topictypes.TopicTag{
-					Label:    candidate.Label,
-					Slug:     slug,
-					Category: category,
-					Aliases:  candidate.Aliases,
-					Score:    candidate.Confidence,
-					IsNew:    true,
+					Label:     best.Tag.Label,
+					Slug:      best.Tag.Slug,
+					Category:  best.Tag.Category,
+					Icon:      best.Tag.Icon,
+					Aliases:   parseAliases(best.Tag.Aliases),
+					Score:     candidate.Confidence * best.Similarity,
+					IsNew:     false,
+					MatchedTo: best.Tag.ID,
 				}, false, nil
 			}
 
-			if decision.Decision == "reuse" && decision.ReuseTagID > 0 {
-				// Find the tag to reuse
-				for _, c := range matchResult.Candidates {
-					if c.Tag.ID == decision.ReuseTagID {
-						return &topictypes.TopicTag{
-							Label:     c.Tag.Label,
-							Slug:      c.Tag.Slug,
-							Category:  c.Tag.Category,
-							Icon:      c.Tag.Icon,
-							Aliases:   parseAliases(c.Tag.Aliases),
-							Score:     candidate.Confidence * c.Similarity,
-							IsNew:     false,
-							MatchedTo: c.Tag.ID,
-						}, false, nil
-					}
-				}
-			}
-
-			// Create new tag
-			label := candidate.Label
-			if decision.NewLabel != "" {
-				label = decision.NewLabel
-			}
-			cat := category
-			if decision.NewCategory != "" {
-				cat = validateCategory(decision.NewCategory)
-			}
-			return &topictypes.TopicTag{
-				Label:    label,
-				Slug:     slugify(label),
-				Category: cat,
-				Aliases:  candidate.Aliases,
-				Score:    candidate.Confidence,
-				IsNew:    true,
-			}, false, nil
+		case "no_match":
 		}
 	}
 
@@ -429,7 +372,7 @@ func buildResolutionUserPrompt(req topictypes.TagResolutionRequest) string {
 }
 
 func parseExtractedTags(content string) ([]topictypes.ExtractedTag, error) {
-	content = normalizeStructuredResponse(content)
+	content = jsonutil.SanitizeLLMJSON(content)
 
 	var raw []struct {
 		Label      string   `json:"label"`
@@ -476,38 +419,8 @@ func parseExtractedTags(content string) ([]topictypes.ExtractedTag, error) {
 	return result, nil
 }
 
-func normalizeStructuredResponse(content string) string {
-	content = strings.TrimSpace(content)
-	content = strings.TrimPrefix(content, "```json")
-	content = strings.TrimPrefix(content, "```")
-	content = strings.TrimSuffix(content, "```")
-	content = strings.TrimSpace(content)
-
-	if strings.HasPrefix(content, "[") || strings.HasPrefix(content, "{") {
-		return content
-	}
-
-	arrayStart := strings.Index(content, "[")
-	arrayEnd := strings.LastIndex(content, "]")
-	if arrayStart >= 0 && arrayEnd > arrayStart {
-		return strings.TrimSpace(content[arrayStart : arrayEnd+1])
-	}
-
-	objectStart := strings.Index(content, "{")
-	objectEnd := strings.LastIndex(content, "}")
-	if objectStart >= 0 && objectEnd > objectStart {
-		return strings.TrimSpace(content[objectStart : objectEnd+1])
-	}
-
-	return content
-}
-
 func parseResolutionResponse(content string) (*topictypes.TagResolutionResponse, error) {
-	content = strings.TrimSpace(content)
-	content = strings.TrimPrefix(content, "```json")
-	content = strings.TrimPrefix(content, "```")
-	content = strings.TrimSuffix(content, "```")
-	content = strings.TrimSpace(content)
+	content = jsonutil.SanitizeLLMJSON(content)
 
 	var resp struct {
 		Decision    string `json:"decision"`

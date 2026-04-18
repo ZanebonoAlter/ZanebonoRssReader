@@ -1,20 +1,20 @@
 package main
 
 import (
-	"log"
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/platform/config"
 	"my-robot-backend/internal/platform/database"
 	"time"
+	"my-robot-backend/internal/platform/logging"
 )
 
 func main() {
 	if err := config.LoadConfig("./configs"); err != nil {
-		log.Printf("Warning: Failed to load config: %v", err)
+		logging.Warnf("Warning: Failed to load config: %v", err)
 	}
 
 	if err := database.InitDB(config.AppConfig); err != nil {
-		log.Fatalf("Failed to initialize database: %v", err)
+		logging.Warnf("Failed to initialize database: %v", err)
 	}
 
 	// 创建测试分类
@@ -47,5 +47,5 @@ func main() {
 	}
 	database.DB.Create(&summary)
 
-	log.Println("Test data created successfully")
+	logging.Infoln("Test data created successfully")
 }

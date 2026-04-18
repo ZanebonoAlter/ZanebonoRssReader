@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"sort"
 	"strings"
@@ -17,6 +16,7 @@ import (
 	"my-robot-backend/internal/domain/topictypes"
 	"my-robot-backend/internal/platform/aisettings"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/logging"
 	"my-robot-backend/internal/platform/opennotebook"
 )
 
@@ -948,7 +948,7 @@ func RunDigestNow(c *gin.Context) {
 	}
 	if shouldAutoSendOpenNotebook(kind, openNotebookConfig) {
 		if _, err := sendDigestPreviewToOpenNotebook(kind, preview, openNotebookConfig); err != nil {
-			log.Printf("Failed to auto-send %s digest to Open Notebook: %v", kind, err)
+			logging.Errorf("Failed to auto-send %s digest to Open Notebook: %v", kind, err)
 		} else {
 			sentToOpenNotebook = true
 		}

@@ -196,10 +196,11 @@ func (s *ContentCompletionService) CompleteArticleWithMetadata(ctx context.Conte
 	}
 
 	if err := topicextraction.NewTagJobQueue(database.DB).Enqueue(topicextraction.TagJobRequest{
-		ArticleID:  article.ID,
-		FeedName:   feed.Title,
-		ForceRetag: true,
-		Reason:     "summary_completed",
+		ArticleID:    article.ID,
+		FeedName:     feed.Title,
+		CategoryName: topicextraction.FeedCategoryName(feed),
+		ForceRetag:   true,
+		Reason:       "summary_completed",
 	}); err != nil {
 		return fmt.Errorf("enqueue retag job after completion: %w", err)
 	}

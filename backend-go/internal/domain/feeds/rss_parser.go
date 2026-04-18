@@ -1,11 +1,14 @@
 package feeds
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mmcdole/gofeed"
 )
@@ -43,14 +46,54 @@ type ParsedEntry struct {
 }
 
 func (p *RSSParser) ParseFeedURL(feedURL string) (*ParsedFeed, error) {
+	resp, err := p.client.Get(feedURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch feed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("feed returned HTTP %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read feed body: %w", err)
+	}
+
+	cleaned := sanitizeUTF8(body)
+
 	fp := gofeed.NewParser()
-	feed, err := fp.ParseURL(feedURL)
+	feed, err := fp.Parse(bytes.NewReader(cleaned))
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse feed: %w", err)
 	}
 
 	return p.convertGofeedToParsed(feed), nil
 }
+
+func sanitizeUTF8(data []byte) []byte {
+	if utf8.Valid(data) {
+		return data
+	}
+	valid := make([]byte, 0, len(data))
+	for i := 0; i < len(data); {
+		_, size := utf8.DecodeRune(data[i:])
+		if size == 1 && data[i] < 0x80 {
+			valid = append(valid, data[i])
+			i++
+		} else if size == 1 {
+			valid = append(valid, replacement...)
+			i++
+		} else {
+			valid = append(valid, data[i:i+size]...)
+			i += size
+		}
+	}
+	return valid
+}
+
+var replacement = []byte("\uFFFD")
 
 func (p *RSSParser) ParseFeedFromString(xmlContent string) (*ParsedFeed, error) {
 	fp := gofeed.NewParser()

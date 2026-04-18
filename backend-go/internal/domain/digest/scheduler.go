@@ -2,7 +2,6 @@ package digest
 
 import (
 	"fmt"
-	"log"
 	"strconv"
 	"strings"
 	"sync"
@@ -10,6 +9,7 @@ import (
 
 	"github.com/robfig/cron/v3"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/logging"
 )
 
 func parseTime(timeStr string) (hour, minute int, err error) {
@@ -55,7 +55,7 @@ func (s *DigestScheduler) Start() error {
 	defer s.mu.Unlock()
 
 	if s.isRunning {
-		log.Println("Digest scheduler already running")
+		logging.Infof("Digest scheduler already running")
 		return nil
 	}
 
@@ -79,7 +79,7 @@ func (s *DigestScheduler) reloadLocked() error {
 
 	config, err := s.loadOrCreateConfig()
 	if err != nil {
-		log.Printf("Failed to load digest config: %v", err)
+		logging.Errorf("Failed to load digest config: %v", err)
 		return err
 	}
 	s.config = config
@@ -93,7 +93,7 @@ func (s *DigestScheduler) reloadLocked() error {
 		if _, err := s.cron.AddFunc(dailyExpr, s.generateDailyDigest); err != nil {
 			return fmt.Errorf("failed to schedule daily digest: %w", err)
 		}
-		log.Printf("Daily digest scheduled at %s", config.DailyTime)
+		logging.Infof("Daily digest scheduled at %s", config.DailyTime)
 	}
 
 	if config.WeeklyEnabled {
@@ -109,12 +109,12 @@ func (s *DigestScheduler) reloadLocked() error {
 		if _, err := s.cron.AddFunc(weeklyExpr, s.generateWeeklyDigest); err != nil {
 			return fmt.Errorf("failed to schedule weekly digest: %w", err)
 		}
-		log.Printf("Weekly digest scheduled at %s on day %d", config.WeeklyTime, config.WeeklyDay)
+		logging.Infof("Weekly digest scheduled at %s on day %d", config.WeeklyTime, config.WeeklyDay)
 	}
 
 	s.cron.Start()
 	s.isRunning = true
-	log.Println("Digest scheduler started")
+	logging.Infof("Digest scheduler started")
 	return nil
 }
 
@@ -128,7 +128,7 @@ func (s *DigestScheduler) Stop() {
 	ctx := s.cron.Stop()
 	<-ctx.Done()
 	s.isRunning = false
-	log.Println("Digest scheduler stopped")
+	logging.Infof("Digest scheduler stopped")
 }
 
 func (s *DigestScheduler) loadOrCreateConfig() (*DigestConfig, error) {
@@ -153,7 +153,7 @@ func (s *DigestScheduler) loadOrCreateConfig() (*DigestConfig, error) {
 		if err := database.DB.Create(&defaultConfig).Error; err != nil {
 			return nil, fmt.Errorf("failed to create default digest config: %w", err)
 		}
-		log.Println("Created default digest config")
+		logging.Infof("Created default digest config")
 		return &defaultConfig, nil
 	}
 	return &config, nil
@@ -197,7 +197,7 @@ func (s *DigestScheduler) exportToObsidian(isDaily bool, date time.Time, digests
 func (s *DigestScheduler) autoSendToOpenNotebook(kind string, date time.Time, digests []CategoryDigest) bool {
 	config, _, err := loadOpenNotebookConfigRecord()
 	if err != nil {
-		log.Printf("Failed to load Open Notebook config for %s digest: %v", kind, err)
+		logging.Errorf("Failed to load Open Notebook config for %s digest: %v", kind, err)
 		return false
 	}
 	if !shouldAutoSendOpenNotebook(kind, config) {
@@ -212,11 +212,11 @@ func (s *DigestScheduler) autoSendToOpenNotebook(kind string, date time.Time, di
 	}
 
 	if _, err := sendDigestPreviewToOpenNotebook(kind, preview, config); err != nil {
-		log.Printf("Failed to auto-send %s digest to Open Notebook: %v", kind, err)
+		logging.Errorf("Failed to auto-send %s digest to Open Notebook: %v", kind, err)
 		return false
 	}
 
-	log.Printf("%s digest sent to Open Notebook successfully", kind)
+	logging.Infof("%s digest sent to Open Notebook successfully", kind)
 	return true
 }
 
@@ -256,41 +256,41 @@ func (s *DigestScheduler) generateDetailedDigestMessage(digests []CategoryDigest
 
 func (s *DigestScheduler) generateDailyDigest() {
 	if !s.executionMutex.TryLock() {
-		log.Println("Digest generation already running, skipping daily cycle")
+		logging.Infof("Digest generation already running, skipping daily cycle")
 		return
 	}
 	defer s.executionMutex.Unlock()
 
-	log.Println("Starting daily digest generation")
+	logging.Infof("Starting daily digest generation")
 
 	config, err := s.loadOrCreateConfig()
 	if err != nil {
-		log.Printf("Failed to load config for daily digest: %v", err)
+		logging.Errorf("Failed to load config for daily digest: %v", err)
 		return
 	}
 
 	generator := NewDigestGenerator(config)
 	digests, err := generator.GenerateDailyDigest(time.Now())
 	if err != nil {
-		log.Printf("Failed to generate daily digest: %v", err)
+		logging.Errorf("Failed to generate daily digest: %v", err)
 		return
 	}
 
-	log.Printf("Generated daily digest with %d categories", len(digests))
+	logging.Infof("Generated daily digest with %d categories", len(digests))
 
 	if config.FeishuEnabled && config.FeishuWebhookURL != "" {
 		if err := s.sendFeishuDigest("每日日报", digests, config); err != nil {
-			log.Printf("Failed to send daily digest to Feishu: %v", err)
+			logging.Errorf("Failed to send daily digest to Feishu: %v", err)
 		} else {
-			log.Println("Daily digest sent to Feishu successfully")
+			logging.Infof("Daily digest sent to Feishu successfully")
 		}
 	}
 
 	if config.ObsidianEnabled && config.ObsidianVaultPath != "" && config.ObsidianDailyDigest {
 		if err := s.exportToObsidian(true, time.Now(), digests, config); err != nil {
-			log.Printf("Failed to export daily digest to Obsidian: %v", err)
+			logging.Errorf("Failed to export daily digest to Obsidian: %v", err)
 		} else {
-			log.Println("Daily digest exported to Obsidian successfully")
+			logging.Infof("Daily digest exported to Obsidian successfully")
 		}
 	}
 
@@ -299,41 +299,41 @@ func (s *DigestScheduler) generateDailyDigest() {
 
 func (s *DigestScheduler) generateWeeklyDigest() {
 	if !s.executionMutex.TryLock() {
-		log.Println("Digest generation already running, skipping weekly cycle")
+		logging.Infof("Digest generation already running, skipping weekly cycle")
 		return
 	}
 	defer s.executionMutex.Unlock()
 
-	log.Println("Starting weekly digest generation")
+	logging.Infof("Starting weekly digest generation")
 
 	config, err := s.loadOrCreateConfig()
 	if err != nil {
-		log.Printf("Failed to load config for weekly digest: %v", err)
+		logging.Errorf("Failed to load config for weekly digest: %v", err)
 		return
 	}
 
 	generator := NewDigestGenerator(config)
 	digests, err := generator.GenerateWeeklyDigest(time.Now())
 	if err != nil {
-		log.Printf("Failed to generate weekly digest: %v", err)
+		logging.Errorf("Failed to generate weekly digest: %v", err)
 		return
 	}
 
-	log.Printf("Generated weekly digest with %d categories", len(digests))
+	logging.Infof("Generated weekly digest with %d categories", len(digests))
 
 	if config.FeishuEnabled && config.FeishuWebhookURL != "" {
 		if err := s.sendFeishuDigest("每周周报", digests, config); err != nil {
-			log.Printf("Failed to send weekly digest to Feishu: %v", err)
+			logging.Errorf("Failed to send weekly digest to Feishu: %v", err)
 		} else {
-			log.Println("Weekly digest sent to Feishu successfully")
+			logging.Infof("Weekly digest sent to Feishu successfully")
 		}
 	}
 
 	if config.ObsidianEnabled && config.ObsidianVaultPath != "" && config.ObsidianWeeklyDigest {
 		if err := s.exportToObsidian(false, time.Now(), digests, config); err != nil {
-			log.Printf("Failed to export weekly digest to Obsidian: %v", err)
+			logging.Errorf("Failed to export weekly digest to Obsidian: %v", err)
 		} else {
-			log.Println("Weekly digest exported to Obsidian successfully")
+			logging.Infof("Weekly digest exported to Obsidian successfully")
 		}
 	}
 

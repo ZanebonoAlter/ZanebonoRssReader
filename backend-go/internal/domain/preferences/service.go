@@ -1,12 +1,12 @@
 package preferences
 
 import (
-	"log"
 	"math"
 	"time"
 
 	"gorm.io/gorm"
 	"my-robot-backend/internal/domain/models"
+	"my-robot-backend/internal/platform/logging"
 )
 
 type PreferenceService struct {
@@ -50,7 +50,7 @@ func (s *PreferenceService) UpdateAllPreferences() error {
 			return err
 		}
 
-		log.Printf(
+		logging.Infof(
 			"Preference update completed: repaired_behaviors=%d deleted_behaviors=%d deleted_orphan_preferences=%d rebuilt_feed_preferences=%d rebuilt_category_preferences=%d",
 			repairedBehaviors,
 			deletedBehaviors,
@@ -88,7 +88,9 @@ func (s *PreferenceService) repairOrphanReadingBehaviors() (int64, error) {
 }
 
 func (s *PreferenceService) deleteUnrecoverableReadingBehaviors() (int64, error) {
-	result := s.db.Exec(`
+	var totalDeleted int64
+
+	categoryResult := s.db.Exec(`
 		DELETE FROM reading_behaviors
 		WHERE category_id IS NOT NULL
 		  AND NOT EXISTS (
@@ -96,8 +98,24 @@ func (s *PreferenceService) deleteUnrecoverableReadingBehaviors() (int64, error)
 			WHERE categories.id = reading_behaviors.category_id
 		  )
 	`)
+	if categoryResult.Error != nil {
+		return 0, categoryResult.Error
+	}
+	totalDeleted += categoryResult.RowsAffected
 
-	return result.RowsAffected, result.Error
+	feedResult := s.db.Exec(`
+		DELETE FROM reading_behaviors
+		WHERE NOT EXISTS (
+			SELECT 1 FROM feeds
+			WHERE feeds.id = reading_behaviors.feed_id
+		)
+	`)
+	if feedResult.Error != nil {
+		return totalDeleted, feedResult.Error
+	}
+	totalDeleted += feedResult.RowsAffected
+
+	return totalDeleted, nil
 }
 
 func (s *PreferenceService) deleteOrphanPreferences() (int64, error) {
@@ -150,7 +168,8 @@ func (s *PreferenceService) updateFeedPreferences() (int, error) {
 			COALESCE(AVG(scroll_depth), 0) as avg_scroll_depth,
 			MAX(created_at) as last_interaction
 		`).
-		Where("feed_id IS NOT NULL").
+		Where("feed_id IS NOT NULL AND feed_id > 0").
+		Where("EXISTS (SELECT 1 FROM feeds WHERE feeds.id = reading_behaviors.feed_id)").
 		Group("feed_id").
 		Scan(&feedStats).Error; err != nil {
 		return 0, err

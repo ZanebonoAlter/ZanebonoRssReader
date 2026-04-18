@@ -32,7 +32,10 @@ func GetTopicGraph(c *gin.Context) {
 
 func GetTopicDetail(c *gin.Context) {
 	slug := c.Param("slug")
-	kind := c.DefaultQuery("type", "daily")
+	kind := c.Query("type")
+	if kind == "" {
+		kind = "all"
+	}
 	anchor, err := topictypes.ParseAnchorDate(c.Query("date"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
@@ -121,7 +124,10 @@ func GetDigestsByArticleTagHandler(c *gin.Context) {
 		return
 	}
 
-	kind := c.DefaultQuery("type", "daily")
+	kind := c.Query("type")
+	if kind == "" {
+		kind = "all"
+	}
 	anchor, err := topictypes.ParseAnchorDate(c.Query("date"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
@@ -186,7 +192,10 @@ func GetPendingArticlesByTagHandler(c *gin.Context) {
 		return
 	}
 
-	kind := c.DefaultQuery("type", "daily")
+	kind := c.Query("type")
+	if kind == "" {
+		kind = "all"
+	}
 	anchor, err := topictypes.ParseAnchorDate(c.Query("date"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})

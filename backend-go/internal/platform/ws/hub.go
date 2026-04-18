@@ -2,13 +2,13 @@ package ws
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"my-robot-backend/internal/platform/logging"
 )
 
 var upgrader = websocket.Upgrader{
@@ -140,7 +140,7 @@ func (h *Hub) run() {
 			h.mu.Lock()
 			h.clients[client] = true
 			h.mu.Unlock()
-			log.Printf("WebSocket客户端已连接，当前连接数: %d", len(h.clients))
+			logging.Infof("WebSocket客户端已连接，当前连接数: %d", len(h.clients))
 
 		case client := <-h.unregister:
 			h.mu.Lock()
@@ -149,7 +149,7 @@ func (h *Hub) run() {
 				close(client.send)
 			}
 			h.mu.Unlock()
-			log.Printf("WebSocket客户端已断开，当前连接数: %d", len(h.clients))
+			logging.Infof("WebSocket客户端已断开，当前连接数: %d", len(h.clients))
 
 		case message := <-h.broadcast:
 			h.mu.RLock()
@@ -179,7 +179,7 @@ func (h *Hub) run() {
 func (h *Hub) BroadcastProgress(msg *SummaryProgressMessage) {
 	data, err := json.Marshal(msg)
 	if err != nil {
-		log.Printf("序列化进度消息失败: %v", err)
+		logging.Errorf("序列化进度消息失败: %v", err)
 		return
 	}
 
@@ -187,7 +187,7 @@ func (h *Hub) BroadcastProgress(msg *SummaryProgressMessage) {
 	case h.broadcast <- data:
 	default:
 		// 广播通道满，丢弃消息
-		log.Printf("广播通道已满，丢弃消息")
+		logging.Warnf("广播通道已满，丢弃消息")
 	}
 }
 
@@ -196,7 +196,7 @@ func (h *Hub) BroadcastRaw(data []byte) {
 	select {
 	case h.broadcast <- data:
 	default:
-		log.Printf("广播通道已满，丢弃消息")
+		logging.Warnf("广播通道已满，丢弃消息")
 	}
 }
 
@@ -204,7 +204,7 @@ func (h *Hub) BroadcastRaw(data []byte) {
 func HandleWebSocket(c *gin.Context) {
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
-		log.Printf("WebSocket升级失败: %v", err)
+		logging.Warnf("WebSocket升级失败: %v", err)
 		return
 	}
 
@@ -239,7 +239,7 @@ func (c *Client) readPump() {
 		_, _, err := c.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("WebSocket读取错误: %v", err)
+				logging.Warnf("WebSocket读取错误: %v", err)
 			}
 			break
 		}
@@ -264,7 +264,7 @@ func (c *Client) writePump() {
 
 			c.conn.SetWriteDeadline(getDeadline())
 			if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
-				log.Printf("WebSocket写入失败: %v", err)
+				logging.Warnf("WebSocket写入失败: %v", err)
 				return
 			}
 		}

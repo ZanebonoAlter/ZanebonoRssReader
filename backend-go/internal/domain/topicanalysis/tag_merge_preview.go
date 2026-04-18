@@ -2,10 +2,10 @@ package topicanalysis
 
 import (
 	"fmt"
-	"log"
 
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/logging"
 )
 
 // TagMergeCandidate represents a pair of similar tags proposed for merging.
@@ -191,7 +191,7 @@ func ScanSimilarTagPairs(limit int, scopeFeedID uint, scopeCategoryID uint) ([]T
 	}
 
 	if skipped > 0 {
-		log.Printf("ScanSimilarTagPairs: skipped %d pairs due to DB lookup errors", skipped)
+		logging.Warnf("ScanSimilarTagPairs: skipped %d pairs due to DB lookup errors", skipped)
 	}
 
 	return candidates, nil

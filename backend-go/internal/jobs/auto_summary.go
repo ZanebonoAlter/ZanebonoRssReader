@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -23,6 +22,7 @@ import (
 	"my-robot-backend/internal/platform/airouter"
 	"my-robot-backend/internal/platform/aisettings"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/logging"
 	"my-robot-backend/internal/platform/tracing"
 )
 
@@ -87,7 +87,7 @@ func (s *AutoSummaryScheduler) Start() error {
 	s.initSchedulerTask()
 
 	if err := s.loadAIConfig(); err != nil {
-		log.Printf("Warning: Failed to load AI config: %v", err)
+		logging.Warnf("Warning: Failed to load AI config: %v", err)
 		s.updateSchedulerStatus("idle", "AI config not set", nil, nil)
 	}
 
@@ -98,7 +98,7 @@ func (s *AutoSummaryScheduler) Start() error {
 
 	s.cron.Start()
 	s.isRunning = true
-	log.Printf("Auto-summary scheduler started with interval: %v", s.checkInterval)
+	logging.Infof("Auto-summary scheduler started with interval: %v", s.checkInterval)
 
 	return nil
 }
@@ -110,7 +110,7 @@ func (s *AutoSummaryScheduler) Stop() {
 
 	s.cron.Stop()
 	s.isRunning = false
-	log.Println("Auto-summary scheduler stopped")
+	logging.Infof("Auto-summary scheduler stopped")
 }
 
 func (s *AutoSummaryScheduler) UpdateInterval(interval int) error {
@@ -203,7 +203,7 @@ func (s *AutoSummaryScheduler) SetAIConfig(baseURL, apiKey, model string, timeRa
 		return fmt.Errorf("failed to save auto summary config: %w", err)
 	}
 
-	log.Println("AI configuration updated and saved to database")
+	logging.Infof("AI configuration updated and saved to database")
 	return nil
 }
 
@@ -226,7 +226,7 @@ func (s *AutoSummaryScheduler) loadAIConfig() error {
 		if s.aiConfig.TimeRange <= 0 {
 			s.aiConfig.TimeRange = 180
 		}
-		log.Println("AI route configuration loaded from database")
+		logging.Infof("AI route configuration loaded from database")
 		return nil
 	}
 
@@ -242,14 +242,14 @@ func (s *AutoSummaryScheduler) loadAIConfig() error {
 	}
 
 	s.aiConfig = &config
-	log.Println("AI configuration loaded from database")
+	logging.Infof("AI configuration loaded from database")
 	return nil
 }
 
 func (s *AutoSummaryScheduler) checkAndGenerateSummaries() {
 	tracing.TraceSchedulerTick("auto_summary", "cron", func(ctx context.Context) {
 		if !s.executionMutex.TryLock() {
-			log.Println("Summary generation already in progress, skipping this cycle")
+			logging.Infof("Summary generation already in progress, skipping this cycle")
 			return
 		}
 		s.isExecuting = true
@@ -257,13 +257,13 @@ func (s *AutoSummaryScheduler) checkAndGenerateSummaries() {
 			s.executionMutex.Unlock()
 			s.isExecuting = false
 			if r := recover(); r != nil {
-				log.Printf("[ERROR] PANIC in checkAndGenerateSummaries: %v", r)
+				logging.Errorf("PANIC in checkAndGenerateSummaries: %v", r)
 				s.updateSchedulerStatus("idle", fmt.Sprintf("Panic: %v", r), nil, nil)
 			}
 		}()
 
 		if err := s.loadAIConfig(); err != nil {
-			log.Printf("AI config not available, skipping summary generation: %v", err)
+			logging.Warnf("AI config not available, skipping summary generation: %v", err)
 			s.updateSchedulerStatus("idle", "AI config not set", nil, nil)
 			return
 		}
@@ -273,7 +273,7 @@ func (s *AutoSummaryScheduler) checkAndGenerateSummaries() {
 }
 
 func (s *AutoSummaryScheduler) runSummaryCycle(triggerSource string) {
-	log.Println("Starting auto-summary generation cycle")
+	logging.Infof("Starting auto-summary generation cycle")
 	startTime := time.Now()
 	summary := &AutoSummaryRunSummary{
 		TriggerSource: triggerSource,
@@ -283,7 +283,7 @@ func (s *AutoSummaryScheduler) runSummaryCycle(triggerSource string) {
 
 	var feeds []models.Feed
 	if err := database.DB.Where("ai_summary_enabled = ?", true).Preload("Category").Find(&feeds).Error; err != nil {
-		log.Printf("Error fetching feeds: %v", err)
+		logging.Errorf("Error fetching feeds: %v", err)
 		summary.Reason = "query_failed"
 		summary.FinishedAt = time.Now().Format(time.RFC3339)
 		s.updateSchedulerStatus("idle", err.Error(), &startTime, summary)
@@ -292,38 +292,38 @@ func (s *AutoSummaryScheduler) runSummaryCycle(triggerSource string) {
 	summary.FeedCount = len(feeds)
 
 	if len(feeds) == 0 {
-		log.Println("No feeds with AI summary enabled found, skipping")
+		logging.Infof("No feeds with AI summary enabled found, skipping")
 		summary.Reason = "no_feeds_enabled"
 		summary.FinishedAt = time.Now().Format(time.RFC3339)
 		s.updateSchedulerStatus("idle", "No feeds enabled", &startTime, summary)
 		return
 	}
 
-	log.Printf("Found %d feeds to process", len(feeds))
+	logging.Infof("Found %d feeds to process", len(feeds))
 
 	successCount := 0
 	failedCount := 0
 
 	for i, feed := range feeds {
-		log.Printf("Processing feed %d/%d: %s (ID: %d)", i+1, len(feeds), feed.Title, feed.ID)
+		logging.Infof("Processing feed %d/%d: %s (ID: %d)", i+1, len(feeds), feed.Title, feed.ID)
 
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
-					log.Printf("[ERROR] PANIC recovered while processing feed %d (%s): %v", feed.ID, feed.Title, r)
+					logging.Errorf("PANIC recovered while processing feed %d (%s): %v", feed.ID, feed.Title, r)
 					failedCount++
 				}
 			}()
 
 			result, err := s.generateSummaryForFeed(&feed)
 			if err != nil {
-				log.Printf("[ERROR] Error generating summary for feed %d (%s): %v", feed.ID, feed.Title, err)
+				logging.Errorf("Error generating summary for feed %d (%s): %v", feed.ID, feed.Title, err)
 				failedCount++
 			} else if result {
-				log.Printf("[OK] Successfully generated summary for feed %d (%s)", feed.ID, feed.Title)
+				logging.Infof("Successfully generated summary for feed %d (%s)", feed.ID, feed.Title)
 				successCount++
 			} else {
-				log.Printf("[SKIP] Skipped feed %d (%s) - no content to summarize", feed.ID, feed.Title)
+				logging.Infof("Skipped feed %d (%s) - no content to summarize", feed.ID, feed.Title)
 				summary.SkippedCount++
 			}
 		}()
@@ -343,7 +343,7 @@ func (s *AutoSummaryScheduler) runSummaryCycle(triggerSource string) {
 		duration,
 	)
 
-	log.Printf("Auto-summary cycle completed: %s", resultMsg)
+	logging.Infof("Auto-summary cycle completed: %s", resultMsg)
 	summary.FinishedAt = time.Now().Format(time.RFC3339)
 	if successCount > 0 {
 		summary.Reason = "summaries_generated"
@@ -367,7 +367,7 @@ func (s *AutoSummaryScheduler) generateSummaryForFeed(feed *models.Feed) (bool, 
 		timeRange = 180
 	}
 	timeThreshold := time.Now().Add(-time.Duration(timeRange) * time.Minute)
-	log.Printf("Using time range: %d minutes (threshold: %s)", timeRange, timeThreshold.Format("2006-01-02 15:04:05"))
+	logging.Infof("Using time range: %d minutes (threshold: %s)", timeRange, timeThreshold.Format("2006-01-02 15:04:05"))
 
 	var articles []models.Article
 	if err := database.DB.Omit("tag_count", "relevance_score").Where("feed_id = ? AND created_at >= ? AND feed_summary_generated_at IS NULL", feed.ID, timeThreshold).
@@ -377,11 +377,11 @@ func (s *AutoSummaryScheduler) generateSummaryForFeed(feed *models.Feed) (bool, 
 	}
 
 	if len(articles) == 0 {
-		log.Printf("No recent articles found for feed %d in the last %d minutes", feed.ID, timeRange)
+		logging.Infof("No recent articles found for feed %d in the last %d minutes", feed.ID, timeRange)
 		return false, nil
 	}
 
-	log.Printf("Found %d articles for feed %d", len(articles), feed.ID)
+	logging.Infof("Found %d articles for feed %d", len(articles), feed.ID)
 
 	feedName := feed.Title
 	if feedName == "" {
@@ -399,7 +399,7 @@ func (s *AutoSummaryScheduler) generateSummaryForFeed(feed *models.Feed) (bool, 
 
 	for batchIndex, batch := range batches {
 		batchNum := batchIndex + 1
-		log.Printf("Processing batch %d/%d with %d articles for feed %d", batchNum, totalBatches, len(batch), feed.ID)
+		logging.Infof("Processing batch %d/%d with %d articles for feed %d", batchNum, totalBatches, len(batch), feed.ID)
 
 		articleTexts := make([]string, 0, len(batch))
 		batchArticleIDs := make([]uint, len(batch))
@@ -417,15 +417,15 @@ func (s *AutoSummaryScheduler) generateSummaryForFeed(feed *models.Feed) (bool, 
 		}
 		if existingSummary != nil {
 			allArticleIDs = append(allArticleIDs, batchArticleIDs...)
-			log.Printf("Skipping existing summary for feed %d batch %d/%d (ID: %d)", feed.ID, batchNum, totalBatches, existingSummary.ID)
+			logging.Infof("Skipping existing summary for feed %d batch %d/%d (ID: %d)", feed.ID, batchNum, totalBatches, existingSummary.ID)
 			if err := summaries.MarkArticlesWithFeedSummary(batchArticleIDs, existingSummary); err != nil {
-				log.Printf("[WARN] Failed to mark articles with existing summary %d: %v", existingSummary.ID, err)
+				logging.Warnf("Failed to mark articles with existing summary %d: %v", existingSummary.ID, err)
 			}
-			if err := topicextraction.TagSummary(existingSummary); err != nil {
-				log.Printf("[WARN] Failed to backfill tags for existing auto summary %d: %v", existingSummary.ID, err)
+			if err := topicextraction.TagSummary(existingSummary, feedName, categoryName); err != nil {
+				logging.Warnf("Failed to backfill tags for existing auto summary %d: %v", existingSummary.ID, err)
 			}
 			if err := topicextraction.BackfillArticleTags(batch, feedName, categoryName); err != nil {
-				log.Printf("[WARN] Failed to backfill article tags for existing summary feed %d batch %d: %v", feed.ID, batchNum, err)
+				logging.Warnf("Failed to backfill article tags for existing summary feed %d batch %d: %v", feed.ID, batchNum, err)
 			}
 			continue
 		}
@@ -445,7 +445,7 @@ func (s *AutoSummaryScheduler) generateSummaryForFeed(feed *models.Feed) (bool, 
 			return false, fmt.Errorf("failed to build prompt: %w", err)
 		}
 
-		log.Printf(
+		logging.Infof(
 			"Auto summary prompt built for feed=%s batch=%d/%d personalized=%t preferred_feeds=%d preferred_categories=%d",
 			feedName, batchNum, totalBatches,
 			promptContext.Personalized,
@@ -479,20 +479,20 @@ func (s *AutoSummaryScheduler) generateSummaryForFeed(feed *models.Feed) (bool, 
 			return false, fmt.Errorf("failed to save summary: %w", err)
 		}
 		if err := summaries.MarkArticlesWithFeedSummary(batchArticleIDs, &aiSummary); err != nil {
-			log.Printf("[WARN] Failed to mark articles with summary %d: %v", aiSummary.ID, err)
+			logging.Warnf("Failed to mark articles with summary %d: %v", aiSummary.ID, err)
 		}
-		if err := topicextraction.TagSummary(&aiSummary); err != nil {
-			log.Printf("[WARN] Failed to tag auto summary %d: %v", aiSummary.ID, err)
+		if err := topicextraction.TagSummary(&aiSummary, feedName, categoryName); err != nil {
+			logging.Warnf("Failed to tag auto summary %d: %v", aiSummary.ID, err)
 		}
 
 		if err := topicextraction.BackfillArticleTags(batch, feedName, categoryName); err != nil {
-			log.Printf("[WARN] Failed to backfill article tags for feed %d batch %d: %v", feed.ID, batchNum, err)
+			logging.Warnf("Failed to backfill article tags for feed %d batch %d: %v", feed.ID, batchNum, err)
 		}
 
-		log.Printf("Successfully generated summary for feed %d batch %d/%d (ID: %d)", feed.ID, batchNum, totalBatches, aiSummary.ID)
+		logging.Infof("Successfully generated summary for feed %d batch %d/%d (ID: %d)", feed.ID, batchNum, totalBatches, aiSummary.ID)
 	}
 
-	log.Printf("Completed %d summary batches for feed %d, total %d articles", totalBatches, feed.ID, len(allArticleIDs))
+	logging.Infof("Completed %d summary batches for feed %d, total %d articles", totalBatches, feed.ID, len(allArticleIDs))
 	return true, nil
 }
 
@@ -621,7 +621,7 @@ func (s *AutoSummaryScheduler) callAI(prompt string, metadata map[string]any) (s
 		if routeErr == nil {
 			return result, nil
 		}
-		log.Printf("[WARN] auto-summary route call failed, falling back to direct provider: %v", routeErr)
+		logging.Warnf("auto-summary route call failed, falling back to direct provider: %v", routeErr)
 	}
 
 	type openAIMessage struct {
@@ -686,7 +686,7 @@ func (s *AutoSummaryScheduler) callAI(prompt string, metadata map[string]any) (s
 
 	var openAIResp openAIResponse
 	if err := json.Unmarshal(respBody, &openAIResp); err != nil {
-		log.Printf("Failed to parse AI response (status %d): %s", resp.StatusCode, string(respBody))
+		logging.Errorf("Failed to parse AI response (status %d): %s", resp.StatusCode, string(respBody))
 		return "", fmt.Errorf("failed to parse response: %w", err)
 	}
 
@@ -735,7 +735,7 @@ func (s *AutoSummaryScheduler) TriggerNow() map[string]interface{} {
 		defer func() {
 			s.isExecuting = false
 			if r := recover(); r != nil {
-				log.Printf("[ERROR] PANIC in manual auto-summary trigger: %v", r)
+				logging.Errorf("PANIC in manual auto-summary trigger: %v", r)
 				s.updateSchedulerStatus("idle", fmt.Sprintf("Panic: %v", r), nil, nil)
 			}
 		}()

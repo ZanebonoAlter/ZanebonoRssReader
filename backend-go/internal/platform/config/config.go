@@ -1,11 +1,11 @@
 package config
 
 import (
-	"log"
 	"os"
 	"strings"
 
 	"github.com/spf13/viper"
+	"my-robot-backend/internal/platform/logging"
 )
 
 type Config struct {
@@ -64,7 +64,7 @@ func LoadConfig(configPath string) error {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
 			return err
 		}
-		log.Println("Config file not found, using defaults")
+		logging.Infof("Config file not found, using defaults")
 	}
 
 	AppConfig = &Config{}

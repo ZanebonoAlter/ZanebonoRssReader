@@ -131,9 +131,10 @@ func (s *FeedService) enqueueArticleProcessing(feed models.Feed, article models.
 	}
 
 	return topicextraction.NewTagJobQueue(database.DB).Enqueue(topicextraction.TagJobRequest{
-		ArticleID: article.ID,
-		FeedName:  feed.Title,
-		Reason:    "article_created",
+		ArticleID:    article.ID,
+		FeedName:     feed.Title,
+		CategoryName: topicextraction.FeedCategoryName(feed),
+		Reason:       "article_created",
 	})
 }
 
@@ -192,6 +193,7 @@ func (s *FeedService) cleanupOldArticles(feed *models.Feed) {
 		return
 	}
 
+	database.DB.Where("article_id IN (SELECT id FROM articles WHERE feed_id = ? AND id NOT IN ?)", feed.ID, keepIDs).Delete(&models.ReadingBehavior{})
 	database.DB.Where("feed_id = ? AND id NOT IN ?", feed.ID, keepIDs).Delete(&models.Article{})
 }
 

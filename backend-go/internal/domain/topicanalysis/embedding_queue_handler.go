@@ -66,12 +66,22 @@ func RetryEmbeddingQueueFailed(c *gin.Context) {
 	})
 }
 
+func BackfillPersonMetadataHandler(c *gin.Context) {
+	processed, err := BackfillPersonMetadata()
+	if err != nil {
+		c.JSON(500, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"success": true, "data": gin.H{"processed": processed}})
+}
+
 func RegisterEmbeddingQueueRoutes(rg *gin.RouterGroup) {
 	queue := rg.Group("/embedding/queue")
 	{
 		queue.GET("/status", GetEmbeddingQueueStatus)
 		queue.GET("/tasks", GetEmbeddingQueueTasks)
 		queue.POST("/retry", RetryEmbeddingQueueFailed)
+		queue.POST("/person-metadata/backfill", BackfillPersonMetadataHandler)
 	}
 }
 

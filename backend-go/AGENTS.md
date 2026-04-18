@@ -120,3 +120,4 @@ go test ./internal/domain/feeds -v
 - API base: `http://localhost:5000/api`
 - Use `gofmt` for formatting
 - Table-driven tests preferred
+- 日志使用"my-robot-backend/internal/platform/logging"进行分流

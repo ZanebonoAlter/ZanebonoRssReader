@@ -2,13 +2,11 @@ package database
 
 import (
 	"fmt"
-	"log"
 	"time"
 
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
-
 	"my-robot-backend/internal/platform/config"
+	"my-robot-backend/internal/platform/logging"
 )
 
 var DB *gorm.DB
@@ -19,14 +17,9 @@ var runDatabaseMigrations = RunMigrations
 const defaultDatabaseDriver = "postgres"
 
 func InitDB(cfg *config.Config) error {
-	logLevel := logger.Silent
-	if cfg.Server.Mode == "debug" {
-		logLevel = logger.Info
-	}
-
 	cstZone := time.FixedZone("CST", 8*3600)
 	gormCfg := &gorm.Config{
-		Logger: logger.Default.LogMode(logLevel),
+		Logger: NewSlowLogger(200 * time.Millisecond),
 		NowFunc: func() time.Time {
 			return time.Now().In(cstZone)
 		},
@@ -43,7 +36,7 @@ func InitDB(cfg *config.Config) error {
 		return fmt.Errorf("run database migrations: %w", err)
 	}
 
-	log.Println("Database initialized successfully")
+	logging.Infof("Database initialized successfully")
 	return nil
 }
 

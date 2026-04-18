@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -21,6 +20,7 @@ import (
 	"my-robot-backend/internal/domain/topicextraction"
 	"my-robot-backend/internal/platform/airouter"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/logging"
 	"my-robot-backend/internal/platform/tracing"
 	"my-robot-backend/internal/platform/ws"
 )
@@ -376,7 +376,7 @@ func (q *SummaryQueue) generateSummaryForFeed(feedID *uint, categoryID *uint, fe
 		return nil, &SummaryError{Code: "NO_ARTICLES", Message: "该订阅源下没有找到文章"}
 	}
 
-	log.Printf("Found %d articles for feed %d", len(articles), *feedID)
+	logging.Infof("Found %d articles for feed %d", len(articles), *feedID)
 
 	displayName := feedName
 	if displayName == "" {
@@ -389,7 +389,7 @@ func (q *SummaryQueue) generateSummaryForFeed(feedID *uint, categoryID *uint, fe
 
 	for batchIndex, batch := range batches {
 		batchNum := batchIndex + 1
-		log.Printf("Processing queue batch %d/%d with %d articles for feed %d", batchNum, totalBatches, len(batch), *feedID)
+		logging.Infof("Processing queue batch %d/%d with %d articles for feed %d", batchNum, totalBatches, len(batch), *feedID)
 
 		articleTexts := make([]string, 0, len(batch))
 		batchArticleIDs := make([]uint, len(batch))
@@ -406,15 +406,15 @@ func (q *SummaryQueue) generateSummaryForFeed(feedID *uint, categoryID *uint, fe
 			return nil, &SummaryError{Code: "DB_ERROR", Message: "检查已有总结失败: " + err.Error()}
 		}
 		if existingSummary != nil {
-			log.Printf("Skipping existing queue summary for feed %d batch %d/%d (ID: %d)", *feedID, batchNum, totalBatches, existingSummary.ID)
+			logging.Infof("Skipping existing queue summary for feed %d batch %d/%d (ID: %d)", *feedID, batchNum, totalBatches, existingSummary.ID)
 			if err := MarkArticlesWithFeedSummary(batchArticleIDs, existingSummary); err != nil {
-				log.Printf("[WARN] Failed to mark articles with existing summary %d: %v", existingSummary.ID, err)
+				logging.Warnf("Failed to mark articles with existing summary %d: %v", existingSummary.ID, err)
 			}
-			if err := topicextraction.TagSummary(existingSummary); err != nil {
-				log.Printf("[WARN] Failed to backfill tags for existing summary %d: %v", existingSummary.ID, err)
+			if err := topicextraction.TagSummary(existingSummary, displayName, categoryName); err != nil {
+				logging.Warnf("Failed to backfill tags for existing summary %d: %v", existingSummary.ID, err)
 			}
 			if err := topicextraction.BackfillArticleTags(batch, displayName, categoryName); err != nil {
-				log.Printf("[WARN] Failed to backfill article tags for existing feed %d batch %d: %v", *feedID, batchNum, err)
+				logging.Warnf("Failed to backfill article tags for existing feed %d batch %d: %v", *feedID, batchNum, err)
 			}
 			lastSummary = existingSummary
 			continue
@@ -435,7 +435,7 @@ func (q *SummaryQueue) generateSummaryForFeed(feedID *uint, categoryID *uint, fe
 			return nil, &SummaryError{Code: "PROMPT_BUILD_FAILED", Message: "构建总结提示词失败: " + err.Error()}
 		}
 
-		log.Printf(
+		logging.Infof(
 			"Queue summary prompt built for feed=%s batch=%d/%d personalized=%t preferred_feeds=%d preferred_categories=%d",
 			displayName, batchNum, totalBatches,
 			promptContext.Personalized,
@@ -462,21 +462,21 @@ func (q *SummaryQueue) generateSummaryForFeed(feedID *uint, categoryID *uint, fe
 			return nil, &SummaryError{Code: "DB_ERROR", Message: "保存总结失败: " + err.Error()}
 		}
 		if err := MarkArticlesWithFeedSummary(batchArticleIDs, &aiSummary); err != nil {
-			log.Printf("[WARN] Failed to mark articles with summary %d: %v", aiSummary.ID, err)
+			logging.Warnf("Failed to mark articles with summary %d: %v", aiSummary.ID, err)
 		}
-		if err := topicextraction.TagSummary(&aiSummary); err != nil {
-			log.Printf("[WARN] Failed to tag summary %d: %v", aiSummary.ID, err)
+		if err := topicextraction.TagSummary(&aiSummary, displayName, categoryName); err != nil {
+			logging.Warnf("Failed to tag summary %d: %v", aiSummary.ID, err)
 		}
 
 		if err := topicextraction.BackfillArticleTags(batch, displayName, categoryName); err != nil {
-			log.Printf("[WARN] Failed to backfill article tags for feed %d batch %d: %v", *feedID, batchNum, err)
+			logging.Warnf("Failed to backfill article tags for feed %d batch %d: %v", *feedID, batchNum, err)
 		}
 
 		lastSummary = &aiSummary
-		log.Printf("Successfully generated queue summary for feed %d batch %d/%d (ID: %d)", *feedID, batchNum, totalBatches, aiSummary.ID)
+		logging.Infof("Successfully generated queue summary for feed %d batch %d/%d (ID: %d)", *feedID, batchNum, totalBatches, aiSummary.ID)
 	}
 
-	log.Printf("Completed %d summary batches for feed %d, total %d articles", totalBatches, *feedID, len(articles))
+	logging.Infof("Completed %d summary batches for feed %d, total %d articles", totalBatches, *feedID, len(articles))
 	return lastSummary, nil
 }
 

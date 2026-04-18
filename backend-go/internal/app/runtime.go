@@ -25,6 +25,7 @@ type Runtime struct {
 	BlockedArticleRecovery *jobs.BlockedArticleRecoveryScheduler
 	AutoTagMerge           *jobs.AutoTagMergeScheduler
 	TagQualityScore        *jobs.TagQualityScoreScheduler
+	NarrativeSummary       *jobs.NarrativeSummaryScheduler
 }
 
 func StartRuntime() *Runtime {
@@ -42,6 +43,8 @@ func StartRuntime() *Runtime {
 	logging.Infoln("Embedding queue worker started successfully")
 	topicanalysis.StartMergeReembeddingQueueWorker()
 	logging.Infoln("Merge re-embedding queue worker started successfully")
+	topicanalysis.StartAbstractTagUpdateQueueWorker()
+	logging.Infoln("Abstract tag update queue worker started successfully")
 
 	runtime.AutoRefresh = jobs.NewAutoRefreshScheduler(60)
 	if err := runtime.AutoRefresh.Start(); err != nil {
@@ -119,6 +122,13 @@ func StartRuntime() *Runtime {
 		logging.Infoln("Tag quality score scheduler started successfully")
 	}
 
+	runtime.NarrativeSummary = jobs.NewNarrativeSummaryScheduler(86400)
+	if err := runtime.NarrativeSummary.Start(); err != nil {
+		logging.Warnf("Failed to start narrative summary scheduler: %v", err)
+	} else {
+		logging.Infoln("Narrative summary scheduler started successfully")
+	}
+
 	runtimeinfo.AutoRefreshSchedulerInterface = runtime.AutoRefresh
 	runtimeinfo.AutoSummarySchedulerInterface = runtime.AutoSummary
 	runtimeinfo.PreferenceUpdateSchedulerInterface = runtime.PreferenceUpdate
@@ -127,6 +137,7 @@ func StartRuntime() *Runtime {
 	runtimeinfo.DigestSchedulerInterface = runtime.Digest
 	runtimeinfo.AutoTagMergeSchedulerInterface = runtime.AutoTagMerge
 	runtimeinfo.TagQualityScoreSchedulerInterface = runtime.TagQualityScore
+	runtimeinfo.NarrativeSummarySchedulerInterface = runtime.NarrativeSummary
 
 	return runtime
 }
@@ -149,6 +160,9 @@ func SetupGracefulShutdown(runtime *Runtime) {
 
 			logging.Infoln("Stopping merge re-embedding queue worker...")
 			topicanalysis.StopMergeReembeddingQueueWorker()
+
+			logging.Infoln("Stopping abstract tag update queue worker...")
+			topicanalysis.StopAbstractTagUpdateQueueWorker()
 
 			if runtime.AutoRefresh != nil {
 				logging.Infoln("Stopping auto-refresh scheduler...")
@@ -193,6 +207,11 @@ func SetupGracefulShutdown(runtime *Runtime) {
 			if runtime.TagQualityScore != nil {
 				logging.Infoln("Stopping tag quality score scheduler...")
 				runtime.TagQualityScore.Stop()
+			}
+
+			if runtime.NarrativeSummary != nil {
+				logging.Infoln("Stopping narrative summary scheduler...")
+				runtime.NarrativeSummary.Stop()
 			}
 
 			close(done)

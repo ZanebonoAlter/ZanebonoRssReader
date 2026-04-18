@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"sort"
 	"strings"
 	"sync"
@@ -15,6 +14,7 @@ import (
 
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/domain/topictypes"
+	"my-robot-backend/internal/platform/logging"
 )
 
 const (
@@ -165,7 +165,7 @@ func (s *analysisService) EnqueueForSummary(summaryID uint64, priority int) erro
 	for _, tagID := range tagIDs {
 		for _, analysisType := range []string{AnalysisTypeEvent, AnalysisTypePerson, AnalysisTypeKeyword} {
 			if err := s.enqueue(tagID, analysisType, WindowTypeDaily, anchor, priority); err != nil {
-				log.Printf("[WARN] enqueue topic analysis failed summary=%d tag=%d type=%s: %v", summaryID, tagID, analysisType, err)
+				logging.Warnf("enqueue topic analysis failed summary=%d tag=%d type=%s: %v", summaryID, tagID, analysisType, err)
 			}
 		}
 	}
@@ -195,7 +195,7 @@ func (s *analysisService) runQueueWorker() {
 			if strings.Contains(strings.ToLower(err.Error()), "closed") {
 				return
 			}
-			log.Printf("[WARN] analysis dequeue failed: %v", err)
+			logging.Warnf("analysis dequeue failed: %v", err)
 			continue
 		}
 		if job == nil {

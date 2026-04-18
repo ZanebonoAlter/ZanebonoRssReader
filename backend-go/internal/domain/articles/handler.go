@@ -47,7 +47,7 @@ func GetArticlesStats(c *gin.Context) {
 	}
 	var result StatsResult
 	database.DB.Model(&models.Article{}).
-		Select("COUNT(*) as total, SUM(CASE WHEN NOT read THEN 1 ELSE 0 END) as unread, SUM(CASE WHEN favorite THEN 1 ELSE 0 END) as favorite").
+		Select("COUNT(*) as total, COALESCE(SUM(CASE WHEN NOT read THEN 1 ELSE 0 END), 0) as unread, COALESCE(SUM(CASE WHEN favorite THEN 1 ELSE 0 END), 0) as favorite").
 		Scan(&result)
 
 	c.JSON(http.StatusOK, gin.H{
@@ -329,17 +329,18 @@ func RetagArticleHandler(c *gin.Context) {
 	}
 
 	var feed models.Feed
-	if err := database.DB.First(&feed, article.FeedID).Error; err != nil {
+	if err := database.DB.Preload("Category").First(&feed, article.FeedID).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 		return
 	}
 
 	queue := topicextraction.NewTagJobQueue(database.DB)
 	if err := queue.Enqueue(topicextraction.TagJobRequest{
-		ArticleID:  article.ID,
-		FeedName:   feed.Title,
-		ForceRetag: true,
-		Reason:     "manual_api_trigger",
+		ArticleID:    article.ID,
+		FeedName:     feed.Title,
+		CategoryName: topicextraction.FeedCategoryName(feed),
+		ForceRetag:   true,
+		Reason:       "manual_api_trigger",
 	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 		return

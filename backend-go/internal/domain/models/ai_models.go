@@ -184,17 +184,18 @@ func (AIRouteProvider) TableName() string {
 }
 
 type AICallLog struct {
-	ID           uint      `gorm:"primaryKey" json:"id"`
-	Capability   string    `gorm:"size:50;not null;index" json:"capability"`
-	RouteName    string    `gorm:"size:100;not null" json:"route_name"`
-	ProviderName string    `gorm:"size:100;not null" json:"provider_name"`
-	Success      bool      `gorm:"not null;index" json:"success"`
-	IsFallback   bool      `gorm:"not null;default:false" json:"is_fallback"`
-	LatencyMs    int       `json:"latency_ms"`
-	ErrorCode    string    `gorm:"size:100" json:"error_code"`
-	ErrorMessage string    `gorm:"type:text" json:"error_message"`
-	RequestMeta  string    `gorm:"type:text" json:"request_meta"`
-	CreatedAt    time.Time `json:"created_at"`
+	ID              uint      `gorm:"primaryKey" json:"id"`
+	Capability      string    `gorm:"size:50;not null;index" json:"capability"`
+	RouteName       string    `gorm:"size:100;not null" json:"route_name"`
+	ProviderName    string    `gorm:"size:100;not null" json:"provider_name"`
+	Success         bool      `gorm:"not null;index" json:"success"`
+	IsFallback      bool      `gorm:"not null;default:false" json:"is_fallback"`
+	LatencyMs       int       `json:"latency_ms"`
+	ErrorCode       string    `gorm:"size:100" json:"error_code"`
+	ErrorMessage    string    `gorm:"type:text" json:"error_message"`
+	RequestMeta     string    `gorm:"type:text" json:"request_meta"`
+	ResponseSnippet string    `gorm:"type:text" json:"response_snippet"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 func (AICallLog) TableName() string {

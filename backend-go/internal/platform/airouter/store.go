@@ -120,6 +120,18 @@ func (s *Store) UpsertProvider(provider *models.AIProvider) error {
 	if provider.TimeoutSeconds <= 0 {
 		provider.TimeoutSeconds = 120
 	}
+
+	var existing models.AIProvider
+	err := s.db.Where("name = ?", provider.Name).First(&existing).Error
+	if err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		return s.db.Create(provider).Error
+	}
+
+	provider.ID = existing.ID
+	provider.CreatedAt = existing.CreatedAt
 	return s.db.Save(provider).Error
 }
 

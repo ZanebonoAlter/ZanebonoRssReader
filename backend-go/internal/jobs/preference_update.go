@@ -3,13 +3,13 @@ package jobs
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 	"sync"
 	"time"
 
 	"my-robot-backend/internal/domain/preferences"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/logging"
 	"my-robot-backend/internal/platform/tracing"
 )
 
@@ -61,13 +61,13 @@ func (s *PreferenceUpdateScheduler) Start() error {
 				s.runUpdate()
 				s.updateNextRun(time.Now().Add(time.Duration(s.checkInterval) * time.Second))
 			case <-s.stopChan:
-				log.Println("Preference update scheduler stopped")
+				logging.Infof("Preference update scheduler stopped")
 				return
 			}
 		}
 	}()
 
-	log.Printf("Preference update scheduler started (interval: %d seconds)", s.checkInterval)
+	logging.Infof("Preference update scheduler started (interval: %d seconds)", s.checkInterval)
 	return nil
 }
 
@@ -104,7 +104,7 @@ func (s *PreferenceUpdateScheduler) runUpdate() {
 			s.mu.Unlock()
 		}()
 
-		log.Println("Running preference update...")
+		logging.Infof("Running preference update...")
 
 		preferenceService := preferences.NewPreferenceService(database.DB)
 		if err := preferenceService.UpdateAllPreferences(); err != nil {
@@ -113,14 +113,14 @@ func (s *PreferenceUpdateScheduler) runUpdate() {
 			s.failedRuns++
 			s.lastError = err.Error()
 			s.mu.Unlock()
-			log.Printf("Preference update failed: %v", err)
+			logging.Errorf("Preference update failed: %v", err)
 		} else {
 			s.mu.Lock()
 			s.totalRuns++
 			s.successRuns++
 			s.lastError = ""
 			s.mu.Unlock()
-			log.Println("Preference update completed successfully")
+			logging.Infof("Preference update completed successfully")
 		}
 	})
 }
@@ -139,7 +139,7 @@ func (s *PreferenceUpdateScheduler) TriggerNow() map[string]interface{} {
 	}
 	s.mu.Unlock()
 
-	log.Println("Manual preference update triggered")
+	logging.Infof("Manual preference update triggered")
 	s.runUpdate()
 
 	return map[string]interface{}{

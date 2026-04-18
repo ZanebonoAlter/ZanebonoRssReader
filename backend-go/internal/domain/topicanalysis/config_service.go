@@ -2,11 +2,11 @@ package topicanalysis
 
 import (
 	"fmt"
-	"log"
 	"strconv"
 
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/logging"
 )
 
 // EmbeddingConfigService manages embedding configuration stored in the database
@@ -72,7 +72,7 @@ func (s *EmbeddingConfigService) UpdateConfig(key, value string) error {
 		var existing models.EmbeddingConfig
 		if err := database.DB.Where("key = ?", key).First(&existing).Error; err == nil {
 			if existing.Value != value && value != "" {
-				log.Printf("WARNING: Embedding model changed from %q to %q. Existing embeddings may be stale.", existing.Value, value)
+				logging.Warnf("WARNING: Embedding model changed from %q to %q. Existing embeddings may be stale.", existing.Value, value)
 			}
 		}
 	}

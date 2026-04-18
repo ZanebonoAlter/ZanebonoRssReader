@@ -5,7 +5,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 	"time"
@@ -18,6 +17,7 @@ import (
 	"my-robot-backend/internal/platform/config"
 	"my-robot-backend/internal/platform/database"
 	"my-robot-backend/internal/platform/database/datamigrate"
+	"my-robot-backend/internal/platform/logging"
 )
 
 type cliOptions struct {
@@ -30,26 +30,26 @@ type cliOptions struct {
 func main() {
 	options, err := parseFlags()
 	if err != nil {
-		log.Fatalf("Invalid flags: %v", err)
+		logging.Fatalf("Invalid flags: %v", err)
 	}
 	if err := validateExecuteSafety(options); err != nil {
-		log.Fatalf("Invalid flags: %v", err)
+		logging.Fatalf("Invalid flags: %v", err)
 	}
 
 	if err := config.LoadConfig("./configs"); err != nil {
-		log.Printf("Warning: failed to load config: %v", err)
+		logging.Warnf("Warning: failed to load config: %v", err)
 	}
 
 	ctx := context.Background()
 	targetDB, reader, writer, err := openDatabases(options)
 	if err != nil {
-		log.Fatalf("Failed to open databases: %v", err)
+		logging.Fatalf("Failed to open databases: %v", err)
 	}
 	defer reader.Close()
 
 	if modePreparesTargetBeforeResolvingSpecs(options.Mode) {
 		if err := prepareTargetSchema(ctx, targetDB); err != nil {
-			log.Fatalf("Failed to prepare target schema: %v", err)
+			logging.Fatalf("Failed to prepare target schema: %v", err)
 		}
 	}
 
@@ -60,16 +60,16 @@ func main() {
 		return
 	case datamigrate.ModeExecute:
 		if !modeNeedsTargetPreparation(options.Mode) {
-			log.Fatalf("invalid target preparation state for mode %s", options.Mode)
+			logging.Fatalf("invalid target preparation state for mode %s", options.Mode)
 		}
 		if err := executeImport(ctx, targetDB, reader, writer, specs, summaries); err != nil {
-			log.Fatalf("Import failed: %v", err)
+			logging.Fatalf("Import failed: %v", err)
 		}
 	}
 
 	report, err := verify(ctx, reader, writer, specs)
 	if err != nil {
-		log.Fatalf("Verification failed: %v", err)
+		logging.Fatalf("Verification failed: %v", err)
 	}
 
 	printVerification(report)
@@ -78,12 +78,12 @@ func main() {
 func resolveSpecsAndSummaries(ctx context.Context, mode datamigrate.Mode, reader *datamigrate.SQLiteReader, writer *datamigrate.PostgresWriter) ([]datamigrate.TableSpec, []datamigrate.TableSummary) {
 	specs, err := activeSpecs(ctx, reader, writer, datamigrate.DefaultTableSpecs())
 	if err != nil {
-		log.Fatalf("Failed to resolve import order: %v", err)
+		logging.Fatalf("Failed to resolve import order: %v", err)
 	}
 
 	summaries, err := dryRun(ctx, reader, specs)
 	if err != nil {
-		log.Fatalf("Failed to inspect source tables: %v", err)
+		logging.Fatalf("Failed to inspect source tables: %v", err)
 	}
 
 	printSummaries(mode, summaries)

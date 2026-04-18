@@ -3,14 +3,27 @@ package topicextraction
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"my-robot-backend/internal/domain/topictypes"
 	"sort"
 	"strings"
 
 	"my-robot-backend/internal/domain/models"
+	"my-robot-backend/internal/domain/topictypes"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/logging"
 )
+
+func FeedCategoryName(feed models.Feed) string {
+	if feed.Category != nil && strings.TrimSpace(feed.Category.Name) != "" {
+		return feed.Category.Name
+	}
+	if feed.CategoryID != nil {
+		var cat models.Category
+		if err := database.DB.First(&cat, *feed.CategoryID).Error; err == nil && cat.Name != "" {
+			return cat.Name
+		}
+	}
+	return ""
+}
 
 type tagArticleOptions struct {
 	Force bool
@@ -32,9 +45,18 @@ func tagArticle(article *models.Article, feedName, categoryName string, options 
 	}
 
 	if options.Force {
+		var oldTagIDs []uint
+		if err := database.DB.Model(&models.ArticleTopicTag{}).
+			Where("article_id = ?", article.ID).
+			Pluck("topic_tag_id", &oldTagIDs).Error; err != nil {
+			return err
+		}
+
 		if err := database.DB.Where("article_id = ?", article.ID).Delete(&models.ArticleTopicTag{}).Error; err != nil {
 			return err
 		}
+
+		cleanupOrphanedTags(oldTagIDs)
 	}
 
 	// Skip if already tagged
@@ -83,8 +105,9 @@ func tagArticle(article *models.Article, feedName, categoryName string, options 
 		if articleContext != "" {
 			articleContext += ". "
 		}
-		if len(articleSummary) > 200 {
-			articleSummary = articleSummary[:200]
+		runes := []rune(articleSummary)
+		if len(runes) > 800 {
+			articleSummary = string(runes[:800])
 		}
 		articleContext += articleSummary
 	}
@@ -94,7 +117,8 @@ func tagArticle(article *models.Article, feedName, categoryName string, options 
 	for _, tag := range dedupeTagsWithCategory(tags) {
 		dbTag, err := findOrCreateTag(context.Background(), tag, source, articleContext)
 		if err != nil {
-			continue // Skip on error, don't fail the whole operation
+			logging.Warnf("findOrCreateTag failed for tag %q (category=%s, slug=%s, source=%s, article=%d): %v", tag.Label, tag.Category, topictypes.Slugify(tag.Label), source, article.ID, err)
+			continue
 		}
 
 		// Skip if we already added this tag ID (prevents duplicate key violations)
@@ -118,19 +142,27 @@ func tagArticle(article *models.Article, feedName, categoryName string, options 
 	return nil
 }
 
-// buildArticleSummary builds a summary text from article fields
+const maxSummaryRunesForTagging = 2000
+
 func buildArticleSummary(article models.Article) string {
-	summary := strings.TrimSpace(article.AIContentSummary)
-	if summary == "" {
-		summary = strings.TrimSpace(article.FirecrawlContent)
+	var body string
+	if s := strings.TrimSpace(article.AIContentSummary); s != "" {
+		body = s
+	} else if s := strings.TrimSpace(article.FirecrawlContent); s != "" {
+		body = s
+	} else if s := strings.TrimSpace(article.Content); s != "" {
+		body = s
+	} else if s := strings.TrimSpace(article.Description); s != "" {
+		body = s
 	}
-	if summary == "" {
-		summary = strings.TrimSpace(article.Content)
+	if body == "" {
+		return ""
 	}
-	if summary == "" {
-		summary = strings.TrimSpace(article.Description)
+	runes := []rune(body)
+	if len(runes) > maxSummaryRunesForTagging {
+		body = string(runes[:maxSummaryRunesForTagging])
 	}
-	return summary
+	return body
 }
 
 // TagArticles batch tags multiple articles for a feed
@@ -143,7 +175,7 @@ func TagArticles(articles []models.Article, feedName, categoryName string) error
 	for i := range articles {
 		if err := TagArticle(&articles[i], feedName, categoryName); err != nil {
 			// Log error but continue processing other articles
-			fmt.Printf("[WARN] Failed to tag article %d: %v\n", articles[i].ID, err)
+			logging.Warnf("Failed to tag article %d: %v", articles[i].ID, err)
 		}
 	}
 
@@ -160,7 +192,7 @@ func BackfillArticleTags(articles []models.Article, feedName, categoryName strin
 	for i := range articles {
 		var existingCount int64
 		if err := database.DB.Model(&models.ArticleTopicTag{}).Where("article_id = ?", articles[i].ID).Count(&existingCount).Error; err != nil {
-			fmt.Printf("[WARN] Failed to inspect article tags for %d: %v\n", articles[i].ID, err)
+			logging.Warnf("Failed to inspect article tags for %d: %v", articles[i].ID, err)
 			continue
 		}
 		if existingCount > 0 {
@@ -168,7 +200,7 @@ func BackfillArticleTags(articles []models.Article, feedName, categoryName strin
 		}
 
 		if err := TagArticle(&articles[i], feedName, categoryName); err != nil {
-			fmt.Printf("[WARN] Failed to backfill article %d tags: %v\n", articles[i].ID, err)
+			logging.Warnf("Failed to backfill article %d tags: %v", articles[i].ID, err)
 		}
 	}
 
@@ -309,6 +341,31 @@ func GetArticlesByTag(slug, category string, limit int) ([]models.Article, error
 		Find(&articles).Error
 
 	return articles, err
+}
+
+func cleanupOrphanedTags(tagIDs []uint) {
+	if len(tagIDs) == 0 {
+		return
+	}
+
+	var orphanIDs []uint
+	database.DB.Model(&models.TopicTag{}).
+		Where("id IN ?", tagIDs).
+		Where("id NOT IN (SELECT topic_tag_id FROM article_topic_tags)").
+		Pluck("id", &orphanIDs)
+
+	if len(orphanIDs) == 0 {
+		return
+	}
+
+	if err := database.DB.Where("topic_tag_id IN ?", orphanIDs).Delete(&models.TopicTagEmbedding{}).Error; err != nil {
+		logging.Warnf("Failed to delete embeddings for orphaned topic tags: %v", err)
+	}
+	if err := database.DB.Where("id IN ?", orphanIDs).Delete(&models.TopicTag{}).Error; err != nil {
+		logging.Warnf("Failed to delete %d orphaned topic tags: %v", len(orphanIDs), err)
+	} else {
+		logging.Infof("Cleaned up %d orphaned topic tags", len(orphanIDs))
+	}
 }
 
 func parseAliasesFromJSON(aliases string) []string {

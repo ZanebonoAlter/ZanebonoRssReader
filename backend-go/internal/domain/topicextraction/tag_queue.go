@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/domain/topictypes"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/logging"
 	"my-robot-backend/internal/platform/ws"
 )
 
@@ -66,7 +66,7 @@ func (q *TagQueue) Enqueue(articleID uint, feedName, categoryName string) error 
 
 func (q *TagQueue) EnqueueAsync(articleID uint, feedName, categoryName string) {
 	if err := q.Enqueue(articleID, feedName, categoryName); err != nil {
-		log.Printf("[WARN] Failed to enqueue tag job for article %d: %v", articleID, err)
+		logging.Warnf("Failed to enqueue tag job for article %d: %v", articleID, err)
 	}
 }
 
@@ -81,11 +81,11 @@ func (q *TagQueue) Start() error {
 	q.stopChan = make(chan struct{})
 	err := q.tryStart()
 	if err == nil {
-		log.Println("[INFO] Tag queue started successfully")
+		logging.Infof("Tag queue started successfully")
 		return nil
 	}
 
-	log.Printf("[WARN] TagQueue initial start failed: %v, retrying in background", err)
+	logging.Warnf("TagQueue initial start failed: %v, retrying in background", err)
 	go q.backgroundRetry()
 
 	return nil // 立即返回，不阻塞应用启动
@@ -138,15 +138,15 @@ func (q *TagQueue) backgroundRetry() {
 		err := q.tryStart()
 		if err == nil {
 			q.mu.Unlock()
-			log.Printf("[INFO] TagQueue started after %d retry attempts", attempt)
+			logging.Infof("TagQueue started after %d retry attempts", attempt)
 			return
 		}
 
 		q.mu.Unlock()
-		log.Printf("[INFO] TagQueue retry attempt %d/%d: %v", attempt, maxRetries, err)
+		logging.Infof("TagQueue retry attempt %d/%d: %v", attempt, maxRetries, err)
 	}
 
-	log.Printf("[ERROR] TagQueue failed to start after %d attempts, giving up", maxRetries)
+	logging.Errorf("TagQueue failed to start after %d attempts, giving up", maxRetries)
 }
 
 func (q *TagQueue) Stop() {
@@ -165,7 +165,7 @@ func (q *TagQueue) Stop() {
 	q.mu.Unlock()
 
 	q.wg.Wait()
-	log.Println("Tag queue stopped")
+	logging.Infof("Tag queue stopped")
 }
 
 func (q *TagQueue) worker() {
@@ -192,14 +192,14 @@ func (q *TagQueue) drainRemaining() {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("[INFO] Tag queue drain timed out after %v, remaining jobs will be processed on next start", drainTimeout)
+			logging.Infof("Tag queue drain timed out after %v, remaining jobs will be processed on next start", drainTimeout)
 			return
 		default:
 		}
 
 		jobs, err := q.queue.Claim(q.batchSize, q.lease)
 		if err != nil {
-			log.Printf("[WARN] Failed to claim tag jobs during drain: %v", err)
+			logging.Warnf("Failed to claim tag jobs during drain: %v", err)
 			return
 		}
 		if len(jobs) == 0 {
@@ -207,7 +207,7 @@ func (q *TagQueue) drainRemaining() {
 		}
 		for _, job := range jobs {
 			if ctx.Err() != nil {
-				log.Printf("[INFO] Tag queue drain timed out, %d job(s) remaining for next start", len(jobs))
+				logging.Infof("Tag queue drain timed out, %d job(s) remaining for next start", len(jobs))
 				return
 			}
 			q.processJob(job)
@@ -218,7 +218,7 @@ func (q *TagQueue) drainRemaining() {
 func (q *TagQueue) processAvailableJobs() {
 	jobs, err := q.queue.Claim(q.batchSize, q.lease)
 	if err != nil {
-		log.Printf("[WARN] Failed to claim tag jobs: %v", err)
+		logging.Warnf("Failed to claim tag jobs: %v", err)
 		return
 	}
 
@@ -231,7 +231,7 @@ func (q *TagQueue) processJob(job models.TagJob) {
 	defer func() {
 		if r := recover(); r != nil {
 			msg := fmt.Sprintf("panic: %v", r)
-			log.Printf("[ERROR] Panic in tag job for article %d: %v", job.ArticleID, r)
+			logging.Errorf("Panic in tag job for article %d: %v", job.ArticleID, r)
 			_ = q.queue.MarkFailed(job, msg, q.failureBackoff(job.AttemptCount))
 			q.broadcastTagFailed(job.ID, job.ArticleID, msg)
 		}
@@ -239,7 +239,7 @@ func (q *TagQueue) processJob(job models.TagJob) {
 
 	var article models.Article
 	if err := database.DB.First(&article, job.ArticleID).Error; err != nil {
-		log.Printf("[WARN] Failed to fetch article %d for tagging: %v", job.ArticleID, err)
+		logging.Warnf("Failed to fetch article %d for tagging: %v", job.ArticleID, err)
 		_ = q.queue.MarkFailed(job, err.Error(), q.failureBackoff(job.AttemptCount))
 		q.broadcastTagFailed(job.ID, job.ArticleID, err.Error())
 		return
@@ -252,21 +252,21 @@ func (q *TagQueue) processJob(job models.TagJob) {
 		err = TagArticle(&article, job.FeedNameSnapshot, job.CategoryNameSnapshot)
 	}
 	if err != nil {
-		log.Printf("[WARN] Failed to tag article %d: %v", job.ArticleID, err)
+		logging.Warnf("Failed to tag article %d: %v", job.ArticleID, err)
 		_ = q.queue.MarkFailed(job, err.Error(), q.failureBackoff(job.AttemptCount))
 		q.broadcastTagFailed(job.ID, job.ArticleID, err.Error())
 		return
 	}
 
 	if err := q.queue.MarkCompleted(job.ID); err != nil {
-		log.Printf("[WARN] Failed to mark tag job %d completed: %v", job.ID, err)
+		logging.Warnf("Failed to mark tag job %d completed: %v", job.ID, err)
 		return
 	}
 
-	log.Printf("[DEBUG] Successfully tagged article %d", job.ArticleID)
+	logging.Infof("Successfully tagged article %d", job.ArticleID)
 	tags, broadcastErr := GetArticleTags(job.ArticleID)
 	if broadcastErr != nil {
-		log.Printf("[WARN] Failed to fetch tags for WebSocket broadcast: %v", broadcastErr)
+		logging.Warnf("Failed to fetch tags for WebSocket broadcast: %v", broadcastErr)
 		return
 	}
 
@@ -306,7 +306,7 @@ func (q *TagQueue) broadcastTagCompleted(jobID, articleID uint, tags []topictype
 
 	data, err := json.Marshal(msg)
 	if err != nil {
-		log.Printf("[WARN] Failed to marshal tag_completed message: %v", err)
+		logging.Warnf("Failed to marshal tag_completed message: %v", err)
 		return
 	}
 
@@ -324,7 +324,7 @@ func (q *TagQueue) broadcastTagFailed(jobID, articleID uint, errMsg string) {
 
 	data, err := json.Marshal(msg)
 	if err != nil {
-		log.Printf("[WARN] Failed to marshal tag_failed message: %v", err)
+		logging.Warnf("Failed to marshal tag_failed message: %v", err)
 		return
 	}
 

@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"log"
 	"regexp"
 	"strings"
 
@@ -11,6 +10,7 @@ import (
 	"my-robot-backend/internal/domain/topicanalysis"
 	"my-robot-backend/internal/platform/config"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/logging"
 )
 
 // Event keywords for classification
@@ -132,7 +132,7 @@ func migrateTags(dryRun bool, generateEmbeddings bool) (*migrationResult, error)
 		// Check if update is needed
 		if oldCategory != newCategory {
 			if dryRun {
-				log.Printf("[DRY RUN] Would update tag %d: %q category: %q -> %q (kind: %q)",
+				logging.Infof("[DRY RUN] Would update tag %d: %q category: %q -> %q (kind: %q)",
 					tag.ID, tag.Label, oldCategory, newCategory, tag.Kind)
 				result.skipped++
 			} else {
@@ -141,36 +141,36 @@ func migrateTags(dryRun bool, generateEmbeddings bool) (*migrationResult, error)
 				tag.Kind = newCategory // Backward compatibility
 
 				if err := database.DB.Save(&tag).Error; err != nil {
-					log.Printf("ERROR: Failed to update tag %d: %v", tag.ID, err)
+					logging.Infof("ERROR: Failed to update tag %d: %v", tag.ID, err)
 					result.errors++
 					continue
 				}
 
-				log.Printf("Updated tag %d: %q category: %q -> %q (kind: %q)",
+				logging.Infof("Updated tag %d: %q category: %q -> %q (kind: %q)",
 					tag.ID, tag.Label, oldCategory, newCategory, tag.Kind)
 				result.updated++
 			}
 		} else {
 			result.skipped++
-			log.Printf("Skipped tag %d: %q already has correct category %q", tag.ID, tag.Label, newCategory)
+			logging.Infof("Skipped tag %d: %q already has correct category %q", tag.ID, tag.Label, newCategory)
 		}
 
 		// Generate embedding if requested and category was updated
 		if generateEmbeddings && embeddingSvc != nil && (dryRun || oldCategory != newCategory) {
 			if dryRun {
-				log.Printf("[DRY RUN] Would generate embedding for tag %d: %q", tag.ID, tag.Label)
+				logging.Infof("[DRY RUN] Would generate embedding for tag %d: %q", tag.ID, tag.Label)
 				result.embeddings++
 			} else {
 				// Generate embedding
 				embedding, err := embeddingSvc.GenerateEmbedding(nil, &tag)
 				if err != nil {
-					log.Printf("WARNING: Failed to generate embedding for tag %d: %v", tag.ID, err)
+					logging.Infof("WARNING: Failed to generate embedding for tag %d: %v", tag.ID, err)
 				} else {
 					// Save embedding
 					if err := embeddingSvc.SaveEmbedding(embedding); err != nil {
-						log.Printf("WARNING: Failed to save embedding for tag %d: %v", tag.ID, err)
+						logging.Infof("WARNING: Failed to save embedding for tag %d: %v", tag.ID, err)
 					} else {
-						log.Printf("Generated embedding for tag %d: %q", tag.ID, tag.Label)
+						logging.Infof("Generated embedding for tag %d: %q", tag.ID, tag.Label)
 						result.embeddings++
 					}
 				}
@@ -179,7 +179,7 @@ func migrateTags(dryRun bool, generateEmbeddings bool) (*migrationResult, error)
 
 		// Progress indicator
 		if (i+1)%100 == 0 {
-			log.Printf("Processed %d/%d tags...", i+1, len(tags))
+			logging.Infof("Processed %d/%d tags...", i+1, len(tags))
 		}
 	}
 
@@ -191,38 +191,38 @@ func main() {
 	generateEmbeddings := flag.Bool("embeddings", false, "Generate embeddings for tags (requires embedding API)")
 	flag.Parse()
 
-	log.Println("Starting tag category migration...")
+	logging.Infoln("Starting tag category migration...")
 
 	// Load config
 	if err := config.LoadConfig("./configs"); err != nil {
-		log.Printf("Warning: Failed to load config: %v", err)
+		logging.Infof("Warning: Failed to load config: %v", err)
 	}
 
 	// Initialize database
 	if err := database.InitDB(config.AppConfig); err != nil {
-		log.Fatalf("Failed to initialize database: %v", err)
+		logging.Fatalf("Failed to initialize database: %v", err)
 	}
 
 	// Run migration
 	result, err := migrateTags(*dryRun, *generateEmbeddings)
 	if err != nil {
-		log.Fatalf("Migration failed: %v", err)
+		logging.Fatalf("Migration failed: %v", err)
 	}
 
 	// Print summary
-	fmt.Println("\n=== Migration Summary ===")
-	fmt.Printf("Total tags: %d\n", result.total)
-	fmt.Printf("Updated: %d\n", result.updated)
-	fmt.Printf("Skipped (no change): %d\n", result.skipped)
-	fmt.Printf("Errors: %d\n", result.errors)
+	logging.Infoln("\n=== Migration Summary ===")
+	logging.Infof("Total tags: %d\n", result.total)
+	logging.Infof("Updated: %d\n", result.updated)
+	logging.Infof("Skipped (no change): %d\n", result.skipped)
+	logging.Infof("Errors: %d\n", result.errors)
 
 	if *generateEmbeddings {
-		fmt.Printf("Embeddings generated: %d\n", result.embeddings)
+		logging.Infof("Embeddings generated: %d\n", result.embeddings)
 	}
 
 	if *dryRun {
-		fmt.Println("\n*** DRY RUN - No changes were committed ***")
+		logging.Infoln("\n*** DRY RUN - No changes were committed ***")
 	}
 
-	fmt.Println("\nMigration completed successfully")
+	logging.Infoln("\nMigration completed successfully")
 }

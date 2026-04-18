@@ -2,11 +2,11 @@ package tracing
 
 import (
 	"context"
-	"log"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
+	"my-robot-backend/internal/platform/logging"
 )
 
 func Tracer(name string) trace.Tracer {
@@ -89,7 +89,7 @@ func SetStatus(ctx context.Context, code int, msg string) {
 func MustStartSpan(ctx context.Context, tracerName, spanName string, opts ...trace.SpanStartOption) (context.Context, trace.Span) {
 	ctx, span := StartSpan(ctx, tracerName, spanName, opts...)
 	if !span.IsRecording() {
-		log.Printf("[tracing] warning: span %q is not recording, tracing may not be initialized", spanName)
+		logging.Infof("[tracing] warning: span %q is not recording, tracing may not be initialized", spanName)
 	}
 	return ctx, span
 }

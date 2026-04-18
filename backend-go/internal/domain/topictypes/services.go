@@ -35,6 +35,8 @@ func ResolveWindow(kind string, anchor time.Time) (time.Time, time.Time, string,
 		weekStart := dayStart.AddDate(0, 0, -daysSinceMonday)
 		weekEnd := weekStart.AddDate(0, 0, 7)
 		return weekStart, weekEnd, fmt.Sprintf("%s - %s", weekStart.Format("01-02"), weekEnd.AddDate(0, 0, -1).Format("01-02")), nil
+	case "all":
+		return time.Date(2000, 1, 1, 0, 0, 0, 0, TopicGraphCST), time.Date(2100, 1, 1, 0, 0, 0, 0, TopicGraphCST), "全部", nil
 	default:
 		return time.Time{}, time.Time{}, "", fmt.Errorf("unsupported topic graph type: %s", kind)
 	}
