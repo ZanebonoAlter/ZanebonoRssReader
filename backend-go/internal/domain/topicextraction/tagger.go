@@ -5,9 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"sort"
-	"strings"
 	"sync"
 
 	"my-robot-backend/internal/domain/models"
@@ -15,6 +13,7 @@ import (
 	"my-robot-backend/internal/domain/topictypes"
 	"my-robot-backend/internal/platform/airouter"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/logging"
 )
 
 var errTopicAIUnavailable = errors.New("topic AI unavailable")
@@ -43,12 +42,11 @@ func getEmbeddingQueueService() *topicanalysis.EmbeddingQueueService {
 // TagSummary extracts and stores tags for an AI summary
 // This is the main entry point called from the automatic summary scheduler
 // Skips if the summary already has tags (dedup)
-func TagSummary(summary *models.AISummary) error {
+func TagSummary(summary *models.AISummary, feedName, categoryName string) error {
 	if summary == nil || summary.ID == 0 {
 		return nil
 	}
 
-	// Skip if already tagged
 	var existingCount int64
 	database.DB.Model(&models.AISummaryTopic{}).Where("summary_id = ?", summary.ID).Count(&existingCount)
 	if existingCount > 0 {
@@ -58,8 +56,8 @@ func TagSummary(summary *models.AISummary) error {
 	input := topictypes.ExtractionInput{
 		Title:        summary.Title,
 		Summary:      summary.Summary,
-		FeedName:     feedLabel(*summary),
-		CategoryName: categoryLabel(*summary),
+		FeedName:     feedName,
+		CategoryName: categoryName,
 		SummaryID:    &summary.ID,
 	}
 
@@ -92,19 +90,20 @@ func TagSummary(summary *models.AISummary) error {
 		if articleContext != "" {
 			articleContext += ". "
 		}
-		// Limit to first 200 chars
-		summaryText := summary.Summary
-		if len([]rune(summaryText)) > 200 {
-			summaryText = string([]rune(summaryText)[:200])
+		runes := []rune(summary.Summary)
+		if len(runes) > 2000 {
+			articleContext += string(runes[:2000])
+		} else {
+			articleContext += summary.Summary
 		}
-		articleContext += summaryText
 	}
 
 	// Process each tag
 	for _, tag := range dedupeTagsWithCategory(tags) {
 		dbTag, err := findOrCreateTag(context.Background(), tag, source, articleContext)
 		if err != nil {
-			continue // Skip on error, don't fail the whole operation
+			logging.Warnf("findOrCreateTag failed for tag %q (category=%s, slug=%s, source=%s, summary=%d): %v", tag.Label, tag.Category, topictypes.Slugify(tag.Label), source, summary.ID, err)
+			continue
 		}
 
 		// Create the association
@@ -160,15 +159,12 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 		matchResult, err := es.TagMatch(ctx, tag.Label, category, string(aliasesJSON))
 		if err != nil {
 			// Embedding unavailable — fall back to exact match
-			fmt.Printf("[WARN] TagMatch failed, falling back to exact match: %v\n", err)
+			logging.Warnf("TagMatch failed, falling back to exact match: %v", err)
 		} else {
-			matchedTag := matchResult.ExistingTag
-			isAbstract := matchedTag != nil && matchedTag.Source == "abstract"
-
 			switch matchResult.MatchType {
 			case "exact":
-				if matchedTag != nil {
-					existing := matchedTag
+				if matchResult.ExistingTag != nil {
+					existing := matchResult.ExistingTag
 					existing.Label = tag.Label
 					existing.Category = category
 					existing.Source = source
@@ -188,74 +184,67 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 					return existing, nil
 				}
 
-			case "high_similarity":
-				if matchedTag == nil {
+			case "candidates":
+				candidates := matchResult.Candidates
+				logging.Infof("Batch tag judgment for %q: %d candidates (top similarity %.2f)", tag.Label, len(candidates), matchResult.Similarity)
+				result, judgmentErr := topicanalysis.ExtractAbstractTag(ctx, candidates, tag.Label, category)
+				if judgmentErr != nil || result == nil {
+					logging.Warnf("Tag judgment failed for %q, falling back to new tag creation: %v", tag.Label, judgmentErr)
 					break
 				}
-				if isAbstract {
-					newTag, err := createChildOfAbstract(ctx, es, tag, category, kind, source, articleContext, string(aliasesJSON), matchedTag)
-					if err != nil {
-						break
-					}
-					return newTag, nil
-				}
-				if len(tag.Aliases) > 0 {
-					aJSON, _ := json.Marshal(tag.Aliases)
-					matchedTag.Aliases = string(aJSON)
-					if err := database.DB.Save(matchedTag).Error; err != nil {
-						fmt.Printf("[WARN] Failed to update aliases for tag %d: %v\n", matchedTag.ID, err)
-					}
-				}
-				go backfillTagDescription(matchedTag.ID, matchedTag.Label, matchedTag.Category, matchedTag.Description, articleContext)
-				return matchedTag, nil
 
-			case "ai_judgment":
-				if matchedTag == nil {
-					break
-				}
-				if isAbstract {
-					newTag, err := createChildOfAbstract(ctx, es, tag, category, kind, source, articleContext, string(aliasesJSON), matchedTag)
-					if err != nil {
+				if result.Action == topicanalysis.ActionMerge {
+					existing := result.MergeTarget
+					if result.MergeLabel != "" {
+						existing.Label = result.MergeLabel
+					} else {
+						existing.Label = tag.Label
+					}
+					existing.Category = category
+					existing.Source = source
+					if len(tag.Aliases) > 0 {
+						aJSON, _ := json.Marshal(tag.Aliases)
+						existing.Aliases = string(aJSON)
+					}
+					if tag.Icon != "" {
+						existing.Icon = tag.Icon
+					}
+					existing.Kind = kind
+					if err := database.DB.Save(existing).Error; err != nil {
+						logging.Warnf("Failed to save merged tag %d: %v", existing.ID, err)
 						break
 					}
-					return newTag, nil
+					go ensureTagEmbedding(es, existing.ID)
+					go backfillTagDescription(existing.ID, existing.Label, existing.Category, existing.Description, articleContext)
+					return existing, nil
 				}
-				fmt.Printf("[INFO] Middle-band similarity %.2f for tag '%s', attempting abstract tag extraction\n", matchResult.Similarity, tag.Label)
-				var validCandidates []topicanalysis.TagCandidate
-				for _, c := range matchResult.Candidates {
-					if c.Tag != nil && c.Similarity >= es.GetThresholds().LowSimilarity {
-						validCandidates = append(validCandidates, c)
-					}
-				}
-				if len(validCandidates) == 0 {
-					validCandidates = matchResult.Candidates[:1]
-				}
-				abstractTag, abstractErr := topicanalysis.ExtractAbstractTag(ctx, validCandidates, tag.Label, category)
-				if abstractErr != nil || abstractTag == nil {
-					fmt.Printf("[WARN] Abstract tag extraction failed for '%s', falling back to new tag creation: %v\n", tag.Label, abstractErr)
+
+				if result.Action == topicanalysis.ActionNone {
+					logging.Infof("Tag judgment: none — tag %q is independent from %d candidates, creating new tag", tag.Label, len(candidates))
 					break
 				}
-				for _, c := range validCandidates {
+
+				for _, c := range candidates {
 					if c.Tag != nil {
 						if delErr := topicanalysis.DeleteTagEmbedding(c.Tag.ID); delErr != nil {
-							fmt.Printf("[WARN] Failed to delete embedding for child tag %d: %v\n", c.Tag.ID, delErr)
+							logging.Warnf("Failed to delete embedding for child tag %d: %v", c.Tag.ID, delErr)
 						}
 					}
 				}
-				newTag, childErr := createChildOfAbstract(ctx, es, tag, category, kind, source, articleContext, string(aliasesJSON), abstractTag)
+				newTag, childErr := createChildOfAbstract(ctx, es, tag, category, kind, source, articleContext, string(aliasesJSON), result.AbstractTag)
 				if childErr != nil {
-					fmt.Printf("[WARN] Failed to create child of abstract %d: %v\n", abstractTag.ID, childErr)
+					logging.Warnf("Failed to create child of abstract %d: %v", result.AbstractTag.ID, childErr)
 					break
 				}
 				return newTag, nil
 
-			case "low_similarity", "no_match":
+			case "no_match":
 			}
 		}
 	}
 
 	// Fallback: exact slug+category match (when embedding unavailable)
-	// or creation path for low_similarity/no_match/ai_judgment
+	// or creation path for no_match/candidates that fell through
 	var dbTag models.TopicTag
 	err := database.DB.Where("slug = ? AND category = ?", slug, category).First(&dbTag).Error
 	if err == nil {
@@ -330,12 +319,12 @@ func createChildOfAbstract(ctx context.Context, es *topicanalysis.EmbeddingServi
 		RelationType: "abstract",
 	}
 	if err := database.DB.Create(&relation).Error; err != nil {
-		fmt.Printf("[WARN] Failed to create parent-child relation: abstract %d -> child %d: %v\n", abstractParent.ID, newTag.ID, err)
+		logging.Warnf("Failed to create parent-child relation: abstract %d -> child %d: %v", abstractParent.ID, newTag.ID, err)
 		if es != nil {
 			go generateAndSaveEmbedding(es, &newTag)
 		}
 	} else {
-		fmt.Printf("[INFO] Child tag '%s' (id=%d) linked to abstract '%s' (id=%d)\n", newTag.Label, newTag.ID, abstractParent.Label, abstractParent.ID)
+		logging.Infof("Child tag '%s' (id=%d) linked to abstract '%s' (id=%d)", newTag.Label, newTag.ID, abstractParent.Label, abstractParent.ID)
 		var abstractSiblingCount int64
 		database.DB.Model(&models.TopicTagRelation{}).
 			Joins("JOIN topic_tags ON topic_tags.id = topic_tag_relations.child_id").
@@ -370,9 +359,14 @@ func backfillTagDescription(tagID uint, label, category, currentDesc, articleCon
 func generateTagDescription(tagID uint, label, category, articleContext string) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[WARN] generateTagDescription panic for tag %d: %v", tagID, r)
+			logging.Warnf("generateTagDescription panic for tag %d: %v", tagID, r)
 		}
 	}()
+
+	if category == "person" {
+		generatePersonTagDescription(tagID, label, articleContext)
+		return
+	}
 
 	router := airouter.NewRouter()
 	prompt := fmt.Sprintf(`Generate a concise description (1-2 sentences) for this tag.
@@ -411,7 +405,7 @@ Respond with JSON: {"description": "your answer"}`, label, category, articleCont
 
 	result, err := router.Chat(context.Background(), req)
 	if err != nil {
-		log.Printf("[WARN] Description LLM call failed for tag %d: %v", tagID, err)
+		logging.Warnf("Description LLM call failed for tag %d: %v", tagID, err)
 		return
 	}
 
@@ -419,7 +413,7 @@ Respond with JSON: {"description": "your answer"}`, label, category, articleCont
 		Description string `json:"description"`
 	}
 	if err := json.Unmarshal([]byte(result.Content), &parsed); err != nil || parsed.Description == "" {
-		log.Printf("[WARN] Failed to parse description for tag %d", tagID)
+		logging.Warnf("Failed to parse description for tag %d", tagID)
 		return
 	}
 
@@ -430,13 +424,114 @@ Respond with JSON: {"description": "your answer"}`, label, category, articleCont
 	}
 
 	if err := database.DB.Model(&models.TopicTag{}).Where("id = ?", tagID).Update("description", desc).Error; err != nil {
-		log.Printf("[WARN] Failed to save description for tag %d: %v", tagID, err)
+		logging.Warnf("Failed to save description for tag %d: %v", tagID, err)
 		return
 	}
 
 	qs := getEmbeddingQueueService()
 	if err := qs.Enqueue(tagID); err != nil {
-		log.Printf("[WARN] Failed to enqueue re-embedding after description update for tag %d: %v", tagID, err)
+		logging.Warnf("Failed to enqueue re-embedding after description update for tag %d: %v", tagID, err)
+	}
+}
+
+func generatePersonTagDescription(tagID uint, label, articleContext string) {
+	defer func() {
+		if r := recover(); r != nil {
+			logging.Warnf("generatePersonTagDescription panic for tag %d: %v", tagID, r)
+		}
+	}()
+
+	router := airouter.NewRouter()
+
+	prompt := fmt.Sprintf(`Given this person tag and article context, generate a description and extract structured attributes.
+
+Tag: %q
+Category: person
+Context from article: %s
+
+Description requirements:
+- Must be in Chinese (中文)
+- Objective, factual statement about WHO this person IS, not what they said or did in this specific article
+- Keep under 500 characters
+- Focus on: identity, position, affiliation
+
+Structured attributes to extract:
+- country: nationality or primary country of activity (中文, e.g. "美国", "中国")
+- organization: primary organization or institution (中文)
+- role: primary position or title (中文, e.g. "财政部长", "CEO")
+- domains: areas of expertise or influence, as array of strings (中文, e.g. ["经济政策", "金融监管"])
+
+Respond with JSON: {"description": "your answer", "person_attrs": {"country": "...", "organization": "...", "role": "...", "domains": [...]}}`, label, articleContext)
+
+	req := airouter.ChatRequest{
+		Capability: airouter.CapabilityTopicTagging,
+		Messages: []airouter.Message{
+			{Role: "system", Content: "你是一个标签分类助手，只输出合法JSON。"},
+			{Role: "user", Content: prompt},
+		},
+		JSONMode: true,
+		JSONSchema: &airouter.JSONSchema{
+			Type: "object",
+			Properties: map[string]airouter.SchemaProperty{
+				"description": {Type: "string", Description: "人物标签的中文客观描述"},
+				"person_attrs": {
+					Type: "object",
+					Properties: map[string]airouter.SchemaProperty{
+						"country":      {Type: "string", Description: "国籍或主要活动国家"},
+						"organization": {Type: "string", Description: "主要组织或机构"},
+						"role":         {Type: "string", Description: "主要职务或头衔"},
+						"domains":      {Type: "array", Items: &airouter.SchemaProperty{Type: "string"}, Description: "专业领域"},
+					},
+				},
+			},
+			Required: []string{"description", "person_attrs"},
+		},
+		Temperature: func() *float64 { f := 0.3; return &f }(),
+	}
+
+	result, err := router.Chat(context.Background(), req)
+	if err != nil {
+		logging.Warnf("Person description LLM call failed for tag %d: %v", tagID, err)
+		return
+	}
+
+	var parsed struct {
+		Description string `json:"description"`
+		PersonAttrs struct {
+			Country      string   `json:"country"`
+			Organization string   `json:"organization"`
+			Role         string   `json:"role"`
+			Domains      []string `json:"domains"`
+		} `json:"person_attrs"`
+	}
+	if err := json.Unmarshal([]byte(result.Content), &parsed); err != nil || parsed.Description == "" {
+		logging.Warnf("Failed to parse person description for tag %d", tagID)
+		return
+	}
+
+	desc := parsed.Description
+	if len([]rune(desc)) > 500 {
+		desc = string([]rune(desc)[:500])
+	}
+
+	metadataMap := map[string]any{
+		"country":      parsed.PersonAttrs.Country,
+		"organization": parsed.PersonAttrs.Organization,
+		"role":         parsed.PersonAttrs.Role,
+		"domains":      parsed.PersonAttrs.Domains,
+	}
+
+	if err := database.DB.Model(&models.TopicTag{}).Where("id = ?", tagID).Updates(map[string]any{
+		"description": desc,
+		"metadata":    models.MetadataMap(metadataMap),
+	}).Error; err != nil {
+		logging.Warnf("Failed to save description+metadata for person tag %d: %v", tagID, err)
+		return
+	}
+
+	qs := getEmbeddingQueueService()
+	if err := qs.Enqueue(tagID); err != nil {
+		logging.Warnf("Failed to enqueue re-embedding after person description update for tag %d: %v", tagID, err)
 	}
 }
 
@@ -445,7 +540,7 @@ Respond with JSON: {"description": "your answer"}`, label, category, articleCont
 func generateAndSaveEmbedding(es *topicanalysis.EmbeddingService, tag *models.TopicTag) {
 	qs := getEmbeddingQueueService()
 	if err := qs.Enqueue(tag.ID); err != nil {
-		fmt.Printf("[WARN] Failed to enqueue embedding for tag %d: %v\n", tag.ID, err)
+		logging.Warnf("Failed to enqueue embedding for tag %d: %v", tag.ID, err)
 	}
 }
 
@@ -454,7 +549,7 @@ func generateAndSaveEmbedding(es *topicanalysis.EmbeddingService, tag *models.To
 func ensureTagEmbedding(es *topicanalysis.EmbeddingService, tagID uint) {
 	qs := getEmbeddingQueueService()
 	if err := qs.Enqueue(tagID); err != nil {
-		fmt.Printf("[WARN] Failed to enqueue embedding for tag %d: %v\n", tagID, err)
+		logging.Warnf("Failed to enqueue embedding for tag %d: %v", tagID, err)
 	}
 }
 
@@ -543,18 +638,4 @@ func sortTagsByScore(tags []topictypes.TopicTag) {
 // dedupeTopics is kept for backward compatibility with extractor.go
 func DedupeTopics(items []topictypes.TopicTag) []topictypes.TopicTag {
 	return dedupeTagsWithCategory(items)
-}
-
-func feedLabel(summary models.AISummary) string {
-	if summary.Feed != nil && strings.TrimSpace(summary.Feed.Title) != "" {
-		return summary.Feed.Title
-	}
-	return "未知订阅源"
-}
-
-func categoryLabel(summary models.AISummary) string {
-	if summary.Category != nil && strings.TrimSpace(summary.Category.Name) != "" {
-		return summary.Category.Name
-	}
-	return "未分类"
 }
