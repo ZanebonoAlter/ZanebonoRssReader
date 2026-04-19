@@ -434,7 +434,7 @@ func GetTagHierarchy(category string, scopeFeedID uint, scopeCategoryID uint, ti
 			FeedCount:       child.FeedCount,
 			ArticleCount:    articleCounts[child.ID],
 			SimilarityScore: r.SimilarityScore,
-			IsActive:        timeRange != "" || activeTagIDs[child.ID],
+			IsActive:        activeTagIDs[child.ID],
 			QualityScore:    child.QualityScore,
 			IsLowQuality:    child.Source != "abstract" && child.QualityScore < 0.3,
 			Children:        []TagHierarchyNode{},
@@ -465,7 +465,7 @@ func GetTagHierarchy(category string, scopeFeedID uint, scopeCategoryID uint, ti
 			Icon:         parent.Icon,
 			FeedCount:    parent.FeedCount,
 			ArticleCount: articleCounts[parent.ID],
-			IsActive:     timeRange != "" || activeTagIDs[parent.ID],
+			IsActive:     activeTagIDs[parent.ID],
 			QualityScore: parent.QualityScore,
 			Children:     children,
 		})

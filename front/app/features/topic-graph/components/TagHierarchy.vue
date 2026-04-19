@@ -77,20 +77,23 @@ function matchesSearch(label: string): boolean {
   return label.toLowerCase().includes(q)
 }
 
-function filterTree(list: TagHierarchyNode[]): TagHierarchyNode[] {
-  if (!searchQuery.value) return list
+function filterTree(list: TagHierarchyNode[], filterInactive: boolean): TagHierarchyNode[] {
   const result: TagHierarchyNode[] = []
   for (const node of list) {
-    const childMatch = filterTree(node.children)
-    if (matchesSearch(node.label) || childMatch.length > 0) {
-      result.push({ ...node, children: childMatch })
-    }
+    if (filterInactive && !node.isActive && node.children.length === 0) continue
+    const childMatch = filterTree(node.children, filterInactive)
+    const matchesSearchOK = matchesSearch(node.label)
+    const hasVisibleChildren = childMatch.length > 0
+    if (filterInactive && !node.isActive && !hasVisibleChildren) continue
+    if (!matchesSearchOK && !hasVisibleChildren) continue
+    result.push({ ...node, children: childMatch })
   }
   return result
 }
 
 const filteredNodes = computed(() => {
-  return filterTree(nodes.value)
+  const filterInactive = timeRange.value !== ''
+  return filterTree(nodes.value, filterInactive)
 })
 
 function hasWatchedDescendant(node: TagHierarchyNode): boolean {
