@@ -46,16 +46,7 @@ func (s *NarrativeService) RegenerateAndSave(date time.Time) (int, error) {
 	}
 	logging.Infof("narrative: deleted %d old narratives before regenerating for %s", deleted, date.Format("2006-01-02"))
 
-	saved, err := s.GenerateAndSave(date)
-	if err != nil {
-		return saved, err
-	}
-
-	catSaved, catErr := s.GenerateAndSaveForAllCategories(date)
-	if catErr != nil {
-		logging.Warnf("narrative: category regeneration failed during full regen: %v", catErr)
-	}
-	return saved + catSaved, nil
+	return s.GenerateAndSave(date)
 }
 
 func (s *NarrativeService) RegenerateAndSaveForCategory(date time.Time, categoryID uint) (int, error) {
@@ -80,43 +71,48 @@ type ScopeSaveOpts struct {
 }
 
 func (s *NarrativeService) GenerateAndSave(date time.Time) (int, error) {
-	tagInputs, err := CollectTagInputs(date)
+	catSaved, catErr := s.GenerateAndSaveForAllCategories(date)
+	_ = catErr
+
+	categoryInputs, err := CollectCategoryNarrativeSummaries(date)
 	if err != nil {
-		return 0, fmt.Errorf("collect tag inputs: %w", err)
+		return catSaved, fmt.Errorf("collect category narrative summaries: %w", err)
 	}
-	if len(tagInputs) == 0 {
-		logging.Infof("narrative: no tag inputs for %s, skipping", date.Format("2006-01-02"))
-		return 0, nil
+	if len(categoryInputs) == 0 {
+		logging.Infof("narrative: no category narratives for %s, skipping global", date.Format("2006-01-02"))
+		return catSaved, nil
 	}
 
-	prevNarratives, err := CollectPreviousNarratives(date, "", nil)
+	prevGlobalNarratives, err := CollectPreviousNarratives(date, models.NarrativeScopeTypeGlobal, nil)
 	if err != nil {
-		return 0, fmt.Errorf("collect previous narratives: %w", err)
+		logging.Warnf("narrative: failed to collect previous global narratives: %v", err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	outputs, err := GenerateNarratives(ctx, tagInputs, prevNarratives)
+	outputs, err := GenerateCrossCategoryNarratives(ctx, categoryInputs, prevGlobalNarratives)
 	if err != nil {
-		return 0, fmt.Errorf("generate narratives: %w", err)
+		return catSaved, fmt.Errorf("generate cross-category narratives: %w", err)
 	}
 	if len(outputs) == 0 {
-		logging.Infof("narrative: no narratives generated for %s", date.Format("2006-01-02"))
-		return 0, nil
+		logging.Infof("narrative: no cross-category narratives for %s", date.Format("2006-01-02"))
+		return catSaved, nil
 	}
 
-	saved, err := saveNarratives(outputs, date, nil)
+	narrativeOutputs := make([]NarrativeOutput, 0, len(outputs))
+	for _, o := range outputs {
+		narrativeOutputs = append(narrativeOutputs, o.NarrativeOutput)
+	}
+
+	saved, err := saveNarratives(narrativeOutputs, date, nil)
 	if err != nil {
-		return 0, fmt.Errorf("save narratives: %w", err)
+		return catSaved, fmt.Errorf("save global narratives: %w", err)
 	}
 
-	markEndedNarratives(date, outputs, prevNarratives)
+	markEndedGlobalNarratives(date, narrativeOutputs, prevGlobalNarratives)
 
-	go feedbackNarrativesToTags(outputs)
-	go GenerateWatchedTagNarratives(date)
-
-	logging.Infof("narrative: saved %d global narratives for %s", saved, date.Format("2006-01-02"))
-	return saved, nil
+	logging.Infof("narrative: saved %d global + %d category narratives for %s", saved, catSaved, date.Format("2006-01-02"))
+	return saved + catSaved, nil
 }
 
 func (s *NarrativeService) GenerateAndSaveForCategory(date time.Time, categoryID uint, categoryLabel string) (int, error) {
@@ -181,6 +177,8 @@ func (s *NarrativeService) GenerateAndSaveForCategory(date time.Time, categoryID
 		return 0, fmt.Errorf("save category narratives: %w", err)
 	}
 
+	go feedbackNarrativesToTags(outputs)
+
 	logging.Infof("narrative: saved %d narratives for category %d (%s) on %s", saved, categoryID, categoryLabel, date.Format("2006-01-02"))
 	return saved, nil
 }
@@ -221,6 +219,9 @@ func saveNarratives(outputs []NarrativeOutput, date time.Time, scopeOpts *ScopeS
 		articleIDsJSON, _ := json.Marshal(articleIDs)
 
 		generation := resolveGeneration(out, date)
+		if scopeOpts == nil {
+			generation = resolveGlobalGeneration(date)
+		}
 
 		status := out.Status
 		if status == "" {
@@ -283,6 +284,24 @@ func resolveGeneration(out NarrativeOutput, date time.Time) int {
 	return maxGen + 1
 }
 
+func resolveGlobalGeneration(date time.Time) int {
+	yesterday := date.AddDate(0, 0, -1)
+	startOfYesterday := time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 0, 0, 0, 0, yesterday.Location())
+	endOfYesterday := startOfYesterday.Add(24 * time.Hour)
+
+	var maxGen int
+	database.DB.Model(&models.NarrativeSummary{}).
+		Where("scope_type = ? AND period = ? AND period_date >= ? AND period_date < ?",
+			models.NarrativeScopeTypeGlobal, "daily", startOfYesterday, endOfYesterday).
+		Select("COALESCE(MAX(generation), -1)").
+		Scan(&maxGen)
+
+	if maxGen < 0 {
+		return 0
+	}
+	return maxGen + 1
+}
+
 func resolveArticleIDs(tagIDs []uint, date time.Time) []uint64 {
 	if len(tagIDs) == 0 {
 		return nil
@@ -331,6 +350,61 @@ func markEndedNarratives(date time.Time, currentOutputs []NarrativeOutput, prev 
 		Update("status", models.NarrativeStatusEnding)
 
 	logging.Infof("narrative: marked %d previous narratives as ending", result.RowsAffected)
+}
+
+func markEndedGlobalNarratives(date time.Time, currentOutputs []NarrativeOutput, prevGlobal []PreviousNarrative) {
+	if len(prevGlobal) == 0 {
+		return
+	}
+
+	currentTagIDs := make(map[uint]bool)
+	for _, out := range currentOutputs {
+		for _, tid := range out.RelatedTagIDs {
+			currentTagIDs[tid] = true
+		}
+	}
+
+	yesterday := date.AddDate(0, 0, -1)
+	startOfYesterday := time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 0, 0, 0, 0, yesterday.Location())
+	endOfYesterday := startOfYesterday.Add(24 * time.Hour)
+
+	var prevNarratives []models.NarrativeSummary
+	database.DB.Where("scope_type = ? AND period = ? AND period_date >= ? AND period_date < ?",
+		models.NarrativeScopeTypeGlobal, "daily", startOfYesterday, endOfYesterday).
+		Find(&prevNarratives)
+
+	var endedIDs []uint64
+	for _, prev := range prevNarratives {
+		if prev.Status == models.NarrativeStatusEnding {
+			continue
+		}
+		var prevTagIDs []uint
+		if prev.RelatedTagIDs != "" {
+			json.Unmarshal([]byte(prev.RelatedTagIDs), &prevTagIDs)
+		}
+
+		hasIntersection := false
+		for _, tid := range prevTagIDs {
+			if currentTagIDs[tid] {
+				hasIntersection = true
+				break
+			}
+		}
+
+		if !hasIntersection {
+			endedIDs = append(endedIDs, uint64(prev.ID))
+		}
+	}
+
+	if len(endedIDs) == 0 {
+		return
+	}
+
+	result := database.DB.Model(&models.NarrativeSummary{}).
+		Where("id IN ? AND status != ?", endedIDs, models.NarrativeStatusEnding).
+		Update("status", models.NarrativeStatusEnding)
+
+	logging.Infof("narrative: marked %d previous global narratives as ending", result.RowsAffected)
 }
 
 type NarrativeListItem struct {
