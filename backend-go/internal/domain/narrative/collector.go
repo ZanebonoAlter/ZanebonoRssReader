@@ -193,13 +193,135 @@ func collectUnclassifiedTags(since, until time.Time) ([]TagInput, error) {
 	return inputs, nil
 }
 
-func CollectPreviousNarratives(date time.Time) ([]PreviousNarrative, error) {
+func CollectTagInputsByCategory(date time.Time, categoryID uint) ([]TagInput, error) {
+	startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
+	endOfDay := startOfDay.Add(24 * time.Hour)
+
+	var feedIDs []uint
+	if err := database.DB.Model(&models.Feed{}).
+		Where("category_id = ?", categoryID).
+		Pluck("id", &feedIDs).Error; err != nil || len(feedIDs) == 0 {
+		return nil, nil
+	}
+
+	var tagIDs []uint
+	database.DB.Model(&models.ArticleTopicTag{}).
+		Select("DISTINCT article_topic_tags.topic_tag_id").
+		Joins("JOIN articles ON articles.id = article_topic_tags.article_id").
+		Where("articles.feed_id IN ? AND articles.pub_date >= ? AND articles.pub_date < ?", feedIDs, startOfDay, endOfDay).
+		Pluck("article_topic_tags.topic_tag_id", &tagIDs)
+
+	if len(tagIDs) == 0 {
+		return nil, nil
+	}
+
+	var tags []models.TopicTag
+	database.DB.Where("id IN ? AND status = ?", tagIDs, "active").
+		Order("quality_score DESC, feed_count DESC").
+		Limit(100).
+		Find(&tags)
+
+	if len(tags) == 0 {
+		return nil, nil
+	}
+
+	type countRow struct {
+		TopicTagID uint `json:"topic_tag_id"`
+		Cnt        int  `json:"cnt"`
+	}
+	var counts []countRow
+	database.DB.Model(&models.ArticleTopicTag{}).
+		Select("article_topic_tags.topic_tag_id, COUNT(DISTINCT article_topic_tags.article_id) as cnt").
+		Joins("JOIN articles ON articles.id = article_topic_tags.article_id").
+		Where("article_topic_tags.topic_tag_id IN ? AND articles.feed_id IN ? AND articles.pub_date >= ? AND articles.pub_date < ?", tagIDs, feedIDs, startOfDay, endOfDay).
+		Group("article_topic_tags.topic_tag_id").
+		Scan(&counts)
+
+	countMap := make(map[uint]int, len(counts))
+	for _, c := range counts {
+		countMap[c.TopicTagID] = c.Cnt
+	}
+
+	inputs := make([]TagInput, 0, len(tags))
+	for _, tag := range tags {
+		inputs = append(inputs, TagInput{
+			ID:           tag.ID,
+			Label:        tag.Label,
+			Category:     tag.Category,
+			Description:  tag.Description,
+			ArticleCount: countMap[tag.ID],
+			Source:       tag.Source,
+		})
+	}
+	return inputs, nil
+}
+
+type ActiveCategory struct {
+	ID           uint   `json:"id"`
+	Name         string `json:"name"`
+	Icon         string `json:"icon"`
+	Color        string `json:"color"`
+	ArticleCount int    `json:"article_count"`
+	TagCount     int    `json:"tag_count"`
+}
+
+func CollectActiveCategories(date time.Time) ([]ActiveCategory, error) {
+	startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
+	endOfDay := startOfDay.Add(24 * time.Hour)
+
+	var categories []models.Category
+	database.DB.Find(&categories)
+
+	var result []ActiveCategory
+	for _, cat := range categories {
+		var feedIDs []uint
+		database.DB.Model(&models.Feed{}).Where("category_id = ?", cat.ID).Pluck("id", &feedIDs)
+		if len(feedIDs) == 0 {
+			continue
+		}
+
+		var articleCount int64
+		database.DB.Model(&models.Article{}).
+			Where("feed_id IN ? AND pub_date >= ? AND pub_date < ?", feedIDs, startOfDay, endOfDay).
+			Count(&articleCount)
+
+		if articleCount == 0 {
+			continue
+		}
+
+		var tagCount int64
+		database.DB.Model(&models.ArticleTopicTag{}).
+			Joins("JOIN articles ON articles.id = article_topic_tags.article_id").
+			Where("articles.feed_id IN ? AND articles.pub_date >= ? AND articles.pub_date < ?", feedIDs, startOfDay, endOfDay).
+			Distinct("article_topic_tags.topic_tag_id").
+			Count(&tagCount)
+
+		result = append(result, ActiveCategory{
+			ID:           cat.ID,
+			Name:         cat.Name,
+			Icon:         cat.Icon,
+			Color:        cat.Color,
+			ArticleCount: int(articleCount),
+			TagCount:     int(tagCount),
+		})
+	}
+	return result, nil
+}
+
+func CollectPreviousNarratives(date time.Time, scopeType string, categoryID *uint) ([]PreviousNarrative, error) {
 	yesterday := date.AddDate(0, 0, -1)
+	query := database.DB.
+		Where("period = ? AND period_date >= ? AND period_date < ?", "daily", yesterday, date)
+
+	if scopeType != "" {
+		query = query.Where("scope_type = ?", scopeType)
+		if categoryID != nil {
+			query = query.Where("scope_category_id = ?", *categoryID)
+		}
+	}
+
 	var narratives []models.NarrativeSummary
-	if err := database.DB.
-		Where("period = ? AND period_date >= ? AND period_date < ?", "daily", yesterday, date).
-		Order("id ASC").
-		Find(&narratives).Error; err != nil {
+	if err := query.Order("id ASC").Find(&narratives).Error; err != nil {
 		return nil, err
 	}
 

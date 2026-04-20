@@ -384,16 +384,37 @@ export interface NarrativeTimelineDay {
   narratives: NarrativeItem[]
 }
 
+export interface NarrativeScopeCategory {
+  category_id: number
+  category_name: string
+  category_icon: string
+  category_color: string
+  narrative_count: number
+  last_generated_at: string
+}
+
+export interface NarrativeScopesResponse {
+  date: string
+  global_count: number
+  categories: NarrativeScopeCategory[]
+}
+
 export function useNarrativeApi() {
-  const getNarratives = async (date: string) => {
+  const getNarratives = async (date: string, scopeType?: string, categoryId?: number) => {
+    const params: Record<string, string | undefined> = { date }
+    if (scopeType) params.scope_type = scopeType
+    if (categoryId !== undefined) params.category_id = String(categoryId)
     return apiClient.get<NarrativeItem[]>(
-      `/narratives?date=${date}`
+      withQuery('/narratives', params)
     )
   }
 
-  const getNarrativeTimeline = async (date: string, days = 7) => {
+  const getNarrativeTimeline = async (date: string, days = 7, scopeType?: string, categoryId?: number) => {
+    const params: Record<string, string | undefined> = { date, days: String(days) }
+    if (scopeType) params.scope_type = scopeType
+    if (categoryId !== undefined) params.category_id = String(categoryId)
     return apiClient.get<NarrativeTimelineDay[]>(
-      `/narratives/timeline?date=${date}&days=${days}`
+      withQuery('/narratives/timeline', params)
     )
   }
 
@@ -403,11 +424,31 @@ export function useNarrativeApi() {
     )
   }
 
-  const deleteNarratives = async (date: string) => {
+  const deleteNarratives = async (date: string, scopeType?: string, categoryId?: number) => {
+    const params: Record<string, string | undefined> = { date }
+    if (scopeType) params.scope_type = scopeType
+    if (categoryId !== undefined) params.category_id = String(categoryId)
     return apiClient.delete<{ deleted: number }>(
-      `/narratives?date=${date}`
+      withQuery('/narratives', params)
     )
   }
 
-  return { getNarratives, getNarrativeTimeline, getNarrativeHistory, deleteNarratives }
+  const getNarrativeScopes = async (date: string) => {
+    return apiClient.get<NarrativeScopesResponse>(
+      `/narratives/scopes?date=${date}`
+    )
+  }
+
+  const regenerateNarratives = async (date: string, scopeType?: string, categoryId?: number) => {
+    return apiClient.post<{ saved: number }>(
+      '/narratives/regenerate',
+      {
+        date,
+        scope_type: scopeType || undefined,
+        category_id: categoryId !== undefined ? categoryId : undefined,
+      }
+    )
+  }
+
+  return { getNarratives, getNarrativeTimeline, getNarrativeHistory, deleteNarratives, getNarrativeScopes, regenerateNarratives }
 }

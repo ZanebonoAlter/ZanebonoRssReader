@@ -197,7 +197,7 @@ func TestCollectPreviousNarratives_NoData(t *testing.T) {
 	setupCollectorTestDB(t)
 
 	date := time.Date(2026, 4, 16, 12, 0, 0, 0, time.UTC)
-	result, err := CollectPreviousNarratives(date)
+	result, err := CollectPreviousNarratives(date, "", nil)
 	if err != nil {
 		t.Fatalf("CollectPreviousNarratives returned error: %v", err)
 	}
@@ -222,7 +222,7 @@ func TestCollectPreviousNarratives_WithData(t *testing.T) {
 		}
 	}
 
-	result, err := CollectPreviousNarratives(day2)
+	result, err := CollectPreviousNarratives(day2, "", nil)
 	if err != nil {
 		t.Fatalf("CollectPreviousNarratives returned error: %v", err)
 	}
@@ -266,7 +266,7 @@ func TestCollectPreviousNarratives_OnlyLooksAtYesterday(t *testing.T) {
 	})
 
 	queryDate := time.Date(2026, 4, 16, 0, 0, 0, 0, time.UTC)
-	result, err := CollectPreviousNarratives(queryDate)
+	result, err := CollectPreviousNarratives(queryDate, "", nil)
 	if err != nil {
 		t.Fatalf("CollectPreviousNarratives returned error: %v", err)
 	}

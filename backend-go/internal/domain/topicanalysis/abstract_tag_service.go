@@ -267,15 +267,6 @@ func processAbstractJudgment(ctx context.Context, candidates []TagCandidate, jud
 				continue
 			}
 
-			var existingParentCount int64
-			tx.Model(&models.TopicTagRelation{}).
-				Where("child_id = ? AND parent_id != ? AND relation_type = ?", candidate.Tag.ID, abstractTag.ID, "abstract").
-				Count(&existingParentCount)
-			if existingParentCount > 0 {
-				logging.Infof("Skipping candidate %d (%s): already has an abstract parent", candidate.Tag.ID, candidate.Tag.Label)
-				continue
-			}
-
 			relation := models.TopicTagRelation{
 				ParentID:        abstractTag.ID,
 				ChildID:         candidate.Tag.ID,
@@ -316,6 +307,9 @@ func processAbstractJudgment(ctx context.Context, candidates []TagCandidate, jud
 			go adoptNarrowerAbstractChildren(context.Background(), abstractTag.ID)
 		}
 		go EnqueueAbstractTagUpdate(abstractTag.ID, "new_child_added")
+		for _, child := range abstractChildren {
+			go resolveMultiParentConflict(child.ID)
+		}
 	}
 
 	return &AbstractResult{
@@ -453,7 +447,7 @@ func GetTagHierarchy(category string, scopeFeedID uint, scopeCategoryID uint, ti
 		if !ok {
 			continue
 		}
-		if childSet[parentID] && parentSet[parentID] {
+		if childSet[parentID] {
 			continue
 		}
 		children := buildHierarchy(childrenMap, parentID)
@@ -469,6 +463,59 @@ func GetTagHierarchy(category string, scopeFeedID uint, scopeCategoryID uint, ti
 			QualityScore: parent.QualityScore,
 			Children:     children,
 		})
+	}
+
+	if len(roots) == 0 && len(parentSet) > 0 {
+		childToParent := make(map[uint]uint, len(relations))
+		for _, r := range relations {
+			childToParent[r.ChildID] = r.ParentID
+		}
+		cycleRoots := make(map[uint]bool)
+		globalVisited := make(map[uint]bool)
+		for pid := range parentSet {
+			if globalVisited[pid] {
+				continue
+			}
+			path := make(map[uint]bool)
+			current := pid
+			for {
+				if path[current] {
+					cycleRoots[current] = true
+					break
+				}
+				if globalVisited[current] {
+					break
+				}
+				path[current] = true
+				p, ok := childToParent[current]
+				if !ok {
+					break
+				}
+				current = p
+			}
+			for id := range path {
+				globalVisited[id] = true
+			}
+		}
+		for rootID := range cycleRoots {
+			parent, ok := tagMap[rootID]
+			if !ok {
+				continue
+			}
+			children := buildHierarchy(childrenMap, rootID)
+			roots = append(roots, TagHierarchyNode{
+				ID:           parent.ID,
+				Label:        parent.Label,
+				Slug:         parent.Slug,
+				Category:     parent.Category,
+				Icon:         parent.Icon,
+				FeedCount:    parent.FeedCount,
+				ArticleCount: articleCounts[parent.ID],
+				IsActive:     activeTagIDs[parent.ID],
+				QualityScore: parent.QualityScore,
+				Children:     children,
+			})
+		}
 	}
 
 	return roots, nil
@@ -1585,7 +1632,7 @@ func MatchAbstractTagHierarchy(ctx context.Context, abstractTagID uint) {
 	}
 
 	es := NewEmbeddingService()
-	candidates, err := es.FindSimilarAbstractTags(ctx, abstractTagID, abstractTag.Category, 5)
+	candidates, err := es.FindSimilarAbstractTags(ctx, abstractTagID, abstractTag.Category, 0)
 	if err != nil {
 		logging.Warnf("MatchAbstractTagHierarchy: failed to find similar abstract tags for %d: %v", abstractTagID, err)
 		return
@@ -1595,13 +1642,8 @@ func MatchAbstractTagHierarchy(ctx context.Context, abstractTagID uint) {
 	}
 
 	thresholds := es.GetThresholds()
-	maxCheck := 3
-	if len(candidates) < maxCheck {
-		maxCheck = len(candidates)
-	}
 
-	for i := 0; i < maxCheck; i++ {
-		candidate := candidates[i]
+	for _, candidate := range candidates {
 		if candidate.Tag == nil {
 			continue
 		}
@@ -1644,7 +1686,7 @@ func adoptNarrowerAbstractChildren(ctx context.Context, abstractTagID uint) {
 	}
 
 	es := NewEmbeddingService()
-	candidates, err := es.FindSimilarAbstractTags(ctx, abstractTagID, abstractTag.Category, 5)
+	candidates, err := es.FindSimilarAbstractTags(ctx, abstractTagID, abstractTag.Category, 0)
 	if err != nil || len(candidates) == 0 {
 		if err != nil {
 			logging.Warnf("adoptNarrowerAbstractChildren: similarity search failed for %d: %v", abstractTagID, err)
@@ -1682,7 +1724,8 @@ func adoptNarrowerAbstractChildren(ctx context.Context, abstractTagID uint) {
 }
 
 // linkAbstractParentChild creates a parent-child relation between two abstract tags.
-// Prevents a child from being adopted by multiple parents (one-parent rule).
+// If the child already has other abstract parents, allows the insertion and triggers
+// async LLM-based resolution to keep only the best parent.
 func linkAbstractParentChild(childID, parentID uint) error {
 	err := database.DB.Transaction(func(tx *gorm.DB) error {
 		wouldCycle, err := wouldCreateCycle(tx, parentID, childID)
@@ -1701,14 +1744,6 @@ func linkAbstractParentChild(childID, parentID uint) error {
 			return nil
 		}
 
-		var existingParentCount int64
-		tx.Model(&models.TopicTagRelation{}).
-			Where("child_id = ? AND parent_id != ?", childID, parentID).
-			Count(&existingParentCount)
-		if existingParentCount > 0 {
-			return fmt.Errorf("child %d already has an abstract parent, skipping", childID)
-		}
-
 		relation := models.TopicTagRelation{
 			ParentID:     parentID,
 			ChildID:      childID,
@@ -1720,10 +1755,144 @@ func linkAbstractParentChild(childID, parentID uint) error {
 		return err
 	}
 
+	go resolveMultiParentConflict(childID)
 	go enqueueEmbeddingsForNormalChildren(parentID)
 	go EnqueueAbstractTagUpdate(parentID, "hierarchy_linked")
 
 	return nil
+}
+
+type parentWithInfo struct {
+	RelationID uint
+	Parent     *models.TopicTag
+}
+
+// resolveMultiParentConflict checks if a child tag has multiple abstract parents,
+// and if so, calls LLM to pick the best parent and removes the rest.
+func resolveMultiParentConflict(childID uint) {
+	if database.DB == nil {
+		return
+	}
+	var relations []models.TopicTagRelation
+	if err := database.DB.
+		Where("child_id = ? AND relation_type = ?", childID, "abstract").
+		Preload("Parent").
+		Find(&relations).Error; err != nil {
+		logging.Warnf("resolveMultiParentConflict: failed to load parents for child %d: %v", childID, err)
+		return
+	}
+	if len(relations) <= 1 {
+		return
+	}
+
+	var childTag models.TopicTag
+	if err := database.DB.First(&childTag, childID).Error; err != nil {
+		logging.Warnf("resolveMultiParentConflict: child tag %d not found: %v", childID, err)
+		return
+	}
+
+	var parents []parentWithInfo
+	for _, r := range relations {
+		if r.Parent == nil {
+			continue
+		}
+		parents = append(parents, parentWithInfo{RelationID: r.ID, Parent: r.Parent})
+	}
+	if len(parents) <= 1 {
+		return
+	}
+
+	bestIdx, err := aiJudgeBestParent(context.Background(), &childTag, parents)
+	if err != nil {
+		logging.Warnf("resolveMultiParentConflict: LLM judgment failed for child %d: %v", childID, err)
+		return
+	}
+
+	for i, p := range parents {
+		if i == bestIdx {
+			continue
+		}
+		if delErr := database.DB.Delete(&models.TopicTagRelation{}, p.RelationID).Error; delErr != nil {
+			logging.Warnf("resolveMultiParentConflict: failed to remove relation %d: %v", p.RelationID, delErr)
+		} else {
+			logging.Infof("resolveMultiParentConflict: removed parent %d (%s) from child %d (%s), keeping parent %d (%s)",
+				p.Parent.ID, p.Parent.Label, childID, childTag.Label,
+				parents[bestIdx].Parent.ID, parents[bestIdx].Parent.Label)
+		}
+	}
+
+	keptParent := parents[bestIdx].Parent
+	go EnqueueAbstractTagUpdate(keptParent.ID, "multi_parent_resolved")
+}
+
+// aiJudgeBestParent asks LLM which parent is the best fit for a child tag.
+// Returns the index of the best parent in the input slice.
+func aiJudgeBestParent(ctx context.Context, childTag *models.TopicTag, parents []parentWithInfo) (int, error) {
+	var parentDescs []string
+	for i, p := range parents {
+		children := loadAbstractChildLabels(p.Parent.ID, 5)
+		desc := fmt.Sprintf("父标签 %d: %q (描述: %s, 子标签: %s)", i+1, p.Parent.Label, truncateStr(p.Parent.Description, 150), formatChildLabels(children))
+		parentDescs = append(parentDescs, desc)
+	}
+
+	childDesc := fmt.Sprintf("子标签: %q (描述: %s)", childTag.Label, truncateStr(childTag.Description, 200))
+
+	router := airouter.NewRouter()
+	prompt := fmt.Sprintf(`一个标签目前被多个抽象父标签收养，请判断哪个父标签是最合适的归属。
+
+%s
+
+%s
+
+规则:
+- 选择最能概括子标签概念的父标签
+- 如果多个父标签都合适，选择子标签范围更具体的那个（更紧密的归属）
+- 如果父标签之间有层级关系，选择最直接（最窄）的父标签
+
+返回 JSON: {"best_index": 父标签编号(从1开始), "reason": "简要说明"}`,
+		childDesc, strings.Join(parentDescs, "\n"))
+
+	req := airouter.ChatRequest{
+		Capability: airouter.CapabilityTopicTagging,
+		Messages: []airouter.Message{
+			{Role: "system", Content: "You are a tag taxonomy assistant. Respond only with valid JSON."},
+			{Role: "user", Content: prompt},
+		},
+		JSONMode: true,
+		JSONSchema: &airouter.JSONSchema{
+			Type: "object",
+			Properties: map[string]airouter.SchemaProperty{
+				"best_index": {Type: "integer", Description: "最合适父标签的编号（从1开始）"},
+				"reason":     {Type: "string", Description: "选择理由"},
+			},
+			Required: []string{"best_index", "reason"},
+		},
+		Temperature: func() *float64 { f := 0.2; return &f }(),
+		Metadata: map[string]any{
+			"operation": "resolve_multi_parent",
+			"child_tag": childTag.ID,
+		},
+	}
+
+	result, err := router.Chat(ctx, req)
+	if err != nil {
+		return 0, fmt.Errorf("LLM call failed: %w", err)
+	}
+
+	var parsed struct {
+		BestIndex int    `json:"best_index"`
+		Reason    string `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(result.Content), &parsed); err != nil {
+		return 0, fmt.Errorf("parse LLM response: %w", err)
+	}
+
+	idx := parsed.BestIndex - 1
+	if idx < 0 || idx >= len(parents) {
+		return 0, fmt.Errorf("LLM returned invalid best_index %d (parents count: %d)", parsed.BestIndex, len(parents))
+	}
+
+	return idx, nil
 }
 
 func mergeOrLinkSimilarAbstract(ctx context.Context, tag1ID, tag2ID uint) error {
@@ -1824,19 +1993,29 @@ func aiJudgeAbstractHierarchy(ctx context.Context, tag1ID, tag2ID uint) (parentI
 		return 0, 0, fmt.Errorf("load tag %d: %w", tag2ID, err)
 	}
 
+	children1 := loadAbstractChildLabels(tag1ID, 8)
+	children2 := loadAbstractChildLabels(tag2ID, 8)
+
 	router := airouter.NewRouter()
 	prompt := fmt.Sprintf(`Given two abstract topic tags, determine which concept is broader (more general) and which is more specific.
 
 Tag A: %q (description: %s)
+Tag A's children: %s
+
 Tag B: %q (description: %s)
+Tag B's children: %s
 
 Respond with JSON:
 {"parent": "A" or "B", "reason": "brief explanation"}
 
 Rules:
 - The parent should be the more general/broader concept
+- Use the children tags to understand what each abstract tag actually covers
+- If tag A's children are about China domestic events and tag B is about a foreign event, they are NOT the same category — do NOT establish a parent-child relation between them
+- If children tags show the two abstract tags cover completely different domains or regions, choose the one that is broader but also prefer "A" if they are truly unrelated
 - If they are equally broad, choose the one with a shorter/more concise label as parent
-- If unclear, default to "A" as parent`, tag1.Label, truncateStr(tag1.Description, 200), tag2.Label, truncateStr(tag2.Description, 200))
+- If unclear, default to "A" as parent`, tag1.Label, truncateStr(tag1.Description, 200), formatChildLabels(children1),
+		tag2.Label, truncateStr(tag2.Description, 200), formatChildLabels(children2))
 
 	req := airouter.ChatRequest{
 		Capability: airouter.CapabilityTopicTagging,

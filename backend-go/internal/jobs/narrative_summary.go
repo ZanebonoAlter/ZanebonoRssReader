@@ -271,6 +271,12 @@ func (s *NarrativeSummaryScheduler) runNarrativeCycle(triggerSource string, targ
 		return
 	}
 
+	catSaved, catErr := narrative.NewNarrativeService().GenerateAndSaveForAllCategories(targetDate)
+	if catErr != nil {
+		logging.Warnf("Narrative category generation failed: %v", catErr)
+	}
+	savedCount += catSaved
+
 	summary.FinishedAt = time.Now().Format(time.RFC3339)
 	summary.SavedCount = savedCount
 	summary.Reason = "narrative summaries generated"

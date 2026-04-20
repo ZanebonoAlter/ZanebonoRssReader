@@ -14,6 +14,9 @@ type NarrativeSummary struct {
 	RelatedTagIDs     string    `gorm:"type:text" json:"related_tag_ids"`
 	RelatedArticleIDs string    `gorm:"type:text" json:"related_article_ids"`
 	Source            string    `gorm:"size:20;default:ai" json:"source"`
+	ScopeType         string    `gorm:"size:20;not null;default:global" json:"scope_type"`
+	ScopeCategoryID   *uint     `gorm:"index:idx_narrative_scope" json:"scope_category_id"`
+	ScopeLabel        string    `gorm:"size:100" json:"scope_label"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
 }
@@ -28,4 +31,7 @@ const (
 	NarrativeStatusSplitting  = "splitting"
 	NarrativeStatusMerging    = "merging"
 	NarrativeStatusEnding     = "ending"
+
+	NarrativeScopeTypeGlobal       = "global"
+	NarrativeScopeTypeFeedCategory = "feed_category"
 )

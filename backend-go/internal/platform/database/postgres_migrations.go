@@ -324,5 +324,24 @@ func postgresMigrations() []Migration {
 				return nil
 			},
 		},
+		{
+			Version:     "20260420_0001",
+			Description: "Add scope columns to narrative_summaries for feed-category-scoped narratives.",
+			Up: func(db *gorm.DB) error {
+				stmts := []string{
+					"ALTER TABLE narrative_summaries ADD COLUMN IF NOT EXISTS scope_type VARCHAR(20) NOT NULL DEFAULT 'global'",
+					"ALTER TABLE narrative_summaries ADD COLUMN IF NOT EXISTS scope_category_id INTEGER",
+					"ALTER TABLE narrative_summaries ADD COLUMN IF NOT EXISTS scope_label VARCHAR(100)",
+					"CREATE INDEX IF NOT EXISTS idx_narrative_scope ON narrative_summaries(scope_category_id)",
+					"CREATE INDEX IF NOT EXISTS idx_narrative_scope_period ON narrative_summaries(scope_type, scope_category_id, period_date)",
+				}
+				for _, s := range stmts {
+					if err := db.Exec(s).Error; err != nil {
+						return fmt.Errorf("narrative scope columns migration: %w", err)
+					}
+				}
+				return nil
+			},
+		},
 	}
 }

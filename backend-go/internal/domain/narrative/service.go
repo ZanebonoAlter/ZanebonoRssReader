@@ -17,28 +17,66 @@ func NewNarrativeService() *NarrativeService {
 	return &NarrativeService{}
 }
 
-func (s *NarrativeService) DeleteByDate(date time.Time) (int, error) {
+func (s *NarrativeService) DeleteByDate(date time.Time, scopeType string, categoryID *uint) (int, error) {
 	startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
 	endOfDay := startOfDay.Add(24 * time.Hour)
 
-	result := database.DB.Where("period = ? AND period_date >= ? AND period_date < ?", "daily", startOfDay, endOfDay).
-		Delete(&models.NarrativeSummary{})
+	query := database.DB.Where("period = ? AND period_date >= ? AND period_date < ?", "daily", startOfDay, endOfDay)
+
+	if scopeType != "" {
+		query = query.Where("scope_type = ?", scopeType)
+		if categoryID != nil {
+			query = query.Where("scope_category_id = ?", *categoryID)
+		}
+	}
+
+	result := query.Delete(&models.NarrativeSummary{})
 	if result.Error != nil {
 		return 0, fmt.Errorf("delete narratives for %s: %w", date.Format("2006-01-02"), result.Error)
 	}
 
-	logging.Infof("narrative: deleted %d existing narratives for %s", result.RowsAffected, date.Format("2006-01-02"))
+	logging.Infof("narrative: deleted %d existing narratives for %s (scope=%s)", result.RowsAffected, date.Format("2006-01-02"), scopeType)
 	return int(result.RowsAffected), nil
 }
 
 func (s *NarrativeService) RegenerateAndSave(date time.Time) (int, error) {
-	deleted, err := s.DeleteByDate(date)
+	deleted, err := s.DeleteByDate(date, "", nil)
 	if err != nil {
 		return 0, err
 	}
 	logging.Infof("narrative: deleted %d old narratives before regenerating for %s", deleted, date.Format("2006-01-02"))
 
-	return s.GenerateAndSave(date)
+	saved, err := s.GenerateAndSave(date)
+	if err != nil {
+		return saved, err
+	}
+
+	catSaved, catErr := s.GenerateAndSaveForAllCategories(date)
+	if catErr != nil {
+		logging.Warnf("narrative: category regeneration failed during full regen: %v", catErr)
+	}
+	return saved + catSaved, nil
+}
+
+func (s *NarrativeService) RegenerateAndSaveForCategory(date time.Time, categoryID uint) (int, error) {
+	deleted, err := s.DeleteByDate(date, models.NarrativeScopeTypeFeedCategory, &categoryID)
+	if err != nil {
+		return 0, err
+	}
+	logging.Infof("narrative: deleted %d old category narratives for category %d before regenerating", deleted, categoryID)
+
+	var cat models.Category
+	if err := database.DB.Where("id = ?", categoryID).First(&cat).Error; err != nil {
+		return 0, fmt.Errorf("category %d not found: %w", categoryID, err)
+	}
+
+	return s.GenerateAndSaveForCategory(date, categoryID, cat.Name)
+}
+
+type ScopeSaveOpts struct {
+	ScopeType   string
+	CategoryID  *uint
+	Label       string
 }
 
 func (s *NarrativeService) GenerateAndSave(date time.Time) (int, error) {
@@ -51,7 +89,7 @@ func (s *NarrativeService) GenerateAndSave(date time.Time) (int, error) {
 		return 0, nil
 	}
 
-	prevNarratives, err := CollectPreviousNarratives(date)
+	prevNarratives, err := CollectPreviousNarratives(date, "", nil)
 	if err != nil {
 		return 0, fmt.Errorf("collect previous narratives: %w", err)
 	}
@@ -67,7 +105,7 @@ func (s *NarrativeService) GenerateAndSave(date time.Time) (int, error) {
 		return 0, nil
 	}
 
-	saved, err := saveNarratives(outputs, date)
+	saved, err := saveNarratives(outputs, date, nil)
 	if err != nil {
 		return 0, fmt.Errorf("save narratives: %w", err)
 	}
@@ -77,11 +115,101 @@ func (s *NarrativeService) GenerateAndSave(date time.Time) (int, error) {
 	go feedbackNarrativesToTags(outputs)
 	go GenerateWatchedTagNarratives(date)
 
-	logging.Infof("narrative: saved %d narratives for %s", saved, date.Format("2006-01-02"))
+	logging.Infof("narrative: saved %d global narratives for %s", saved, date.Format("2006-01-02"))
 	return saved, nil
 }
 
-func saveNarratives(outputs []NarrativeOutput, date time.Time) (int, error) {
+func (s *NarrativeService) GenerateAndSaveForCategory(date time.Time, categoryID uint, categoryLabel string) (int, error) {
+	tagInputs, err := CollectTagInputsByCategory(date, categoryID)
+	if err != nil {
+		return 0, fmt.Errorf("collect tag inputs for category %d: %w", categoryID, err)
+	}
+	if len(tagInputs) == 0 {
+		logging.Infof("narrative: no tag inputs for category %d on %s, skipping", categoryID, date.Format("2006-01-02"))
+		return 0, nil
+	}
+
+	articleCount := 0
+	for _, t := range tagInputs {
+		articleCount += t.ArticleCount
+	}
+	if articleCount < 5 {
+		logging.Infof("narrative: category %d has only %d articles on %s, below threshold", categoryID, articleCount, date.Format("2006-01-02"))
+		return 0, nil
+	}
+
+	validTagCount := 0
+	for _, t := range tagInputs {
+		if t.ArticleCount > 0 {
+			validTagCount++
+		}
+	}
+	if validTagCount < 3 {
+		logging.Infof("narrative: category %d has only %d valid tags on %s, below threshold", categoryID, validTagCount, date.Format("2006-01-02"))
+		return 0, nil
+	}
+
+	prevNarratives, err := CollectPreviousNarratives(date, models.NarrativeScopeTypeFeedCategory, &categoryID)
+	if err != nil {
+		return 0, fmt.Errorf("collect previous narratives for category %d: %w", categoryID, err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	outputs, err := GenerateNarratives(ctx, tagInputs, prevNarratives)
+	if err != nil {
+		return 0, fmt.Errorf("generate narratives for category %d: %w", categoryID, err)
+	}
+
+	if len(outputs) > 5 {
+		outputs = outputs[:5]
+	}
+	if len(outputs) == 0 {
+		logging.Infof("narrative: no narratives generated for category %d on %s", categoryID, date.Format("2006-01-02"))
+		return 0, nil
+	}
+
+	catID := categoryID
+	opts := &ScopeSaveOpts{
+		ScopeType:  models.NarrativeScopeTypeFeedCategory,
+		CategoryID: &catID,
+		Label:      categoryLabel,
+	}
+
+	saved, err := saveNarratives(outputs, date, opts)
+	if err != nil {
+		return 0, fmt.Errorf("save category narratives: %w", err)
+	}
+
+	logging.Infof("narrative: saved %d narratives for category %d (%s) on %s", saved, categoryID, categoryLabel, date.Format("2006-01-02"))
+	return saved, nil
+}
+
+func (s *NarrativeService) GenerateAndSaveForAllCategories(date time.Time) (int, error) {
+	categories, err := CollectActiveCategories(date)
+	if err != nil {
+		return 0, fmt.Errorf("collect active categories: %w", err)
+	}
+	if len(categories) == 0 {
+		logging.Infof("narrative: no active categories for %s", date.Format("2006-01-02"))
+		return 0, nil
+	}
+
+	totalSaved := 0
+	for _, cat := range categories {
+		saved, err := s.GenerateAndSaveForCategory(date, cat.ID, cat.Name)
+		if err != nil {
+			logging.Warnf("narrative: failed to generate for category %d (%s): %v", cat.ID, cat.Name, err)
+			continue
+		}
+		totalSaved += saved
+	}
+
+	logging.Infof("narrative: saved %d category narratives across %d categories for %s", totalSaved, len(categories), date.Format("2006-01-02"))
+	return totalSaved, nil
+}
+
+func saveNarratives(outputs []NarrativeOutput, date time.Time, scopeOpts *ScopeSaveOpts) (int, error) {
 	startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
 
 	records := make([]models.NarrativeSummary, 0, len(outputs))
@@ -99,7 +227,7 @@ func saveNarratives(outputs []NarrativeOutput, date time.Time) (int, error) {
 			status = models.NarrativeStatusEmerging
 		}
 
-		records = append(records, models.NarrativeSummary{
+		record := models.NarrativeSummary{
 			Title:             out.Title,
 			Summary:           out.Summary,
 			Status:            status,
@@ -110,7 +238,14 @@ func saveNarratives(outputs []NarrativeOutput, date time.Time) (int, error) {
 			RelatedTagIDs:     string(tagIDsJSON),
 			RelatedArticleIDs: string(articleIDsJSON),
 			Source:            "ai",
-		})
+			ScopeType:         models.NarrativeScopeTypeGlobal,
+		}
+		if scopeOpts != nil {
+			record.ScopeType = scopeOpts.ScopeType
+			record.ScopeCategoryID = scopeOpts.CategoryID
+			record.ScopeLabel = scopeOpts.Label
+		}
+		records = append(records, record)
 	}
 
 	if err := database.DB.CreateInBatches(records, 20).Error; err != nil {
@@ -224,7 +359,7 @@ type TimelineDay struct {
 	Narratives []NarrativeListItem `json:"narratives"`
 }
 
-func (s *NarrativeService) GetTimeline(anchorDate time.Time, days int) ([]TimelineDay, error) {
+func (s *NarrativeService) GetTimeline(anchorDate time.Time, days int, scopeType string, categoryID *uint) ([]TimelineDay, error) {
 	if days <= 0 {
 		days = 7
 	}
@@ -236,9 +371,20 @@ func (s *NarrativeService) GetTimeline(anchorDate time.Time, days int) ([]Timeli
 	rangeStart := startOfAnchor.AddDate(0, 0, -(days - 1))
 	rangeEnd := startOfAnchor.Add(24 * time.Hour)
 
+	query := database.DB.
+		Where("period = ? AND period_date >= ? AND period_date < ?", "daily", rangeStart, rangeEnd)
+
+	if scopeType != "" {
+		query = query.Where("scope_type = ?", scopeType)
+		if categoryID != nil {
+			query = query.Where("scope_category_id = ?", *categoryID)
+		}
+	} else {
+		query = query.Where("scope_type = ?", models.NarrativeScopeTypeGlobal)
+	}
+
 	var narratives []models.NarrativeSummary
-	if err := database.DB.
-		Where("period = ? AND period_date >= ? AND period_date < ?", "daily", rangeStart, rangeEnd).
+	if err := query.
 		Order("period_date ASC, generation ASC, id ASC").
 		Find(&narratives).Error; err != nil {
 		return nil, fmt.Errorf("query narrative timeline: %w", err)
@@ -276,19 +422,124 @@ func (s *NarrativeService) GetTimeline(anchorDate time.Time, days int) ([]Timeli
 	return result, nil
 }
 
-func (s *NarrativeService) GetByDate(date time.Time) ([]NarrativeListItem, error) {
+func (s *NarrativeService) GetByDate(date time.Time, scopeType string, categoryID *uint) ([]NarrativeListItem, error) {
 	startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
 	endOfDay := startOfDay.Add(24 * time.Hour)
 
+	query := database.DB.
+		Where("period = ? AND period_date >= ? AND period_date < ?", "daily", startOfDay, endOfDay)
+
+	if scopeType != "" {
+		query = query.Where("scope_type = ?", scopeType)
+		if categoryID != nil {
+			query = query.Where("scope_category_id = ?", *categoryID)
+		}
+	} else {
+		query = query.Where("scope_type = ?", models.NarrativeScopeTypeGlobal)
+	}
+
 	var narratives []models.NarrativeSummary
-	if err := database.DB.
-		Where("period = ? AND period_date >= ? AND period_date < ?", "daily", startOfDay, endOfDay).
+	if err := query.
 		Order("generation ASC, id ASC").
 		Find(&narratives).Error; err != nil {
 		return nil, fmt.Errorf("query narratives by date: %w", err)
 	}
 
 	return toListItems(narratives), nil
+}
+
+type NarrativeScopeItem struct {
+	CategoryID      uint   `json:"category_id"`
+	CategoryName    string `json:"category_name"`
+	CategoryIcon    string `json:"category_icon"`
+	CategoryColor   string `json:"category_color"`
+	NarrativeCount  int    `json:"narrative_count"`
+	LastGeneratedAt string `json:"last_generated_at"`
+}
+
+type NarrativeScopesResponse struct {
+	Date        string               `json:"date"`
+	GlobalCount int                  `json:"global_count"`
+	Categories  []NarrativeScopeItem `json:"categories"`
+}
+
+func (s *NarrativeService) GetScopes(date time.Time) (*NarrativeScopesResponse, error) {
+	startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
+	endOfDay := startOfDay.Add(24 * time.Hour)
+
+	var globalCount int64
+	database.DB.Model(&models.NarrativeSummary{}).
+		Where("scope_type = ? AND period_date >= ? AND period_date < ?", models.NarrativeScopeTypeGlobal, startOfDay, endOfDay).
+		Count(&globalCount)
+
+	type catRow struct {
+		ScopeCategoryID uint   `json:"scope_category_id"`
+		ScopeLabel      string `json:"scope_label"`
+		Cnt             int    `json:"cnt"`
+	}
+	var catRows []catRow
+	database.DB.Model(&models.NarrativeSummary{}).
+		Select("scope_category_id, scope_label, COUNT(*) as cnt").
+		Where("scope_type = ? AND period_date >= ? AND period_date < ?", models.NarrativeScopeTypeFeedCategory, startOfDay, endOfDay).
+		Group("scope_category_id, scope_label").
+		Scan(&catRows)
+
+	var items []NarrativeScopeItem
+	if len(catRows) > 0 {
+		catIDs := make([]uint, 0, len(catRows))
+		for _, row := range catRows {
+			catIDs = append(catIDs, row.ScopeCategoryID)
+		}
+		var categories []models.Category
+		database.DB.Where("id IN ?", catIDs).Find(&categories)
+		catMap := make(map[uint]models.Category, len(categories))
+		for _, c := range categories {
+			catMap[c.ID] = c
+		}
+
+		type lastRow struct {
+			ScopeCategoryID uint   `json:"scope_category_id"`
+			CreatedAt       string `json:"created_at"`
+		}
+		var lastRows []lastRow
+		database.DB.Model(&models.NarrativeSummary{}).
+			Select("scope_category_id, MAX(created_at) as created_at").
+			Where("scope_type = ? AND scope_category_id IN ? AND period_date >= ? AND period_date < ?",
+				models.NarrativeScopeTypeFeedCategory, catIDs, startOfDay, endOfDay).
+			Group("scope_category_id").
+			Scan(&lastRows)
+		lastMap := make(map[uint]string, len(lastRows))
+		for _, lr := range lastRows {
+			lastMap[lr.ScopeCategoryID] = lr.CreatedAt
+		}
+
+		for _, row := range catRows {
+			cat, ok := catMap[row.ScopeCategoryID]
+			if ok {
+				items = append(items, NarrativeScopeItem{
+					CategoryID:      cat.ID,
+					CategoryName:    cat.Name,
+					CategoryIcon:    cat.Icon,
+					CategoryColor:   cat.Color,
+					NarrativeCount:  row.Cnt,
+					LastGeneratedAt: lastMap[cat.ID],
+				})
+			} else {
+				items = append(items, NarrativeScopeItem{
+					CategoryID:      row.ScopeCategoryID,
+					CategoryName:    row.ScopeLabel,
+					NarrativeCount:  row.Cnt,
+					LastGeneratedAt: lastMap[row.ScopeCategoryID],
+				})
+			}
+		}
+	}
+
+	return &NarrativeScopesResponse{
+		Date:        startOfDay.Format("2006-01-02"),
+		GlobalCount: int(globalCount),
+		Categories:  items,
+	}, nil
 }
 
 func (s *NarrativeService) GetNarrativeTree(narrativeID uint64) (*NarrativeListItem, error) {

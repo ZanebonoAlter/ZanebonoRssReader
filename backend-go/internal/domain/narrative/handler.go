@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
+	"my-robot-backend/internal/domain/models"
 )
 
 var service = NewNarrativeService()
@@ -14,11 +16,25 @@ func RegisterNarrativeRoutes(rg *gin.RouterGroup) {
 	group := rg.Group("/narratives")
 	{
 		group.GET("/timeline", getNarrativeTimeline)
+		group.GET("/scopes", getNarrativeScopes)
+		group.POST("/regenerate", regenerateNarratives)
 		group.GET("", getNarratives)
 		group.DELETE("", deleteNarratives)
 		group.GET("/:id", getNarrative)
 		group.GET("/:id/history", getNarrativeHistory)
 	}
+}
+
+func parseScopeParams(c *gin.Context) (scopeType string, categoryID *uint) {
+	scopeType = c.DefaultQuery("scope_type", "")
+	catIDStr := c.Query("category_id")
+	if catIDStr != "" {
+		if id, err := strconv.ParseUint(catIDStr, 10, 32); err == nil {
+			uid := uint(id)
+			categoryID = &uid
+		}
+	}
+	return
 }
 
 func getNarrativeTimeline(c *gin.Context) {
@@ -41,7 +57,9 @@ func getNarrativeTimeline(c *gin.Context) {
 		days = d
 	}
 
-	timeline, err := service.GetTimeline(date, days)
+	scopeType, categoryID := parseScopeParams(c)
+
+	timeline, err := service.GetTimeline(date, days, scopeType, categoryID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 		return
@@ -64,7 +82,9 @@ func getNarratives(c *gin.Context) {
 		date = time.Now()
 	}
 
-	narratives, err := service.GetByDate(date)
+	scopeType, categoryID := parseScopeParams(c)
+
+	narratives, err := service.GetByDate(date, scopeType, categoryID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 		return
@@ -87,13 +107,38 @@ func deleteNarratives(c *gin.Context) {
 		date = time.Now()
 	}
 
-	deleted, err := service.DeleteByDate(date)
+	scopeType, categoryID := parseScopeParams(c)
+
+	deleted, err := service.DeleteByDate(date, scopeType, categoryID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"deleted": deleted}})
+}
+
+func getNarrativeScopes(c *gin.Context) {
+	dateStr := c.Query("date")
+	var date time.Time
+	if dateStr != "" {
+		var err error
+		date, err = time.Parse("2006-01-02", dateStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid date format, use YYYY-MM-DD"})
+			return
+		}
+	} else {
+		date = time.Now()
+	}
+
+	scopes, err := service.GetScopes(date)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": scopes})
 }
 
 func getNarrative(c *gin.Context) {
@@ -126,4 +171,46 @@ func getNarrativeHistory(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": history})
+}
+
+type regenerateRequest struct {
+	Date       string `json:"date"`
+	ScopeType  string `json:"scope_type"`
+	CategoryID *uint  `json:"category_id"`
+}
+
+func regenerateNarratives(c *gin.Context) {
+	var req regenerateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid request body"})
+		return
+	}
+
+	var date time.Time
+	if req.Date != "" {
+		var err error
+		date, err = time.Parse("2006-01-02", req.Date)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid date format, use YYYY-MM-DD"})
+			return
+		}
+	} else {
+		date = time.Now()
+	}
+
+	var saved int
+	var err error
+
+	if req.ScopeType == models.NarrativeScopeTypeFeedCategory && req.CategoryID != nil {
+		saved, err = service.RegenerateAndSaveForCategory(date, *req.CategoryID)
+	} else {
+		saved, err = service.RegenerateAndSave(date)
+	}
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"saved": saved}})
 }

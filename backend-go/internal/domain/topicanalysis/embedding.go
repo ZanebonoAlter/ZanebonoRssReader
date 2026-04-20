@@ -340,9 +340,12 @@ func (s *EmbeddingService) FindSimilarAbstractTags(ctx context.Context, tagID ui
 	}
 	sqlQuery += `
 		ORDER BY e.embedding <=> ?::vector
-		LIMIT ?
 	`
-	args = append(args, pgVecStr, limit)
+	args = append(args, pgVecStr)
+	if limit > 0 {
+		sqlQuery += "	LIMIT ?\n"
+		args = append(args, limit)
+	}
 	if err := database.DB.Raw(sqlQuery, args...).Scan(&rows).Error; err != nil {
 		return nil, fmt.Errorf("failed to query similar abstract tags: %w", err)
 	}

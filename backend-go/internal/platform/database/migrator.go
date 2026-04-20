@@ -92,6 +92,12 @@ func loadAppliedMigrationVersions(db *gorm.DB) (map[string]bool, error) {
 	return applied, nil
 }
 
+// autoMigrateModels uses GORM AutoMigrate to sync all model tables.
+// CAVEAT: This only runs inside bootstrap migration 20260403_0002 (first-time setup).
+// For any column additions AFTER the initial bootstrap, you MUST add a versioned
+// migration in postgres_migrations.go — AutoMigrate will NOT be re-run on an
+// existing database, so new fields will silently be missing until a migration adds them.
+// (This was the old SQLite-era approach; PostgreSQL relies on explicit migrations.)
 func autoMigrateModels(db *gorm.DB) error {
 	return db.AutoMigrate(
 		&models.Category{},
