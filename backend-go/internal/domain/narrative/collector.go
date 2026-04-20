@@ -500,6 +500,7 @@ func CollectCategoryNarrativeSummaries(date time.Time) ([]CategoryInput, error) 
 		}
 
 		result = append(result, CategoryInput{
+			CategoryID:   b.CategoryID,
 			CategoryName: cat.Name,
 			CategoryIcon: cat.Icon,
 			Narratives:   briefs,
