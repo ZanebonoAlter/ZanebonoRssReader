@@ -323,3 +323,164 @@ func TestValidateNarrativeOutputs_ClearsParentIDsWhenNoPrev(t *testing.T) {
 		t.Errorf("parent_ids should be cleared when no prev narratives, got %v", result[0].ParentIDs)
 	}
 }
+
+func TestParseCrossCategoryResponse_Valid(t *testing.T) {
+	input := `{"narratives": [` +
+		`{"title": "跨分类叙事", "summary": "AI影响气候研究", "status": "emerging", "related_tag_ids": [1, 2], "parent_ids": [], "source_category_ids": [10, 20], "confidence_score": 0.8}` +
+		`]}`
+
+	result, err := parseCrossCategoryResponse(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("expected 1, got %d", len(result))
+	}
+	if result[0].Title != "跨分类叙事" {
+		t.Errorf("title: got %q", result[0].Title)
+	}
+	if len(result[0].SourceCategoryIDs) != 2 || result[0].SourceCategoryIDs[0] != 10 || result[0].SourceCategoryIDs[1] != 20 {
+		t.Errorf("source_category_ids: got %v", result[0].SourceCategoryIDs)
+	}
+}
+
+func TestParseCrossCategoryResponse_EmptyArray(t *testing.T) {
+	input := `{"narratives": []}`
+
+	_, err := parseCrossCategoryResponse(input)
+	if err == nil {
+		t.Fatal("expected error for empty wrapped array (falls through to direct parse which fails on object)")
+	}
+}
+
+func TestValidateCrossCategoryOutputs_FiltersSingleCategory(t *testing.T) {
+	outputs := []CrossCategoryNarrativeOutput{
+		{
+			NarrativeOutput:   NarrativeOutput{Title: "单分类", Summary: "只有1个分类", Status: "emerging", RelatedTagIDs: []uint{1}},
+			SourceCategoryIDs: []uint{10},
+		},
+		{
+			NarrativeOutput:   NarrativeOutput{Title: "有效跨分类", Summary: "2个分类", Status: "emerging", RelatedTagIDs: []uint{1}},
+			SourceCategoryIDs: []uint{10, 20},
+		},
+	}
+	ci := []CategoryInput{
+		{CategoryID: 10, CategoryName: "Tech", Narratives: []CategoryNarrativeBrief{{ID: 1, Title: "T1", RelatedTags: []TagBrief{{ID: 1}}}}},
+		{CategoryID: 20, CategoryName: "Science", Narratives: []CategoryNarrativeBrief{{ID: 2, Title: "T2", RelatedTags: []TagBrief{{ID: 1}}}}},
+	}
+
+	result := validateCrossCategoryOutputs(outputs, ci, nil)
+	if len(result) != 1 {
+		t.Fatalf("expected 1 (single-category filtered), got %d", len(result))
+	}
+	if result[0].Title != "有效跨分类" {
+		t.Errorf("expected '有效跨分类', got %q", result[0].Title)
+	}
+}
+
+func TestValidateCrossCategoryOutputs_AcceptsTwoCategories(t *testing.T) {
+	outputs := []CrossCategoryNarrativeOutput{
+		{
+			NarrativeOutput:   NarrativeOutput{Title: "跨分类", Summary: "2个分类", Status: "emerging", RelatedTagIDs: []uint{1}},
+			SourceCategoryIDs: []uint{10, 20},
+		},
+	}
+	ci := []CategoryInput{
+		{CategoryID: 10, CategoryName: "Tech", Narratives: []CategoryNarrativeBrief{{ID: 1, Title: "T1", RelatedTags: []TagBrief{{ID: 1}}}}},
+		{CategoryID: 20, CategoryName: "Science", Narratives: []CategoryNarrativeBrief{{ID: 2, Title: "T2", RelatedTags: []TagBrief{{ID: 1}}}}},
+	}
+
+	result := validateCrossCategoryOutputs(outputs, ci, nil)
+	if len(result) != 1 {
+		t.Fatalf("expected 1, got %d", len(result))
+	}
+	if len(result[0].SourceCategoryIDs) != 2 {
+		t.Errorf("expected 2 source categories, got %d", len(result[0].SourceCategoryIDs))
+	}
+}
+
+func TestValidateCrossCategoryOutputs_FiltersInvalidTagIDs(t *testing.T) {
+	outputs := []CrossCategoryNarrativeOutput{
+		{
+			NarrativeOutput:   NarrativeOutput{Title: "跨分类", Summary: "有无效tag", Status: "emerging", RelatedTagIDs: []uint{1, 999}},
+			SourceCategoryIDs: []uint{10, 20},
+		},
+	}
+	ci := []CategoryInput{
+		{CategoryID: 10, CategoryName: "Tech", Narratives: []CategoryNarrativeBrief{{ID: 1, Title: "T1", RelatedTags: []TagBrief{{ID: 1}}}}},
+		{CategoryID: 20, CategoryName: "Science", Narratives: []CategoryNarrativeBrief{{ID: 2, Title: "T2", RelatedTags: []TagBrief{{ID: 2}}}}},
+	}
+
+	result := validateCrossCategoryOutputs(outputs, ci, nil)
+	if len(result) != 1 {
+		t.Fatalf("expected 1, got %d", len(result))
+	}
+	if len(result[0].RelatedTagIDs) != 1 || result[0].RelatedTagIDs[0] != 1 {
+		t.Errorf("invalid tag 999 should be filtered, got %v", result[0].RelatedTagIDs)
+	}
+}
+
+func TestBuildCrossCategoryPrompt_Basic(t *testing.T) {
+	inputs := []CategoryInput{
+		{
+			CategoryID:   10,
+			CategoryName: "Tech",
+			CategoryIcon: "💻",
+			Narratives: []CategoryNarrativeBrief{
+				{ID: 100, Title: "AI崛起", Summary: "AI快速发展"},
+			},
+		},
+		{
+			CategoryID:   20,
+			CategoryName: "Science",
+			CategoryIcon: "🔬",
+			Narratives: []CategoryNarrativeBrief{
+				{ID: 200, Title: "量子突破", Summary: "量子计算进展"},
+			},
+		},
+	}
+
+	prompt := buildCrossCategoryPrompt(inputs, nil)
+
+	if !strings.Contains(prompt, "Tech") {
+		t.Error("prompt missing category name 'Tech'")
+	}
+	if !strings.Contains(prompt, "Science") {
+		t.Error("prompt missing category name 'Science'")
+	}
+	if !strings.Contains(prompt, "AI崛起") {
+		t.Error("prompt missing narrative title 'AI崛起'")
+	}
+	if !strings.Contains(prompt, "量子突破") {
+		t.Error("prompt missing narrative title '量子突破'")
+	}
+	if strings.Contains(prompt, "昨日全局叙事") {
+		t.Error("prompt should NOT contain '昨日全局叙事' when no prev")
+	}
+}
+
+func TestBuildCrossCategoryPrompt_WithPrevious(t *testing.T) {
+	inputs := []CategoryInput{
+		{
+			CategoryID:   10,
+			CategoryName: "Tech",
+			CategoryIcon: "💻",
+			Narratives:   []CategoryNarrativeBrief{{ID: 100, Title: "T1", Summary: "S1"}},
+		},
+	}
+	prev := []PreviousNarrative{
+		{ID: 50, Title: "昨日全局叙事", Summary: "昨天的摘要", Status: "continuing", Generation: 2},
+	}
+
+	prompt := buildCrossCategoryPrompt(inputs, prev)
+
+	if !strings.Contains(prompt, "昨日全局叙事") {
+		t.Error("prompt missing '昨日全局叙事' section")
+	}
+	if !strings.Contains(prompt, "[ID:50]") {
+		t.Error("prompt missing previous narrative ID:50")
+	}
+	if !strings.Contains(prompt, "第2代") {
+		t.Error("prompt missing generation info '第2代'")
+	}
+}

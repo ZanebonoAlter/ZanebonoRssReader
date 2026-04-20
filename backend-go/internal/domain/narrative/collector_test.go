@@ -257,6 +257,195 @@ func TestCollectPreviousNarratives_WithData(t *testing.T) {
 	}
 }
 
+func setupCollectorTestDBWithCategories(t *testing.T) *gorm.DB {
+	t.Helper()
+	db := setupCollectorTestDB(t)
+
+	if err := db.AutoMigrate(&models.Category{}); err != nil {
+		t.Fatalf("migrate categories: %v", err)
+	}
+	return db
+}
+
+func TestCollectCategoryNarrativeSummaries_NoData(t *testing.T) {
+	setupCollectorTestDBWithCategories(t)
+
+	date := time.Date(2026, 4, 16, 12, 0, 0, 0, time.UTC)
+	result, err := CollectCategoryNarrativeSummaries(date)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != nil {
+		t.Fatalf("expected nil for empty DB, got %d items", len(result))
+	}
+}
+
+func TestCollectCategoryNarrativeSummaries_BasicGrouping(t *testing.T) {
+	db := setupCollectorTestDBWithCategories(t)
+
+	cat1 := models.Category{Name: "Tech", Slug: "tech", Icon: "💻"}
+	cat2 := models.Category{Name: "Science", Slug: "science", Icon: "🔬"}
+	db.Create(&cat1)
+	db.Create(&cat2)
+
+	date := time.Date(2026, 4, 16, 0, 0, 0, 0, time.UTC)
+	cat1ID := cat1.ID
+	cat2ID := cat2.ID
+
+	narratives := []models.NarrativeSummary{
+		{Title: "T1", Summary: "S1", Status: "emerging", Period: "daily", PeriodDate: date, ScopeType: models.NarrativeScopeTypeFeedCategory, ScopeCategoryID: &cat1ID, Source: "ai", RelatedTagIDs: "[]", RelatedArticleIDs: "[]"},
+		{Title: "T2", Summary: "S2", Status: "continuing", Period: "daily", PeriodDate: date, ScopeType: models.NarrativeScopeTypeFeedCategory, ScopeCategoryID: &cat1ID, Source: "ai", RelatedTagIDs: "[]", RelatedArticleIDs: "[]"},
+		{Title: "T3", Summary: "S3", Status: "emerging", Period: "daily", PeriodDate: date, ScopeType: models.NarrativeScopeTypeFeedCategory, ScopeCategoryID: &cat2ID, Source: "ai", RelatedTagIDs: "[]", RelatedArticleIDs: "[]"},
+		{Title: "T4", Summary: "S4", Status: "emerging", Period: "daily", PeriodDate: date, ScopeType: models.NarrativeScopeTypeFeedCategory, ScopeCategoryID: &cat2ID, Source: "ai", RelatedTagIDs: "[]", RelatedArticleIDs: "[]"},
+	}
+	for _, n := range narratives {
+		if err := db.Create(&n).Error; err != nil {
+			t.Fatalf("create narrative: %v", err)
+		}
+	}
+
+	result, err := CollectCategoryNarrativeSummaries(date)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("expected 2 category groups, got %d", len(result))
+	}
+
+	totalNarratives := 0
+	for _, ci := range result {
+		totalNarratives += len(ci.Narratives)
+	}
+	if totalNarratives != 4 {
+		t.Errorf("expected 4 total narratives, got %d", totalNarratives)
+	}
+}
+
+func TestCollectCategoryNarrativeSummaries_ExcludesEnding(t *testing.T) {
+	db := setupCollectorTestDBWithCategories(t)
+
+	cat := models.Category{Name: "Tech", Slug: "tech", Icon: "💻"}
+	db.Create(&cat)
+
+	date := time.Date(2026, 4, 16, 0, 0, 0, 0, time.UTC)
+	catID := cat.ID
+
+	narratives := []models.NarrativeSummary{
+		{Title: "Active", Summary: "S1", Status: "emerging", Period: "daily", PeriodDate: date, ScopeType: models.NarrativeScopeTypeFeedCategory, ScopeCategoryID: &catID, Source: "ai", RelatedTagIDs: "[]", RelatedArticleIDs: "[]"},
+		{Title: "Ending", Summary: "S2", Status: models.NarrativeStatusEnding, Period: "daily", PeriodDate: date, ScopeType: models.NarrativeScopeTypeFeedCategory, ScopeCategoryID: &catID, Source: "ai", RelatedTagIDs: "[]", RelatedArticleIDs: "[]"},
+	}
+	for _, n := range narratives {
+		if err := db.Create(&n).Error; err != nil {
+			t.Fatalf("create narrative: %v", err)
+		}
+	}
+
+	result, err := CollectCategoryNarrativeSummaries(date)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("expected 1 category group, got %d", len(result))
+	}
+	if len(result[0].Narratives) != 1 {
+		t.Fatalf("expected 1 narrative (ending excluded), got %d", len(result[0].Narratives))
+	}
+	if result[0].Narratives[0].Title != "Active" {
+		t.Errorf("expected 'Active', got %q", result[0].Narratives[0].Title)
+	}
+}
+
+func TestCollectCategoryNarrativeSummaries_CapsPerCategory(t *testing.T) {
+	db := setupCollectorTestDBWithCategories(t)
+
+	cat := models.Category{Name: "Tech", Slug: "tech", Icon: "💻"}
+	db.Create(&cat)
+
+	date := time.Date(2026, 4, 16, 0, 0, 0, 0, time.UTC)
+	catID := cat.ID
+
+	for i := 0; i < 7; i++ {
+		n := models.NarrativeSummary{
+			Title:             fmt.Sprintf("Narrative %d", i),
+			Summary:           fmt.Sprintf("Summary %d", i),
+			Status:            "emerging",
+			Period:            "daily",
+			PeriodDate:        date,
+			ScopeType:         models.NarrativeScopeTypeFeedCategory,
+			ScopeCategoryID:   &catID,
+			Source:            "ai",
+			RelatedTagIDs:     "[]",
+			RelatedArticleIDs: "[]",
+		}
+		if err := db.Create(&n).Error; err != nil {
+			t.Fatalf("create narrative %d: %v", i, err)
+		}
+	}
+
+	result, err := CollectCategoryNarrativeSummaries(date)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("expected 1 category group, got %d", len(result))
+	}
+	if len(result[0].Narratives) != 5 {
+		t.Fatalf("expected 5 narratives (capped), got %d", len(result[0].Narratives))
+	}
+}
+
+func TestCollectCategoryNarrativeSummaries_CapsTotal(t *testing.T) {
+	db := setupCollectorTestDBWithCategories(t)
+
+	var categories []models.Category
+	for i := 0; i < 7; i++ {
+		cat := models.Category{
+			Name: fmt.Sprintf("Cat%d", i),
+			Slug: fmt.Sprintf("cat%d", i),
+			Icon: "📁",
+		}
+		db.Create(&cat)
+		categories = append(categories, cat)
+	}
+
+	date := time.Date(2026, 4, 16, 0, 0, 0, 0, time.UTC)
+
+	for i, cat := range categories {
+		catID := cat.ID
+		for j := 0; j < 5; j++ {
+			articleIDs := "[1,2]"
+			n := models.NarrativeSummary{
+				Title:             fmt.Sprintf("N%d-%d", i, j),
+				Summary:           fmt.Sprintf("S%d-%d", i, j),
+				Status:            "emerging",
+				Period:            "daily",
+				PeriodDate:        date,
+				ScopeType:         models.NarrativeScopeTypeFeedCategory,
+				ScopeCategoryID:   &catID,
+				Source:            "ai",
+				RelatedTagIDs:     "[]",
+				RelatedArticleIDs: articleIDs,
+			}
+			if err := db.Create(&n).Error; err != nil {
+				t.Fatalf("create narrative: %v", err)
+			}
+		}
+	}
+
+	result, err := CollectCategoryNarrativeSummaries(date)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	total := 0
+	for _, ci := range result {
+		total += len(ci.Narratives)
+	}
+	if total > 30 {
+		t.Errorf("expected total narratives capped at 30, got %d", total)
+	}
+}
+
 func TestCollectPreviousNarratives_OnlyLooksAtYesterday(t *testing.T) {
 	db := setupCollectorTestDB(t)
 
