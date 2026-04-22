@@ -58,3 +58,66 @@ func TestCleanupMultiParentConflicts_Signature(t *testing.T) {
 func TestCleanupEmptyAbstractNodes_Signature(t *testing.T) {
 	_ = CleanupEmptyAbstractNodes
 }
+
+func TestQuoteCategories(t *testing.T) {
+	tests := []struct {
+		input    []string
+		expected string
+	}{
+		{[]string{"event"}, "'event'"},
+		{[]string{"event", "keyword"}, "'event', 'keyword'"},
+		{[]string{}, ""},
+	}
+	for _, tt := range tests {
+		got := quoteCategories(tt.input)
+		if got != tt.expected {
+			t.Errorf("quoteCategories(%v) = %q, want %q", tt.input, got, tt.expected)
+		}
+	}
+}
+
+func TestValidateFlatMerge_SameTag(t *testing.T) {
+	tagMap := map[uint]*FlatTagInfo{1: {ID: 1, Label: "a"}}
+	err := validateFlatMerge(flatMergeItem{SourceID: 1, TargetID: 1}, tagMap)
+	if err == nil {
+		t.Error("expected error for same tag")
+	}
+}
+
+func TestValidateFlatMerge_SourceNotFound(t *testing.T) {
+	tagMap := map[uint]*FlatTagInfo{1: {ID: 1, Label: "a"}}
+	err := validateFlatMerge(flatMergeItem{SourceID: 999, TargetID: 1}, tagMap)
+	if err == nil {
+		t.Error("expected error for missing source")
+	}
+}
+
+func TestValidateFlatMerge_SourceMoreChildren(t *testing.T) {
+	tagMap := map[uint]*FlatTagInfo{
+		1: {ID: 1, Label: "big", ChildCount: 10},
+		2: {ID: 2, Label: "small", ChildCount: 1},
+	}
+	err := validateFlatMerge(flatMergeItem{SourceID: 1, TargetID: 2}, tagMap)
+	if err == nil {
+		t.Error("expected error when source has more children than target")
+	}
+}
+
+func TestValidateFlatMerge_ValidMerge(t *testing.T) {
+	tagMap := map[uint]*FlatTagInfo{
+		1: {ID: 1, Label: "big", ChildCount: 10},
+		2: {ID: 2, Label: "small", ChildCount: 1},
+	}
+	err := validateFlatMerge(flatMergeItem{SourceID: 2, TargetID: 1}, tagMap)
+	if err != nil {
+		t.Errorf("expected no error, got: %v", err)
+	}
+}
+
+func TestBuildFlatMergePrompt_ContainsCategory(t *testing.T) {
+	tags := []FlatTagInfo{{ID: 1, Label: "test"}}
+	prompt := BuildFlatMergePrompt(tags, "event")
+	if len(prompt) == 0 {
+		t.Error("expected non-empty prompt")
+	}
+}
