@@ -104,7 +104,7 @@ func TestCollectTagInputs_WithRootAbstractTag(t *testing.T) {
 	}
 }
 
-func TestCollectTagInputs_ExcludesChildOfAbstract(t *testing.T) {
+func TestCollectTagInputs_IncludesEntireAbstractTree(t *testing.T) {
 	db := setupCollectorTestDB(t)
 
 	root := models.TopicTag{Label: "Tech", Slug: "tech", Category: "keyword", Status: "active", Source: "abstract"}
@@ -138,20 +138,34 @@ func TestCollectTagInputs_ExcludesChildOfAbstract(t *testing.T) {
 		t.Fatalf("CollectTagInputs returned error: %v", err)
 	}
 
-	for _, inp := range inputs {
-		if inp.ID == child.ID {
-			t.Errorf("child-of-abstract tag should not appear as root, got %+v", inp)
-		}
-	}
-
 	foundRoot := false
+	foundChild := false
+	foundGrandchild := false
 	for _, inp := range inputs {
 		if inp.ID == root.ID {
 			foundRoot = true
 		}
+		if inp.ID == child.ID {
+			foundChild = true
+			if inp.ParentLabel != "Tech" {
+				t.Errorf("expected child ParentLabel=Tech, got %q", inp.ParentLabel)
+			}
+		}
+		if inp.ID == grandchild.ID {
+			foundGrandchild = true
+			if inp.ParentLabel != "Cloud" {
+				t.Errorf("expected grandchild ParentLabel=Cloud, got %q", inp.ParentLabel)
+			}
+		}
 	}
 	if !foundRoot {
-		t.Fatalf("expected root abstract tag (Tech) in inputs, got %+v", inputs)
+		t.Errorf("expected root abstract tag (Tech) in inputs")
+	}
+	if !foundChild {
+		t.Errorf("expected child abstract tag (Cloud) in inputs")
+	}
+	if !foundGrandchild {
+		t.Errorf("expected grandchild tag (AWS) in inputs")
 	}
 }
 
@@ -190,6 +204,80 @@ func TestCollectTagInputs_UnclassifiedTags(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected unclassified tag (Go) in inputs, got %+v", inputs)
+	}
+}
+
+func TestCollectTagInputs_UnclassifiedOnlyWatchedAndTop10(t *testing.T) {
+	db := setupCollectorTestDB(t)
+
+	watched := models.TopicTag{Label: "Watched", Slug: "watched", Category: "keyword", Status: "active", Source: "llm", QualityScore: 0.2, IsWatched: true}
+	db.Create(&watched)
+
+	feed := models.Feed{Title: "Feed", URL: "https://example.com/f4"}
+	db.Create(&feed)
+
+	pubDate := time.Date(2026, 4, 16, 10, 0, 0, 0, time.UTC)
+
+	article := models.Article{FeedID: feed.ID, Title: "Article watched", Link: "https://example.com/watched", PubDate: &pubDate}
+	db.Create(&article)
+	db.Create(&models.ArticleTopicTag{ArticleID: article.ID, TopicTagID: watched.ID})
+
+	for i := 0; i < 11; i++ {
+		qs := 0.9 - float64(i)*0.05
+		if qs < 0.1 {
+			qs = 0.1
+		}
+		tag := models.TopicTag{
+			Label:        fmt.Sprintf("Tag%d", i),
+			Slug:         fmt.Sprintf("tag%d", i),
+			Category:     "keyword",
+			Status:       "active",
+			Source:       "llm",
+			QualityScore: qs,
+		}
+		db.Create(&tag)
+		a := models.Article{FeedID: feed.ID, Title: "Article " + tag.Label, Link: "https://example.com/" + tag.Slug, PubDate: &pubDate}
+		db.Create(&a)
+		db.Create(&models.ArticleTopicTag{ArticleID: a.ID, TopicTagID: tag.ID})
+	}
+
+	lowQ := models.TopicTag{Label: "LowQ", Slug: "lowq", Category: "keyword", Status: "active", Source: "llm", QualityScore: 0.05}
+	db.Create(&lowQ)
+	a := models.Article{FeedID: feed.ID, Title: "Article lowq", Link: "https://example.com/lowq", PubDate: &pubDate}
+	db.Create(&a)
+	db.Create(&models.ArticleTopicTag{ArticleID: a.ID, TopicTagID: lowQ.ID})
+
+	inputs, err := CollectTagInputs(pubDate)
+	if err != nil {
+		t.Fatalf("CollectTagInputs returned error: %v", err)
+	}
+
+	foundWatched := false
+	foundLowQ := false
+	nonWatchedCount := 0
+	for _, inp := range inputs {
+		if inp.ID == watched.ID {
+			foundWatched = true
+			if !inp.IsWatched {
+				t.Errorf("expected IsWatched=true for watched tag")
+			}
+		}
+		if inp.ID == lowQ.ID {
+			foundLowQ = true
+		}
+		if inp.Source == "llm" && !inp.IsAbstract && !inp.IsWatched {
+			nonWatchedCount++
+		}
+	}
+
+	if !foundWatched {
+		t.Errorf("expected watched tag in inputs even with low quality_score")
+	}
+	if nonWatchedCount > 10 {
+		t.Errorf("expected at most 10 non-watched unclassified tags, got %d", nonWatchedCount)
+	}
+	if foundLowQ {
+		t.Errorf("expected low quality non-watched tag to be excluded (ranked beyond top 10)")
 	}
 }
 

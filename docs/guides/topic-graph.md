@@ -818,7 +818,7 @@ TopicTag 模型新增 `metadata` JSONB 字段（类型 `MetadataMap = map[string
 
 ### 生成流程
 
-1. `CollectTagInputs` 采集当日活跃标签（根抽象标签 + 未分类活跃标签）
+1. `CollectTagInputs` 采集当日活跃标签（整棵抽象树的全部节点 + 关注的未分类标签 + top10 高质量未分类标签）
 2. `CollectPreviousNarratives` 采集前一天的叙事作为上下文
 3. `GenerateNarratives` 调用 LLM 生成新叙事（含状态判断和父子关系）
 4. `saveNarratives` 批量保存到数据库

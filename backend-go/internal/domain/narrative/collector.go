@@ -9,6 +9,8 @@ import (
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/platform/database"
 	"my-robot-backend/internal/platform/logging"
+
+	"gorm.io/gorm"
 )
 
 type TagInput struct {
@@ -19,6 +21,8 @@ type TagInput struct {
 	ArticleCount int    `json:"article_count"`
 	IsAbstract   bool   `json:"is_abstract"`
 	Source       string `json:"source"`
+	ParentLabel  string `json:"parent_label,omitempty"`
+	IsWatched    bool   `json:"is_watched,omitempty"`
 }
 
 type PreviousNarrative struct {
@@ -35,11 +39,11 @@ func CollectTagInputs(date time.Time) ([]TagInput, error) {
 
 	var inputs []TagInput
 
-	rootAbstractTags, err := collectRootAbstractTags(startOfDay, endOfDay)
+	abstractTreeTags, err := collectAbstractTreeTags(startOfDay, endOfDay)
 	if err != nil {
-		return nil, fmt.Errorf("collect root abstract tags: %w", err)
+		return nil, fmt.Errorf("collect abstract tree tags: %w", err)
 	}
-	inputs = append(inputs, rootAbstractTags...)
+	inputs = append(inputs, abstractTreeTags...)
 
 	unclassifiedTags, err := collectUnclassifiedTags(startOfDay, endOfDay)
 	if err != nil {
@@ -50,41 +54,49 @@ func CollectTagInputs(date time.Time) ([]TagInput, error) {
 	return inputs, nil
 }
 
-func collectRootAbstractTags(since, until time.Time) ([]TagInput, error) {
-	var parentIDs []uint
+func collectAbstractTreeTags(since, until time.Time) ([]TagInput, error) {
+	type relationRow struct {
+		ParentID uint
+		ChildID  uint
+	}
+	var relations []relationRow
 	database.DB.Model(&models.TopicTagRelation{}).
 		Where("relation_type = ?", "abstract").
-		Distinct("parent_id").
-		Pluck("parent_id", &parentIDs)
+		Select("parent_id, child_id").
+		Scan(&relations)
 
-	if len(parentIDs) == 0 {
+	if len(relations) == 0 {
 		return nil, nil
 	}
 
-	var childIDs []uint
-	database.DB.Model(&models.TopicTagRelation{}).
-		Where("relation_type = ? AND parent_id IN ?", "abstract", parentIDs).
-		Distinct("child_id").
-		Pluck("child_id", &childIDs)
-
-	childSet := make(map[uint]bool, len(childIDs))
-	for _, id := range childIDs {
-		childSet[id] = true
+	tagIDSet := make(map[uint]bool)
+	parentOf := make(map[uint]uint)
+	for _, r := range relations {
+		tagIDSet[r.ParentID] = true
+		tagIDSet[r.ChildID] = true
+		parentOf[r.ChildID] = r.ParentID
 	}
 
-	var rootIDs []uint
-	for _, id := range parentIDs {
-		if !childSet[id] {
-			rootIDs = append(rootIDs, id)
-		}
-	}
-
-	if len(rootIDs) == 0 {
-		return nil, nil
+	allIDs := make([]uint, 0, len(tagIDSet))
+	for id := range tagIDSet {
+		allIDs = append(allIDs, id)
 	}
 
 	var tags []models.TopicTag
-	database.DB.Where("id IN ? AND status = ?", rootIDs, "active").Find(&tags)
+	database.DB.Where("id IN ? AND status = ?", allIDs, "active").Find(&tags)
+	if len(tags) == 0 {
+		return nil, nil
+	}
+
+	tagMap := make(map[uint]models.TopicTag, len(tags))
+	for _, t := range tags {
+		tagMap[t.ID] = t
+	}
+
+	tagIDs := make([]uint, len(tags))
+	for i, t := range tags {
+		tagIDs[i] = t.ID
+	}
 
 	type countRow struct {
 		TopicTagID uint `json:"topic_tag_id"`
@@ -94,7 +106,7 @@ func collectRootAbstractTags(since, until time.Time) ([]TagInput, error) {
 	database.DB.Model(&models.ArticleTopicTag{}).
 		Select("article_topic_tags.topic_tag_id, COUNT(DISTINCT article_topic_tags.article_id) as cnt").
 		Joins("JOIN articles ON articles.id = article_topic_tags.article_id").
-		Where("article_topic_tags.topic_tag_id IN ? AND articles.pub_date >= ? AND articles.pub_date < ?", rootIDs, since, until).
+		Where("article_topic_tags.topic_tag_id IN ? AND articles.pub_date >= ? AND articles.pub_date < ?", tagIDs, since, until).
 		Group("article_topic_tags.topic_tag_id").
 		Scan(&counts)
 
@@ -105,14 +117,22 @@ func collectRootAbstractTags(since, until time.Time) ([]TagInput, error) {
 
 	var inputs []TagInput
 	for _, tag := range tags {
+		parentLabel := ""
+		if pid, ok := parentOf[tag.ID]; ok {
+			if p, found := tagMap[pid]; found {
+				parentLabel = p.Label
+			}
+		}
+
 		inputs = append(inputs, TagInput{
 			ID:           tag.ID,
 			Label:        tag.Label,
 			Category:     tag.Category,
 			Description:  tag.Description,
 			ArticleCount: countMap[tag.ID],
-			IsAbstract:   true,
-			Source:       "abstract",
+			IsAbstract:   tag.Source == "abstract",
+			Source:       tag.Source,
+			ParentLabel:  parentLabel,
 		})
 	}
 	return inputs, nil
@@ -133,28 +153,37 @@ func collectUnclassifiedTags(since, until time.Time) ([]TagInput, error) {
 		relatedSet[id] = true
 	}
 
-	query := database.DB.Model(&models.TopicTag{}).
-		Where("status = ? AND source != ?", "active", "abstract")
+	activeSubquery := database.DB.Model(&models.ArticleTopicTag{}).
+		Select("DISTINCT article_topic_tags.topic_tag_id").
+		Joins("JOIN articles ON articles.id = article_topic_tags.article_id").
+		Where("articles.pub_date >= ? AND articles.pub_date < ?", since, until)
+
+	baseQuery := database.DB.Model(&models.TopicTag{}).
+		Where("status = ? AND source != ?", "active", "abstract").
+		Where("id IN (?)", activeSubquery)
 
 	if len(relatedSet) > 0 {
 		excl := make([]uint, 0, len(relatedSet))
 		for id := range relatedSet {
 			excl = append(excl, id)
 		}
-		query = query.Where("id NOT IN ?", excl)
+		baseQuery = baseQuery.Where("id NOT IN ?", excl)
 	}
 
-	activeSubquery := database.DB.Model(&models.ArticleTopicTag{}).
-		Select("DISTINCT article_topic_tags.topic_tag_id").
-		Joins("JOIN articles ON articles.id = article_topic_tags.article_id").
-		Where("articles.pub_date >= ? AND articles.pub_date < ?", since, until)
-	query = query.Where("id IN (?)", activeSubquery)
+	var watchedTags []models.TopicTag
+	watchedQ := baseQuery.Session(&gorm.Session{}).
+		Where("is_watched = ?", true).
+		Order("quality_score DESC, feed_count DESC")
+	watchedQ.Find(&watchedTags)
 
-	var tags []models.TopicTag
-	if err := query.Order("quality_score DESC, feed_count DESC").Limit(100).Find(&tags).Error; err != nil {
-		return nil, err
-	}
+	var topTags []models.TopicTag
+	topQ := baseQuery.Session(&gorm.Session{}).
+		Where("is_watched = ?", false).
+		Order("quality_score DESC, feed_count DESC").
+		Limit(10)
+	topQ.Find(&topTags)
 
+	tags := append(watchedTags, topTags...)
 	if len(tags) == 0 {
 		return nil, nil
 	}
@@ -191,6 +220,7 @@ func collectUnclassifiedTags(since, until time.Time) ([]TagInput, error) {
 			ArticleCount: countMap[tag.ID],
 			IsAbstract:   false,
 			Source:       tag.Source,
+			IsWatched:    tag.IsWatched,
 		})
 	}
 	return inputs, nil

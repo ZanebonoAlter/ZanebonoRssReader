@@ -114,6 +114,12 @@ func buildNarrativePrompt(tags []TagInput, prev []PreviousNarrative) string {
 		if t.IsAbstract {
 			sb.WriteString(", 抽象标签")
 		}
+		if t.ParentLabel != "" {
+			sb.WriteString(fmt.Sprintf(", 归属:%s", t.ParentLabel))
+		}
+		if t.IsWatched {
+			sb.WriteString(", 关注")
+		}
 		if t.Description != "" {
 			sb.WriteString(fmt.Sprintf(", 描述:%s", t.Description))
 		}
