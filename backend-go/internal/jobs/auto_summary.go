@@ -643,9 +643,9 @@ func (s *AutoSummaryScheduler) callAI(prompt string, metadata map[string]any) (s
 			} `json:"message"`
 		} `json:"choices"`
 		Error *struct {
-			Message string `json:"message"`
-			Type    string `json:"type"`
-			Code    string `json:"code"`
+			Message string      `json:"message"`
+			Type    string      `json:"type"`
+			Code    interface{} `json:"code"`
 		} `json:"error,omitempty"`
 	}
 
@@ -692,7 +692,7 @@ func (s *AutoSummaryScheduler) callAI(prompt string, metadata map[string]any) (s
 
 	if openAIResp.Error != nil {
 		return "", fmt.Errorf(
-			"AI API error: %s (type: %s, code: %s)",
+			"AI API error: %s (type: %s, code: %v)",
 			openAIResp.Error.Message,
 			openAIResp.Error.Type,
 			openAIResp.Error.Code,

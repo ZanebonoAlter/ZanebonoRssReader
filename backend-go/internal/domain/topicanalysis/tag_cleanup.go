@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/platform/airouter"
@@ -20,10 +21,7 @@ type ZombieTagCriteria struct {
 }
 
 func CleanupZombieTags(criteria ZombieTagCriteria) (int, error) {
-	subQuery := BuildZombieTagSubQuery(criteria)
-
-	result := database.DB.Model(&models.TopicTag{}).
-		Where("id IN (?)", gorm.Expr(subQuery))
+	result := buildZombieTagQuery(database.DB.Model(&models.TopicTag{}), criteria)
 
 	var count int64
 	if err := result.Count(&count).Error; err != nil {
@@ -42,6 +40,22 @@ func CleanupZombieTags(criteria ZombieTagCriteria) (int, error) {
 
 	logging.Infof("CleanupZombieTags: deactivated %d zombie tags", count)
 	return int(count), nil
+}
+
+func buildZombieTagQuery(db *gorm.DB, criteria ZombieTagCriteria) *gorm.DB {
+	query := db.Where("status = ?", "active")
+	if len(criteria.Categories) > 0 {
+		query = query.Where("category IN ?", criteria.Categories)
+	}
+	if criteria.MinAgeDays > 0 {
+		cutoff := time.Now().AddDate(0, 0, -criteria.MinAgeDays)
+		query = query.Where("created_at < ?", cutoff)
+	}
+
+	return query.
+		Where("NOT EXISTS (SELECT 1 FROM topic_tag_relations r WHERE (r.parent_id = topic_tags.id OR r.child_id = topic_tags.id) AND r.relation_type = ?)", "abstract").
+		Where("NOT EXISTS (SELECT 1 FROM article_topic_tags att WHERE att.topic_tag_id = topic_tags.id)").
+		Where("NOT EXISTS (SELECT 1 FROM ai_summary_topics ast WHERE ast.topic_tag_id = topic_tags.id)")
 }
 
 func BuildZombieTagSubQuery(criteria ZombieTagCriteria) string {
@@ -132,7 +146,7 @@ func CollectFlatTagBatch(category string, batchSize int) ([]FlatTagInfo, error) 
 			ID:           t.ID,
 			Label:        t.Label,
 			Description:  truncateStr(t.Description, 200),
-			Source:        t.Source,
+			Source:       t.Source,
 			ArticleCount: articleCounts[t.ID],
 			ChildCount:   childCounts[t.ID],
 		}
@@ -310,39 +324,41 @@ func CleanupMultiParentConflicts() (int, []string, error) {
 	}
 
 	totalResolved := 0
+	var errors []string
 	for _, c := range conflicts {
-		resolveMultiParentConflict(c.ChildID)
-		totalResolved++
+		resolved, err := resolveMultiParentConflict(c.ChildID)
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("child %d: %v", c.ChildID, err))
+			continue
+		}
+		if resolved {
+			totalResolved++
+		}
 	}
 
 	logging.Infof("CleanupMultiParentConflicts: resolved %d conflicts", totalResolved)
-	return totalResolved, nil, nil
+	return totalResolved, errors, nil
 }
 
 func CleanupEmptyAbstractNodes() (int, error) {
-	subQuery := `
-		SELECT t.id FROM topic_tags t
-		WHERE t.source = 'abstract' AND t.status = 'active'
-		  AND NOT EXISTS (
-		    SELECT 1 FROM topic_tag_relations r
-		    WHERE r.parent_id = t.id AND r.relation_type = 'abstract'
-		  )`
+	query := database.DB.Model(&models.TopicTag{}).
+		Where("source = ? AND status = ?", "abstract", "active").
+		Where("NOT EXISTS (SELECT 1 FROM topic_tag_relations r WHERE r.parent_id = topic_tags.id AND r.relation_type = ?)", "abstract")
 
-	result := database.DB.Model(&models.TopicTag{}).
-		Where("id IN (%s)", subQuery)
-
-	var count int64
-	result.Count(&count)
-	if count == 0 {
+	var ids []uint
+	if err := query.Pluck("topic_tags.id", &ids).Error; err != nil {
+		return 0, fmt.Errorf("load empty abstract ids: %w", err)
+	}
+	if len(ids) == 0 {
 		return 0, nil
 	}
 
-	if err := result.Updates(map[string]interface{}{
+	if err := database.DB.Model(&models.TopicTag{}).Where("id IN ?", ids).Updates(map[string]interface{}{
 		"status": "inactive",
 	}).Error; err != nil {
 		return 0, fmt.Errorf("cleanup empty abstracts: %w", err)
 	}
 
-	logging.Infof("CleanupEmptyAbstractNodes: deactivated %d empty abstract tags", count)
-	return int(count), nil
+	logging.Infof("CleanupEmptyAbstractNodes: deactivated %d empty abstract tags", len(ids))
+	return len(ids), nil
 }

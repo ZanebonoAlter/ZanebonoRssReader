@@ -397,7 +397,7 @@ IsLowQuality = (Source != "abstract") && (QualityScore < 0.3)
 | `backend-go/internal/domain/topicextraction/quality_score.go` | 质量分数计算核心逻辑 |
 | `backend-go/internal/jobs/tag_quality_score.go` | 定时任务调度，默认每小时运行一次 |
 | `backend-go/internal/domain/topicgraph/service.go` | 在 API 响应中标记 `is_low_quality` |
-| `backend-go/internal/domain/topicanalysis/abstract_tag_service.go` | 层级 API 响应中标记 `is_low_quality` |
+| `backend-go/internal/domain/topicanalysis/abstract_tag_crud.go` | 层级 API 响应中标记 `is_low_quality`（`GetTagHierarchy`） |
 | `front/app/features/topic-graph/components/TopicGraphPage.vue` | 拓扑图默认隐藏、热点列表排序 |
 | `front/app/features/topic-graph/components/TagHierarchyRow.vue` | 标签层级行中的"低质量"徽章 |
 
@@ -407,7 +407,7 @@ IsLowQuality = (Source != "abstract") && (QualityScore < 0.3)
 
 新标签从文章/摘要中提取后，经过 `findOrCreateTag` 的统一匹配流程决定是复用、归入抽象、还是新建。匹配结果分为三种：`exact`（完全匹配）、`candidates`（有相似候选）、`no_match`（无匹配）。当存在候选时，系统分批将候选送 LLM 进行 per-candidate 判断，由 LLM 决定每个候选的 merge/abstract/none 动作。前批判断结果作为后续批次的上下文，保持一致性。抽象标签建立后还会触发层级匹配，形成多级分类树。
 
-核心代码：`backend-go/internal/domain/topicextraction/tagger.go`、`backend-go/internal/domain/topicanalysis/abstract_tag_service.go`、`backend-go/internal/domain/topicanalysis/embedding.go`
+核心代码：`backend-go/internal/domain/topicextraction/tagger.go`、`backend-go/internal/domain/topicanalysis/abstract_tag_service.go`（主流程）、`backend-go/internal/domain/topicanalysis/abstract_tag_judgment.go`（LLM 判断）、`backend-go/internal/domain/topicanalysis/abstract_tag_hierarchy.go`（层级匹配）、`backend-go/internal/domain/topicanalysis/embedding.go`
 
 ### 统一匹配流程
 
@@ -433,6 +433,39 @@ IsLowQuality = (Source != "abstract") && (QualityScore < 0.3)
 |------|--------|------|
 | `LowSimilarity` | 0.78 | 候选搜索下限 |
 
+### Event 标签的 Co-tag 扩展
+
+事件标签在 `candidates` 分支里，除了 embedding 检索，还会额外走一层 co-tag 扩展，再把两路候选并集后统一送进 LLM 判断。
+
+#### 普通 event 标签
+
+来自文章打标签链路的 event 标签，会用当前文章上已经存在的高分 keyword/tag 作为 co-tag 起点：
+
+```mermaid
+flowchart TD
+    A[新 event 标签] --> B[TagMatch / FindSimilarTags]
+    B --> C[得到 embedding candidates]
+    A --> D[读取当前 article 的 top keyword/tag]
+    D --> E[按 keyword 反查相关文章]
+    E --> F[提取关联 event 标签]
+    F --> G[生成 co-tag candidates]
+    C --> H[MergeCandidateLists 并集去重]
+    G --> H
+    H --> I[ExtractAbstractTag / LLM 判断]
+```
+
+#### 抽象 event 标签
+
+当 LLM 选择 `abstract` 并创建新的抽象 event 标签后，系统会对这个新抽象再补一次 co-tag 扩展。这里不再依赖单篇文章，而是聚合整棵子树的 keyword 覆盖：
+
+1. 收集抽象标签所有后代 event 子标签
+2. 统计这些子标签覆盖文章中的 keyword 共现情况
+3. 按子标签覆盖数排序，取 `topN = min(5 + (subtreeDepth - 1) * 2, 15)`
+4. 用这些 keyword 反查关联文章，再提取 event 标签候选
+5. 与已有 candidates 并集后，再次走 `ExtractAbstractTag`
+
+这样做的目的是让新抽象标签在刚创建时，就能拿到“同一事件簇里经常一起出现的 event 候选”，减少只靠初始 embedding 命中的漏召回。
+
 ### Per-candidate 批量判断
 
 当有候选标签（相似度 >= 0.78）时，`callLLMForTagJudgment` 分批将候选送 LLM 判断：
@@ -456,6 +489,56 @@ IsLowQuality = (Source != "abstract") && (QualityScore < 0.3)
 | < 0.78 | 无操作 |
 
 这一步使得抽象标签可以形成树状层级，例如"编程语言 → 前端框架 → React"。
+
+### 跨层级去重与深度保护（C+D）
+
+现在 `MatchAbstractTagHierarchy` 和 `linkAbstractParentChild` 之间多了一层 C+D 保护，用来解决两类问题：
+
+- 同一棵树不同层级出现重复概念
+- 抽象层级无限向下长深
+
+#### C: Cross-layer Dedup
+
+目标仍然是“全树去重”，但实现上不假设树里每个普通节点都有 embedding。当前采用的是“先找锚点，再回查 event”的两段式：
+
+1. 先用新抽象标签自身的 embedding 跑 `FindSimilarTags`，拿到一批高置信 anchor
+2. 从这些 anchor 关联的文章里提取 keyword
+3. 复用 co-tag 管线反查 event 标签
+4. 只保留当前同一棵树里的候选节点
+5. 对 shortlist 调用 `judgeCrossLayerDuplicate`
+6. 只有 AI 明确判断“两个标签是同一概念”时，才执行 `MergeTags`
+
+也就是说，shortlist 分高不等于直接合并；最终合并一定要经过显式 duplicate 判断。
+
+#### D: Depth Guard
+
+插入新的抽象父子关系前，`linkAbstractParentChild` 会先检查组合深度：
+
+```text
+子标签子树深度 + 父标签祖先深度 + 1
+```
+
+- 结果 `<= 4`：允许插入
+- 结果 `> 4`：拒绝插入
+
+当超过 4 层时，系统会调用 `aiJudgeAlternativePlacement` 给出替代建议，例如：
+
+- 放到更浅层的已有抽象下
+- 与某个同义/近义抽象合并
+- 放弃这次纵向插入
+
+但 `linkAbstractParentChild` 本身仍然是硬保护，不会在事务里偷偷改写成别的关系。
+
+#### 周期清理里的复用
+
+定时任务 `tag_hierarchy_cleanup` 现在新增了 Phase 4，专门处理 event 树的深层重复和过深层级：
+
+1. BuildTagForest 构建当前 event forest
+2. 只处理深度较深的树
+3. 复用同一套 cross-layer dedup / depth guard helper
+4. 把结果单独记到 `cd_merges_applied`
+
+这样，实时创建链路和周期清理链路不会各自维护两套不同的去重规则。
 
 ### 抽象标签子标签数量保护
 
@@ -514,7 +597,11 @@ Embedding 的保留/删除直接决定标签能否被未来的相似标签匹配
 |------|------|
 | `backend-go/internal/domain/topicextraction/tagger.go` | `findOrCreateTag` 统一匹配主流程，exact/candidates/no_match 三分支 |
 | `backend-go/internal/domain/topicanalysis/embedding.go` | `TagMatch`、`FindSimilarTags`、`FindSimilarAbstractTags`、`DeleteTagEmbedding` |
-| `backend-go/internal/domain/topicanalysis/abstract_tag_service.go` | `ExtractAbstractTag`、`MatchAbstractTagHierarchy`、`linkAbstractParentChild`、`enqueueEmbeddingsForNormalChildren` |
+| `backend-go/internal/domain/topicanalysis/abstract_tag_service.go` | `ExtractAbstractTag` 主流程 + 类型定义 |
+| `backend-go/internal/domain/topicanalysis/abstract_tag_judgment.go` | LLM 判断（prompt 构建、AI 调用、响应解析） |
+| `backend-go/internal/domain/topicanalysis/abstract_tag_hierarchy.go` | `MatchAbstractTagHierarchy`、`linkAbstractParentChild`、`enqueueEmbeddingsForNormalChildren` |
+| `backend-go/internal/domain/topicanalysis/abstract_tag_tree.go` | 树遍历、C+D 跨层去重、深度工具 |
+| `backend-go/internal/domain/topicanalysis/abstract_tag_crud.go` | CRUD 操作、层级 API、`GetTagHierarchy` |
 
 ### 抽象标签的 label、description 和 embedding 刷新
 
@@ -580,6 +667,28 @@ LLM 重新生成抽象标签 label 和 description
 标记任务 completed
 ```
 
+#### 队列状态图
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending
+    pending --> processing: worker 取到任务
+    processing --> completed: 刷新成功
+    processing --> failed: 刷新失败
+    failed --> pending: retry 接口或下次重试
+    completed --> [*]
+```
+
+#### Mermaid 图例 / 读图说明
+
+- `[*]`：起点或终点。左边的 `[*] --> pending` 表示任务入队后的初始状态；`completed --> [*]` 表示流程结束。
+- `pending`：任务已落库，等待 worker 消费。
+- `processing`：worker 已经取到任务，正在生成新的 label / description / embedding。
+- `completed`：本次刷新成功，任务生命周期结束。
+- `failed`：本次刷新失败，保留错误信息，等待后续重试。
+- 箭头上的文字是“触发条件”或“迁移动作”，比如 `worker 取到任务`、`retry 接口或下次重试`。
+- 如果以后补更复杂的状态图，也优先沿用这个读法：节点表示状态，箭头表示状态迁移，箭头标签表示触发迁移的事件。
+
 #### Label 更新的保护机制
 
 label 更新带有以下保护：
@@ -634,7 +743,8 @@ CREATE TABLE abstract_tag_update_queues (
 | `backend-go/internal/domain/models/abstract_tag_update_queue.go` | 队列表模型定义 |
 | `backend-go/internal/domain/topicanalysis/abstract_tag_update_queue.go` | 队列服务、worker、`refreshAbstractTag`、`regenerateAbstractLabelAndDescription` |
 | `backend-go/internal/domain/topicanalysis/abstract_tag_update_queue_handler.go` | REST API handler、全局单例、`Start/Stop` |
-| `backend-go/internal/domain/topicanalysis/abstract_tag_service.go` | `MatchAbstractTagHierarchy`、`linkAbstractParentChild`、`ExtractAbstractTag` |
+| `backend-go/internal/domain/topicanalysis/abstract_tag_service.go` | `ExtractAbstractTag` 主流程 |
+| `backend-go/internal/domain/topicanalysis/abstract_tag_hierarchy.go` | `MatchAbstractTagHierarchy`、`linkAbstractParentChild` |
 | `backend-go/internal/app/runtime.go` | worker 生命周期管理 |
 | `backend-go/internal/platform/database/postgres_migrations.go` | `20260416_0001` 建表迁移 |
 

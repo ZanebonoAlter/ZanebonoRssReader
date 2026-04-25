@@ -170,6 +170,18 @@ func (s *EmbeddingQueueService) Start() {
 	}
 	s.mu.Unlock()
 
+	result := s.db.Model(&models.EmbeddingQueue{}).
+		Where("status = ?", models.EmbeddingQueueStatusProcessing).
+		Updates(map[string]interface{}{
+			"status":     models.EmbeddingQueueStatusPending,
+			"started_at": nil,
+		})
+	if result.Error != nil {
+		s.logger.Error("failed to reset stale processing embedding tasks", zap.Error(result.Error))
+	} else if result.RowsAffected > 0 {
+		s.logger.Info("reset stale processing embedding tasks", zap.Int64("count", result.RowsAffected))
+	}
+
 	go s.worker()
 	s.logger.Info("embedding queue worker started")
 }

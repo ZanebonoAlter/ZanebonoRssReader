@@ -126,6 +126,7 @@ export interface AIProvider {
   timeout_seconds: number
   max_tokens?: number | null
   temperature?: number | null
+  enable_thinking: boolean
   metadata?: string
   api_key_configured: boolean
 }
@@ -159,6 +160,7 @@ export interface AIProviderUpsertRequest {
   timeout_seconds?: number
   max_tokens?: number | null
   temperature?: number | null
+  enable_thinking?: boolean
   metadata?: string
 }
 

@@ -28,16 +28,19 @@ type TagHierarchyCleanupScheduler struct {
 
 // TagHierarchyCleanupRunSummary records the results of a cleanup run
 type TagHierarchyCleanupRunSummary struct {
-	TriggerSource    string `json:"trigger_source"`
-	StartedAt        string `json:"started_at"`
-	FinishedAt       string `json:"finished_at"`
-	TreesProcessed   int    `json:"trees_processed"`
-	TagsProcessed    int    `json:"tags_processed"`
-	MergesApplied    int    `json:"merges_applied"`
-	FlatMergesApplied int   `json:"flat_merges_applied"`
-	AbstractsCreated int    `json:"abstracts_created"`
-	Errors           int    `json:"errors"`
-	Reason           string `json:"reason"`
+	TriggerSource     string `json:"trigger_source"`
+	StartedAt         string `json:"started_at"`
+	FinishedAt        string `json:"finished_at"`
+	ZombieDeactivated int    `json:"zombie_deactivated"`
+	FlatMergesApplied int    `json:"flat_merges_applied"`
+	OrphanedRelations int    `json:"orphaned_relations"`
+	MultiParentFixed  int    `json:"multi_parent_fixed"`
+	EmptyAbstracts    int    `json:"empty_abstracts"`
+	Phase4Trees       int    `json:"phase4_trees"`
+	Phase4Merges      int    `json:"phase4_merges"`
+	Phase4Reparents   int    `json:"phase4_reparents"`
+	Errors            int    `json:"errors"`
+	Reason            string `json:"reason"`
 }
 
 // NewTagHierarchyCleanupScheduler creates a new scheduler
@@ -221,7 +224,7 @@ func (s *TagHierarchyCleanupScheduler) runCleanupCycle(triggerSource string) {
 	}
 	s.updateSchedulerStatus("running", "", nil, nil)
 
-	logging.Infoln("Starting tag cleanup cycle (3-phase)")
+	logging.Infoln("Starting tag cleanup cycle (4-phase)")
 
 	// Phase 1: Zombie tag cleanup (no LLM)
 	zombieCount, err := topicanalysis.CleanupZombieTags(topicanalysis.ZombieTagCriteria{
@@ -232,6 +235,7 @@ func (s *TagHierarchyCleanupScheduler) runCleanupCycle(triggerSource string) {
 		logging.Errorf("Phase 1 zombie cleanup failed: %v", err)
 		summary.Errors++
 	} else {
+		summary.ZombieDeactivated = zombieCount
 		logging.Infof("Phase 1: deactivated %d zombie tags", zombieCount)
 	}
 
@@ -257,12 +261,18 @@ func (s *TagHierarchyCleanupScheduler) runCleanupCycle(triggerSource string) {
 		logging.Errorf("Phase 3 orphaned relations cleanup failed: %v", err)
 		summary.Errors++
 	}
+	summary.OrphanedRelations = orphaned
 	logging.Infof("Phase 3: removed %d orphaned relations", orphaned)
 
-	resolved, _, err := topicanalysis.CleanupMultiParentConflicts()
+	resolved, resolveErrors, err := topicanalysis.CleanupMultiParentConflicts()
 	if err != nil {
 		logging.Errorf("Phase 3 multi-parent cleanup failed: %v", err)
 		summary.Errors++
+	}
+	summary.MultiParentFixed = resolved
+	summary.Errors += len(resolveErrors)
+	for _, errMsg := range resolveErrors {
+		logging.Warnf("Phase 3 multi-parent: %s", errMsg)
 	}
 	logging.Infof("Phase 3: resolved %d multi-parent conflicts", resolved)
 
@@ -271,43 +281,30 @@ func (s *TagHierarchyCleanupScheduler) runCleanupCycle(triggerSource string) {
 		logging.Errorf("Phase 3 empty abstract cleanup failed: %v", err)
 		summary.Errors++
 	}
+	summary.EmptyAbstracts = emptied
 	logging.Infof("Phase 3: deactivated %d empty abstract tags", emptied)
 
-	// Phase 3b: Tree-based cleanup with lowered threshold (original logic)
-	categories := []string{"event", "keyword"}
-	for _, category := range categories {
-		forest, err := topicanalysis.BuildTagForest(category)
-		if err != nil {
-			logging.Errorf("BuildTagForest failed for %s: %v", category, err)
+	// Phase 4: Cross-layer dedup + depth compression
+	for _, category := range []string{"event", "keyword"} {
+		phase4Result, phase4Err := topicanalysis.ExecuteHierarchyCleanupPhase4(category)
+		if phase4Err != nil {
+			logging.Errorf("Phase 4 cleanup failed for %s: %v", category, phase4Err)
 			summary.Errors++
 			continue
 		}
-		if len(forest) == 0 {
-			continue
+		summary.Phase4Trees += phase4Result.TreesProcessed
+		summary.Phase4Merges += phase4Result.MergesApplied
+		summary.Phase4Reparents += phase4Result.ReparentsApplied
+		summary.Errors += len(phase4Result.Errors)
+		for _, errMsg := range phase4Result.Errors {
+			logging.Warnf("Phase 4 %s: %s", category, errMsg)
 		}
-		logging.Infof("Phase 3b: found %d trees for %s", len(forest), category)
-		for _, tree := range forest {
-			result, err := topicanalysis.ProcessTree(tree)
-			if err != nil {
-				logging.Errorf("ProcessTree failed for %s: %v", tree.Tag.Label, err)
-				summary.Errors++
-				continue
-			}
-			summary.TreesProcessed++
-			summary.TagsProcessed += result.TagsProcessed
-			summary.MergesApplied += result.MergesApplied
-			summary.AbstractsCreated += result.AbstractsCreated
-			summary.Errors += len(result.Errors)
-			for _, errMsg := range result.Errors {
-				logging.Warnf("Tree %s: %s", result.TreeRootLabel, errMsg)
-			}
-		}
+		logging.Infof("Phase 4 (%s): processed %d trees, %d merges, %d reparentings", category, phase4Result.TreesProcessed, phase4Result.MergesApplied, phase4Result.ReparentsApplied)
 	}
 
 	summary.FinishedAt = time.Now().Format(time.RFC3339)
-	summary.Reason = fmt.Sprintf("zombie=%d, flat_merges=%d, orphaned_rels=%d, multi_parent=%d, empty_abstracts=%d, trees=%d, tree_merges=%d, tree_abstracts=%d",
-		zombieCount, summary.FlatMergesApplied, orphaned, resolved, emptied,
-		summary.TreesProcessed, summary.MergesApplied, summary.AbstractsCreated)
+	summary.Reason = fmt.Sprintf("zombie=%d, flat_merges=%d, orphaned_rels=%d, multi_parent=%d, empty_abstracts=%d, phase4_trees=%d, phase4_merges=%d, phase4_reparents=%d",
+		summary.ZombieDeactivated, summary.FlatMergesApplied, summary.OrphanedRelations, summary.MultiParentFixed, summary.EmptyAbstracts, summary.Phase4Trees, summary.Phase4Merges, summary.Phase4Reparents)
 
 	logging.Infof("Tag cleanup cycle completed: %s", summary.Reason)
 

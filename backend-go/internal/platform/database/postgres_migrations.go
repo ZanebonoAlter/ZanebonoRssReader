@@ -343,5 +343,15 @@ func postgresMigrations() []Migration {
 				return nil
 			},
 		},
+		{
+			Version:     "20260425_0001",
+			Description: "Add enable_thinking column to ai_providers for reasoning model support.",
+			Up: func(db *gorm.DB) error {
+				if err := db.Exec(`ALTER TABLE ai_providers ADD COLUMN IF NOT EXISTS enable_thinking BOOLEAN NOT NULL DEFAULT false`).Error; err != nil {
+					return fmt.Errorf("add enable_thinking to ai_providers: %w", err)
+				}
+				return nil
+			},
+		},
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 
 	"my-robot-backend/internal/domain/models"
@@ -98,9 +99,11 @@ func TagSummary(summary *models.AISummary, feedName, categoryName string) error 
 		}
 	}
 
+	articleID := primaryArticleIDForSummary(summary)
+
 	// Process each tag
 	for _, tag := range dedupeTagsWithCategory(tags) {
-		dbTag, err := findOrCreateTag(context.Background(), tag, source, articleContext)
+		dbTag, err := findOrCreateTag(context.Background(), tag, source, articleContext, articleID)
 		if err != nil {
 			logging.Warnf("findOrCreateTag failed for tag %q (category=%s, slug=%s, source=%s, summary=%d): %v", tag.Label, tag.Category, topictypes.Slugify(tag.Label), source, summary.ID, err)
 			continue
@@ -130,6 +133,41 @@ func TagSummary(summary *models.AISummary, feedName, categoryName string) error 
 	return nil
 }
 
+func primaryArticleIDForSummary(summary *models.AISummary) uint {
+	if summary == nil || strings.TrimSpace(summary.Articles) == "" {
+		return 0
+	}
+
+	var uintIDs []uint
+	if err := json.Unmarshal([]byte(summary.Articles), &uintIDs); err == nil {
+		for _, id := range uintIDs {
+			if id > 0 {
+				return id
+			}
+		}
+	}
+
+	var intIDs []int
+	if err := json.Unmarshal([]byte(summary.Articles), &intIDs); err == nil {
+		for _, id := range intIDs {
+			if id > 0 {
+				return uint(id)
+			}
+		}
+	}
+
+	var floatIDs []float64
+	if err := json.Unmarshal([]byte(summary.Articles), &floatIDs); err == nil {
+		for _, id := range floatIDs {
+			if id > 0 {
+				return uint(id)
+			}
+		}
+	}
+
+	return 0
+}
+
 // legacyExtractTopics is the old heuristic-based extraction (for fallback)
 func legacyExtractTopics(input topictypes.ExtractionInput) []topictypes.TopicTag {
 	// Use the existing extractor.go logic
@@ -150,7 +188,7 @@ func legacyExtractTopics(input topictypes.ExtractionInput) []topictypes.TopicTag
 
 // findOrCreateTag finds an existing tag or creates a new one
 // Uses three-level matching: exact/alias → embedding similarity → create new
-func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string, articleContext string) (*models.TopicTag, error) {
+func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string, articleContext string, articleID uint) (*models.TopicTag, error) {
 	slug := topictypes.Slugify(tag.Label)
 	category := NormalizeDisplayCategory(tag.Kind, tag.Category)
 	kind := NormalizeTopicKind(tag.Kind, category)
@@ -177,6 +215,10 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 					logging.Infof("findOrCreateTag: label=%q category=%s matchType=exact existingID=%d existingLabel=%q", tag.Label, category, matchResult.ExistingTag.ID, matchResult.ExistingTag.Label)
 					existing := matchResult.ExistingTag
 					existing.Label = tag.Label
+					newSlug := topictypes.Slugify(tag.Label)
+					if newSlug != "" {
+						existing.Slug = newSlug
+					}
 					existing.Category = category
 					existing.Source = source
 					if tag.Icon != "" {
@@ -198,17 +240,42 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 			case "candidates":
 				candidates := matchResult.Candidates
 				logging.Infof("findOrCreateTag: label=%q category=%s matchType=candidates candidateCount=%d topSimilarity=%.4f", tag.Label, category, len(candidates), matchResult.Similarity)
+
+				if category == "event" {
+					existingIDs := make([]uint, 0, len(candidates))
+					for _, candidate := range candidates {
+						if candidate.Tag != nil {
+							existingIDs = append(existingIDs, candidate.Tag.ID)
+						}
+					}
+
+					coTagCandidates, coTagErr := topicanalysis.ExpandEventCandidatesByArticleCoTags(ctx, articleID, 0, existingIDs)
+					if coTagErr != nil {
+						logging.Warnf("co-tag expansion failed for %q: %v", tag.Label, coTagErr)
+					} else if len(coTagCandidates) > 0 {
+						candidates = topicanalysis.MergeCandidateLists(candidates, coTagCandidates)
+						logging.Infof("findOrCreateTag: label=%q expanded to %d candidates via co-tag traversal", tag.Label, len(candidates))
+					}
+				}
+
 				result, judgmentErr := topicanalysis.ExtractAbstractTag(ctx, candidates, tag.Label, category, topicanalysis.WithCaller("findOrCreateTag"))
 				if judgmentErr != nil || result == nil || !result.HasAction() {
+					if judgmentErr != nil {
+						logging.Warnf("findOrCreateTag: label=%q category=%s LLM judgment failed, skipping event_fallback: %v", tag.Label, category, judgmentErr)
+					}
 					logging.Infof("findOrCreateTag: label=%q category=%s judgment=no_action err=%v", tag.Label, category, judgmentErr)
 
-					if category == "event" && len(candidates) > 0 && candidates[0].Tag != nil {
+					if category == "event" && len(candidates) > 0 && candidates[0].Tag != nil && result != nil && !result.LLMExplicitNone {
 						topSim := candidates[0].Similarity
 						thresholds := es.GetThresholds()
 						if topSim >= thresholds.LowSimilarity {
 							logging.Infof("findOrCreateTag: label=%q category=%s event_fallback: reusing top candidate (sim=%.4f)", tag.Label, category, topSim)
 							existing := candidates[0].Tag
 							existing.Label = tag.Label
+							fbSlug := topictypes.Slugify(tag.Label)
+							if fbSlug != "" {
+								existing.Slug = fbSlug
+							}
 							existing.Category = category
 							existing.Source = source
 							if len(tag.Aliases) > 0 {
@@ -247,10 +314,30 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 
 				if result.HasMerge() {
 					existing := result.Merge.Target
+					mergeLabel := result.Merge.Label
+					if mergeLabel == "" {
+						mergeLabel = tag.Label
+					}
+					mergeLabelSlug := topictypes.Slugify(mergeLabel)
+					existingSlug := topictypes.Slugify(existing.Label)
+
+					if len(result.MergeChildren) == 0 && mergeLabelSlug != existingSlug {
+						logging.Warnf("findOrCreateTag: skipping bogus merge — no children and label %q differs from existing %q (id=%d)", mergeLabel, existing.Label, existing.ID)
+						result.Merge = nil
+						result.LLMExplicitNone = true
+					}
+				}
+
+				if result.HasMerge() {
+					existing := result.Merge.Target
 					if result.Merge.Label != "" {
 						existing.Label = result.Merge.Label
 					} else {
 						existing.Label = tag.Label
+					}
+					mergeSlug := topictypes.Slugify(existing.Label)
+					if mergeSlug != "" {
+						existing.Slug = mergeSlug
 					}
 					existing.Category = category
 					existing.Source = source
@@ -289,8 +376,13 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 					}
 					for _, c := range candidates {
 						if c.Tag != nil && c.Tag.ID != mergeTargetID {
-							if delErr := topicanalysis.DeleteTagEmbedding(c.Tag.ID); delErr != nil {
-								logging.Warnf("Failed to delete embedding for child tag %d: %v", c.Tag.ID, delErr)
+							if shouldDeleteAbstractChildEmbedding(c.Tag.ID, result.Abstract.Tag.ID) {
+								if delErr := topicanalysis.DeleteTagEmbedding(c.Tag.ID); delErr != nil {
+									logging.Warnf("Failed to delete embedding for child tag %d: %v", c.Tag.ID, delErr)
+								}
+							} else {
+								go ensureTagEmbedding(es, c.Tag.ID)
+								logging.Infof("Preserving embedding for child tag %d under abstract %d because it has an abstract sibling", c.Tag.ID, result.Abstract.Tag.ID)
 							}
 						}
 					}
@@ -299,6 +391,35 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 						logging.Warnf("Failed to create child of abstract %d: %v", result.Abstract.Tag.ID, childErr)
 						break
 					}
+
+					if result.Abstract.Tag.Category == "event" {
+						existingIDs := make([]uint, 0, len(candidates)+2)
+						for _, candidate := range candidates {
+							if candidate.Tag != nil {
+								existingIDs = append(existingIDs, candidate.Tag.ID)
+							}
+						}
+						existingIDs = append(existingIDs, newTag.ID, result.Abstract.Tag.ID)
+
+						coTagCandidates, coTagErr := topicanalysis.ExpandEventCandidatesByArticleCoTags(context.Background(), 0, result.Abstract.Tag.ID, existingIDs)
+						if coTagErr != nil {
+							logging.Warnf("abstract co-tag expansion failed for abstract %d: %v", result.Abstract.Tag.ID, coTagErr)
+						} else if len(coTagCandidates) > 0 {
+							go func(abstractTagID uint, abstractLabel string, expanded []topicanalysis.TagCandidate) {
+								abstractCandidates := topicanalysis.MergeCandidateLists(nil, expanded)
+								judgmentResult, err := topicanalysis.ExtractAbstractTag(context.Background(), abstractCandidates, abstractLabel, "event", topicanalysis.WithCaller("abstract_co_tag_expansion"))
+								if err != nil || judgmentResult == nil || !judgmentResult.HasAction() {
+									return
+								}
+								if judgmentResult.HasMerge() && judgmentResult.Merge.Target != nil {
+									if mergeErr := topicanalysis.MergeTags(abstractTagID, judgmentResult.Merge.Target.ID); mergeErr != nil {
+										logging.Warnf("abstract co-tag merge failed: %v", mergeErr)
+									}
+								}
+							}(result.Abstract.Tag.ID, result.Abstract.Tag.Label, coTagCandidates)
+						}
+					}
+
 					return newTag, nil
 				}
 
@@ -414,6 +535,33 @@ func createChildOfAbstract(ctx context.Context, es *topicanalysis.EmbeddingServi
 	}
 
 	return &newTag, nil
+}
+
+func shouldDeleteAbstractChildEmbedding(childID, parentID uint) bool {
+	if childID == 0 || parentID == 0 || database.DB == nil {
+		return false
+	}
+
+	var child models.TopicTag
+	if err := database.DB.First(&child, childID).Error; err != nil {
+		logging.Warnf("shouldDeleteAbstractChildEmbedding: load child tag %d failed: %v", childID, err)
+		return false
+	}
+	if child.Source == "abstract" {
+		return false
+	}
+
+	var abstractSiblingCount int64
+	if err := database.DB.Model(&models.TopicTagRelation{}).
+		Joins("JOIN topic_tags ON topic_tags.id = topic_tag_relations.child_id").
+		Where("topic_tag_relations.parent_id = ? AND topic_tag_relations.child_id != ? AND topic_tag_relations.relation_type = ? AND topic_tags.source = ?",
+			parentID, childID, "abstract", "abstract").
+		Count(&abstractSiblingCount).Error; err != nil {
+		logging.Warnf("shouldDeleteAbstractChildEmbedding: count siblings for child %d parent %d failed: %v", childID, parentID, err)
+		return false
+	}
+
+	return abstractSiblingCount == 0
 }
 
 // backfillTagDescription triggers async description generation only if the tag currently has no description.
@@ -585,7 +733,7 @@ Respond with JSON: {"description": "your answer", "person_attrs": {"country": ".
 		},
 	}
 
-	const maxRetries = 3
+	const maxRetries = 4
 	var desc string
 	var metadataMap map[string]any
 	var success bool

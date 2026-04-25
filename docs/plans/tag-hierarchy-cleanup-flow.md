@@ -1,5 +1,7 @@
 > **已废弃**: 此文档描述的"深层树修剪"流程已被 [三级清理策略](../architecture/tag-cleanup-redesign.md) 取代。保留供参考。
 
+> **当前实际流程（简版）**: 现在调度器只做三件事：先停用长期没用的标签，再合并明显重复的抽象标签，最后清掉坏掉的层级关系。下面这份长流程图是旧方案，不再代表当前代码的主流程。
+
 # Tag Hierarchy Cleanup — 完整流程图
 
 ## 端到端流程
@@ -208,7 +210,7 @@ TreeCleanupResult {
 
 ---
 
-### 输出: Scheduler Status (DB)
+### 输出: Scheduler Status (旧示例，已过时)
 
 ```json
 {
@@ -217,15 +219,18 @@ TreeCleanupResult {
     "trigger_source": "scheduled",
     "started_at": "2026-04-22T03:00:00Z",
     "finished_at": "2026-04-22T03:01:23Z",
-    "trees_processed": 1,
-    "tags_processed": 6,
-    "merges_applied": 1,
-    "abstracts_created": 1,
+    "zombie_deactivated": 120,
+    "flat_merges_applied": 8,
+    "orphaned_relations": 14,
+    "multi_parent_fixed": 3,
+    "empty_abstracts": 27,
     "errors": 0,
-    "reason": "processed 1 trees, 6 tags, applied 1 merges, created 1 abstracts"
+    "reason": "zombie=120, flat_merges=8, orphaned_rels=14, multi_parent=3, empty_abstracts=27"
   }
 }
 ```
+
+如果要看当前真实流程，请优先看 `docs/architecture/tag-cleanup-redesign.md`。
 
 ---
 

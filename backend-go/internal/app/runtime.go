@@ -26,6 +26,7 @@ type Runtime struct {
 	AutoTagMerge           *jobs.AutoTagMergeScheduler
 	TagQualityScore        *jobs.TagQualityScoreScheduler
 	NarrativeSummary       *jobs.NarrativeSummaryScheduler
+	TagHierarchyCleanup    *jobs.TagHierarchyCleanupScheduler
 }
 
 func StartRuntime() *Runtime {
@@ -129,6 +130,13 @@ func StartRuntime() *Runtime {
 		logging.Infoln("Narrative summary scheduler started successfully")
 	}
 
+	runtime.TagHierarchyCleanup = jobs.NewTagHierarchyCleanupScheduler(86400)
+	if err := runtime.TagHierarchyCleanup.Start(); err != nil {
+		logging.Warnf("Failed to start tag hierarchy cleanup scheduler: %v", err)
+	} else {
+		logging.Infoln("Tag hierarchy cleanup scheduler started successfully")
+	}
+
 	runtimeinfo.AutoRefreshSchedulerInterface = runtime.AutoRefresh
 	runtimeinfo.AutoSummarySchedulerInterface = runtime.AutoSummary
 	runtimeinfo.PreferenceUpdateSchedulerInterface = runtime.PreferenceUpdate
@@ -138,6 +146,7 @@ func StartRuntime() *Runtime {
 	runtimeinfo.AutoTagMergeSchedulerInterface = runtime.AutoTagMerge
 	runtimeinfo.TagQualityScoreSchedulerInterface = runtime.TagQualityScore
 	runtimeinfo.NarrativeSummarySchedulerInterface = runtime.NarrativeSummary
+	runtimeinfo.TagHierarchyCleanupSchedulerInterface = runtime.TagHierarchyCleanup
 
 	return runtime
 }
@@ -212,6 +221,11 @@ func SetupGracefulShutdown(runtime *Runtime) {
 			if runtime.NarrativeSummary != nil {
 				logging.Infoln("Stopping narrative summary scheduler...")
 				runtime.NarrativeSummary.Stop()
+			}
+
+			if runtime.TagHierarchyCleanup != nil {
+				logging.Infoln("Stopping tag hierarchy cleanup scheduler...")
+				runtime.TagHierarchyCleanup.Stop()
 			}
 
 			close(done)

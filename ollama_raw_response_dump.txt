@@ -23,11 +23,11 @@
   Tags count: 8
   Skipped: []
   Errors: []
-  Tag[0]: label="Cortex Code" category=keyword confidence=0.95 isNew=true matchedTo=0
-  Tag[1]: label="Snowsight" category=keyword confidence=0.90 isNew=true matchedTo=0
-  Tag[2]: label="Snowflake" category=keyword confidence=0.95 isNew=true matchedTo=0
-  Tag[3]: label="Agent Teams" category=keyword confidence=0.85 isNew=true matchedTo=0
-  Tag[4]: label="Thomas Podenski" category=person confidence=0.90 isNew=true matchedTo=0
-  Tag[5]: label="dbt 管道" category=keyword confidence=0.80 isNew=true matchedTo=0
-  Tag[6]: label="Horizon Catalog" category=keyword confidence=0.85 isNew=true matchedTo=0
-  Tag[7]: label="零代码愿景" category=keyword confidence=0.75 isNew=true matchedTo=0
+  Tag[0]: label="Snowflake Cortex Code 全面开放" category=event confidence=0.95 isNew=false matchedTo=0
+  Tag[1]: label="Cortex Code" category=keyword confidence=1.00 isNew=false matchedTo=0
+  Tag[2]: label="Snowsight" category=keyword confidence=0.98 isNew=false matchedTo=0
+  Tag[3]: label="Agent Teams" category=keyword confidence=0.95 isNew=false matchedTo=0
+  Tag[4]: label="Snowflake CLI" category=keyword confidence=0.92 isNew=false matchedTo=0
+  Tag[5]: label="dbt 管道" category=keyword confidence=0.90 isNew=false matchedTo=0
+  Tag[6]: label="Thomas Podenski" category=person confidence=0.95 isNew=false matchedTo=0
+  Tag[7]: label="零代码愿景" category=keyword confidence=0.88 isNew=false matchedTo=0

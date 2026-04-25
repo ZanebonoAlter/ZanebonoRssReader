@@ -30,12 +30,20 @@ type TreeNode struct {
 
 // TreeCleanupResult holds the result of processing a single tree
 type TreeCleanupResult struct {
-	TreeRootID      uint
-	TreeRootLabel   string
-	TagsProcessed   int
-	MergesApplied   int
+	TreeRootID       uint
+	TreeRootLabel    string
+	TagsProcessed    int
+	MergesApplied    int
 	AbstractsCreated int
-	Errors          []string
+	Errors           []string
+}
+
+type HierarchyPhase4Result struct {
+	TreesProcessed   int
+	TagsProcessed    int
+	MergesApplied    int
+	ReparentsApplied int
+	Errors           []string
 }
 
 // treeCleanupJudgment is the LLM's judgment for a batch of tags
@@ -60,13 +68,13 @@ type treeCleanupAbstract struct {
 
 // tagTreeInfo is used for LLM prompt
 type tagTreeInfo struct {
-	ID           uint    `json:"id"`
-	Label        string  `json:"label"`
-	Description  string  `json:"description"`
-	Depth        int     `json:"depth"`
-	ArticleCount int     `json:"article_count"`
-	ChildrenIDs  []uint  `json:"children_ids"`
-	ParentID     *uint   `json:"parent_id,omitempty"`
+	ID           uint   `json:"id"`
+	Label        string `json:"label"`
+	Description  string `json:"description"`
+	Depth        int    `json:"depth"`
+	ArticleCount int    `json:"article_count"`
+	ChildrenIDs  []uint `json:"children_ids"`
+	ParentID     *uint  `json:"parent_id,omitempty"`
 }
 
 // BuildTagForest builds all tag trees for a given category, filtering trees with depth >= MinTreeDepthForCleanup
@@ -244,6 +252,96 @@ func findCycleRoots(relations []models.TopicTagRelation, parentSet map[uint]bool
 	return result
 }
 
+func ExecuteHierarchyCleanupPhase4(category string) (*HierarchyPhase4Result, error) {
+	forest, err := BuildTagForest(category)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &HierarchyPhase4Result{}
+	for _, root := range forest {
+		treeResult, treeErr := cleanupDeepHierarchyTree(context.Background(), root)
+		if treeErr != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("tree %d: %v", root.Tag.ID, treeErr))
+			continue
+		}
+		result.TreesProcessed++
+		result.TagsProcessed += treeResult.TagsProcessed
+		result.MergesApplied += treeResult.MergesApplied
+		result.ReparentsApplied += treeResult.AbstractsCreated
+		result.Errors = append(result.Errors, treeResult.Errors...)
+	}
+
+	return result, nil
+}
+
+func cleanupDeepHierarchyTree(ctx context.Context, root *TreeNode) (*TreeCleanupResult, error) {
+	if root == nil || root.Tag == nil {
+		return &TreeCleanupResult{}, nil
+	}
+
+	result := &TreeCleanupResult{
+		TreeRootID:    root.Tag.ID,
+		TreeRootLabel: root.Tag.Label,
+	}
+
+	nodes := collectAllTags(root)
+	result.TagsProcessed = len(nodes)
+
+	for _, node := range nodes {
+		if node == nil || node.Tag == nil || node.Tag.Source != "abstract" {
+			continue
+		}
+
+		if node.Depth >= MinTreeDepthForCleanup {
+			candidates, err := findCrossLayerDuplicateCandidatesFn(ctx, node.Tag.ID, node.Tag.Category)
+			if err != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("cross-layer candidates for %d: %v", node.Tag.ID, err))
+			} else {
+				for _, candidate := range candidates {
+					if candidate.Tag == nil {
+						continue
+					}
+					shouldMerge, reason, judgeErr := judgeCrossLayerDuplicateFn(ctx, node.Tag.ID, candidate.Tag.ID)
+					if judgeErr != nil {
+						result.Errors = append(result.Errors, fmt.Sprintf("cross-layer judge %d->%d: %v", node.Tag.ID, candidate.Tag.ID, judgeErr))
+						continue
+					}
+					if !shouldMerge {
+						continue
+					}
+					if mergeErr := mergeTagsFn(node.Tag.ID, candidate.Tag.ID); mergeErr != nil {
+						result.Errors = append(result.Errors, fmt.Sprintf("cross-layer merge %d->%d: %v", node.Tag.ID, candidate.Tag.ID, mergeErr))
+						continue
+					}
+					logging.Infof("Hierarchy cleanup phase 4: merged %d into %d, reason=%s", node.Tag.ID, candidate.Tag.ID, reason)
+					result.MergesApplied++
+					break
+				}
+			}
+		}
+
+		if node.Depth > 4 && node.Parent != nil && node.Parent.Tag != nil {
+			alternativeID, reason, err := aiJudgeAlternativePlacementFn(ctx, node.Tag.ID, node.Parent.Tag.ID)
+			if err != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("depth compression judge %d: %v", node.Tag.ID, err))
+				continue
+			}
+			if alternativeID == 0 || alternativeID == node.Parent.Tag.ID || alternativeID == node.Tag.ID {
+				continue
+			}
+			if linkErr := linkAbstractParentChild(node.Tag.ID, alternativeID); linkErr != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("depth compression link %d->%d: %v", node.Tag.ID, alternativeID, linkErr))
+				continue
+			}
+			logging.Infof("Hierarchy cleanup phase 4: moved deep tag %d under %d, reason=%s", node.Tag.ID, alternativeID, reason)
+			result.AbstractsCreated++
+		}
+	}
+
+	return result, nil
+}
+
 // ProcessTree recursively processes a tag tree, splitting into batches of <= 50
 func ProcessTree(node *TreeNode) (*TreeCleanupResult, error) {
 	totalNodes := countNodes(node)
@@ -383,10 +481,10 @@ func processBatch(root *TreeNode) (*TreeCleanupResult, error) {
 func buildCleanupPrompt(root *TreeNode, tags []*TreeNode) string {
 	// Collect tree info
 	treeInfo := map[string]interface{}{
-		"root_label":  root.Tag.Label,
-		"max_depth":   calculateTreeDepth(root),
-		"total_tags":  len(tags),
-		"category":    root.Tag.Category,
+		"root_label": root.Tag.Label,
+		"max_depth":  calculateTreeDepth(root),
+		"total_tags": len(tags),
+		"category":   root.Tag.Category,
 	}
 
 	// Collect tag info, sorted by depth then label
@@ -714,7 +812,9 @@ func createAbstractTagDirectly(abstract treeCleanupAbstract, tagMap map[uint]*Tr
 	go EnqueueAbstractTagUpdate(abstractTag.ID, "new_child_added")
 
 	for _, child := range abstractChildren {
-		go resolveMultiParentConflict(child.ID)
+		go func(childID uint) {
+			_, _ = resolveMultiParentConflict(childID)
+		}(child.ID)
 	}
 
 	return nil

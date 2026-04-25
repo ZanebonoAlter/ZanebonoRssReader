@@ -7,11 +7,25 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
 	"my-robot-backend/internal/domain/models"
+	"my-robot-backend/internal/platform/logging"
 )
+
+var thinkTagRe = regexp.MustCompile(`(?s)<think\s*>.*?</think\s*>`)
+
+const debugBodyMaxRunes = 3000
+
+func truncateDebugBody(s string) string {
+	runes := []rune(s)
+	if len(runes) > debugBodyMaxRunes {
+		return string(runes[:debugBodyMaxRunes]) + "...(truncated)"
+	}
+	return s
+}
 
 type Message struct {
 	Role    string `json:"role"`
@@ -98,8 +112,10 @@ func (c *openAICompatibleClient) Chat(ctx context.Context, provider models.AIPro
 		"temperature": temperature,
 		"max_tokens":  maxTokens,
 	}
-	if provider.ProviderType == ProviderTypeOllama {
+	if !provider.EnableThinking {
 		payload["reasoning_effort"] = "none"
+	}
+	if provider.ProviderType == ProviderTypeOllama {
 		if req.JSONMode && req.JSONSchema != nil {
 			payload["format"] = req.JSONSchema
 		} else if req.JSONMode {
@@ -149,16 +165,19 @@ func (c *openAICompatibleClient) Chat(ctx context.Context, provider models.AIPro
 		return "", &ProviderError{Message: err.Error(), Code: "read_error", Retryable: true}
 	}
 
+	logging.Infof("openai_chat_raw: provider=%s model=%s status=%d body=%s", provider.Name, provider.Model, resp.StatusCode, truncateDebugBody(string(responseBody)))
+
 	var parsed struct {
 		Choices []struct {
 			Message struct {
-				Content string `json:"content"`
+				Content          string `json:"content"`
+				ReasoningContent string `json:"reasoning_content"`
 			} `json:"message"`
 		} `json:"choices"`
 		Error *struct {
-			Message string `json:"message"`
-			Type    string `json:"type"`
-			Code    string `json:"code"`
+			Message string      `json:"message"`
+			Type    string      `json:"type"`
+			Code    interface{} `json:"code"`
 		} `json:"error,omitempty"`
 	}
 	if err := json.Unmarshal(responseBody, &parsed); err != nil {
@@ -171,21 +190,29 @@ func (c *openAICompatibleClient) Chat(ctx context.Context, provider models.AIPro
 		code := fmt.Sprintf("http_%d", resp.StatusCode)
 		if parsed.Error != nil {
 			message = parsed.Error.Message
-			if parsed.Error.Code != "" {
-				code = parsed.Error.Code
+			codeStr := fmt.Sprintf("%v", parsed.Error.Code)
+			if codeStr != "" && codeStr != "<nil>" {
+				code = codeStr
 			}
 		}
 		return "", &ProviderError{Message: message, Code: code, Retryable: retryable}
 	}
 
 	if parsed.Error != nil {
-		return "", &ProviderError{Message: parsed.Error.Message, Code: parsed.Error.Code, Retryable: false}
+		return "", &ProviderError{Message: parsed.Error.Message, Code: fmt.Sprintf("%v", parsed.Error.Code), Retryable: false}
 	}
 	if len(parsed.Choices) == 0 {
 		return "", &ProviderError{Message: "no response from AI", Code: "no_response", Retryable: true}
 	}
 
-	return strings.TrimSpace(parsed.Choices[0].Message.Content), nil
+	content := strings.TrimSpace(parsed.Choices[0].Message.Content)
+	content = stripThinkTags(content)
+
+	return content, nil
+}
+
+func stripThinkTags(content string) string {
+	return strings.TrimSpace(thinkTagRe.ReplaceAllString(content, ""))
 }
 
 func (c *openAICompatibleClient) Embed(ctx context.Context, provider models.AIProvider, req EmbeddingRequest) (*EmbeddingResult, error) {
@@ -240,9 +267,9 @@ func (c *openAICompatibleClient) Embed(ctx context.Context, provider models.AIPr
 	if resp.StatusCode >= 400 {
 		var errResp struct {
 			Error *struct {
-				Message string `json:"message"`
-				Type    string `json:"type"`
-				Code    string `json:"code"`
+				Message string      `json:"message"`
+				Type    string      `json:"type"`
+				Code    interface{} `json:"code"`
 			} `json:"error"`
 		}
 		_ = json.Unmarshal(responseBody, &errResp)

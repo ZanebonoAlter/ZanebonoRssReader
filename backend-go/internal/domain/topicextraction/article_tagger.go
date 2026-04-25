@@ -122,7 +122,7 @@ func tagArticle(article *models.Article, feedName, categoryName string, options 
 	// Process each tag
 	seenTagIDs := make(map[uint]struct{})
 	for _, tag := range dedupeTagsWithCategory(tags) {
-		dbTag, err := findOrCreateTag(context.Background(), tag, source, articleContext)
+		dbTag, err := findOrCreateTag(context.Background(), tag, source, articleContext, article.ID)
 		if err != nil {
 			logging.Warnf("findOrCreateTag failed for tag %q (category=%s, slug=%s, source=%s, article=%d): %v", tag.Label, tag.Category, topictypes.Slugify(tag.Label), source, article.ID, err)
 			continue
@@ -375,6 +375,7 @@ func cleanupOrphanedTags(tagIDs []uint) {
 	database.DB.Model(&models.TopicTag{}).
 		Where("id IN ?", tagIDs).
 		Where("id NOT IN (SELECT topic_tag_id FROM article_topic_tags)").
+		Where("id NOT IN (SELECT topic_tag_id FROM ai_summary_topics)").
 		Pluck("id", &orphanIDs)
 
 	if len(orphanIDs) == 0 {

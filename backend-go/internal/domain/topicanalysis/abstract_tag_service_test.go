@@ -64,15 +64,61 @@ func TestBuildCandidateList(t *testing.T) {
 		{Tag: &models.TopicTag{Label: "React", Source: "abstract"}, Similarity: 0.96},
 		{Tag: &models.TopicTag{Label: "Vue", Source: "heuristic"}, Similarity: 0.93},
 	}
-	result := buildCandidateList(candidates, "Svelte")
+	result := buildCandidateList(candidates)
 	if !strings.Contains(result, `type: abstract`) {
 		t.Error("should mark abstract candidates")
 	}
 	if !strings.Contains(result, `type: normal`) {
 		t.Error("should mark non-abstract candidates as normal")
 	}
-	if !strings.Contains(result, `"Svelte" (new tag)`) {
-		t.Error("should include new tag")
+	if strings.Contains(result, `"Svelte"`) {
+		t.Error("should not mix new tag into existing candidates")
+	}
+}
+
+func TestBuildTagJudgmentPromptRejectsParentChildMerge(t *testing.T) {
+	candidates := []TagCandidate{
+		{Tag: &models.TopicTag{Label: "Anthropic 协议", Slug: "anthropic-xie-yi"}, Similarity: 0.70},
+		{Tag: &models.TopicTag{Label: "DeepSeek V4 Pro", Slug: "deepseek-v4-pro"}, Similarity: 0.67},
+	}
+
+	prompt := buildTagJudgmentPrompt(candidates, "Anthropic", "keyword", "", true)
+
+	for _, want := range []string{
+		"parent/child",
+		"organization/product",
+		"ecosystem",
+		"MUST use abstract or null",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("expected prompt to contain %q, got:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestBuildTagJudgmentPromptWeakCandidatesKeepsMergeButCautions(t *testing.T) {
+	candidates := []TagCandidate{
+		{Tag: &models.TopicTag{Label: "Claude Code", Slug: "claude-code"}, Similarity: 0.73},
+		{Tag: &models.TopicTag{Label: "DeepSeek V4 Pro", Slug: "deepseek-v4-pro"}, Similarity: 0.67},
+	}
+
+	prompt := buildTagJudgmentPrompt(candidates, "Claude", "keyword", "", false)
+
+	if !strings.Contains(prompt, `"merge"`) {
+		t.Fatalf("prompt should still expose merge option for weak candidates, got:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "CAUTION") {
+		t.Fatalf("expected prompt to contain merge caution for low-similarity candidates, got:\n%s", prompt)
+	}
+}
+
+func TestBuildTagJudgmentSchemaAlwaysIncludesMerge(t *testing.T) {
+	schema := buildTagJudgmentSchema()
+	if _, ok := schema.Properties["merge"]; !ok {
+		t.Fatalf("schema should always expose merge: %#v", schema.Properties)
+	}
+	if _, ok := schema.Properties["abstract"]; !ok {
+		t.Fatalf("schema should always expose abstract")
 	}
 }
 
@@ -410,6 +456,110 @@ func TestReparentOrLinkAbstractChildKeepsNarrowerIntermediateParent(t *testing.T
 	assertAbstractRelationExists(t, db, midParent.ID, child.ID)
 	assertAbstractRelationExists(t, db, grandParent.ID, midParent.ID)
 	assertAbstractRelationMissing(t, db, grandParent.ID, child.ID)
+}
+
+func TestGetAllTreeTagIDsIncludesAncestorsSiblingsAndDescendants(t *testing.T) {
+	db := setupAbstractTagServiceTestDB(t)
+
+	root := models.TopicTag{Slug: "root", Label: "根", Category: "event", Kind: "event", Source: "abstract", Status: "active"}
+	branch := models.TopicTag{Slug: "branch", Label: "分支", Category: "event", Kind: "event", Source: "abstract", Status: "active"}
+	sibling := models.TopicTag{Slug: "sibling", Label: "同级", Category: "event", Kind: "event", Source: "llm", Status: "active"}
+	grandchild := models.TopicTag{Slug: "grandchild", Label: "孙节点", Category: "event", Kind: "event", Source: "llm", Status: "active"}
+
+	for _, tag := range []*models.TopicTag{&root, &branch, &sibling, &grandchild} {
+		if err := db.Create(tag).Error; err != nil {
+			t.Fatalf("create tag: %v", err)
+		}
+	}
+
+	relations := []models.TopicTagRelation{
+		{ParentID: root.ID, ChildID: branch.ID, RelationType: "abstract"},
+		{ParentID: root.ID, ChildID: sibling.ID, RelationType: "abstract"},
+		{ParentID: branch.ID, ChildID: grandchild.ID, RelationType: "abstract"},
+	}
+	for _, relation := range relations {
+		if err := db.Create(&relation).Error; err != nil {
+			t.Fatalf("create relation: %v", err)
+		}
+	}
+
+	ids := getAllTreeTagIDs(branch.ID)
+	got := make(map[uint]bool, len(ids))
+	for _, id := range ids {
+		got[id] = true
+	}
+
+	for _, wantID := range []uint{root.ID, branch.ID, sibling.ID, grandchild.ID} {
+		if !got[wantID] {
+			t.Fatalf("expected tree to include tag %d, got %v", wantID, ids)
+		}
+	}
+	if len(got) != 4 {
+		t.Fatalf("expected 4 unique tags in tree, got %v", ids)
+	}
+}
+
+func TestLinkAbstractParentChildRejectsDepthBeyondLimit(t *testing.T) {
+	db := setupAbstractTagServiceTestDB(t)
+
+	root := models.TopicTag{Slug: "root-depth", Label: "根", Category: "event", Kind: "event", Source: "abstract", Status: "active"}
+	level2 := models.TopicTag{Slug: "level-2", Label: "第二层", Category: "event", Kind: "event", Source: "abstract", Status: "active"}
+	level3 := models.TopicTag{Slug: "level-3", Label: "第三层", Category: "event", Kind: "event", Source: "abstract", Status: "active"}
+	level4 := models.TopicTag{Slug: "level-4", Label: "第四层", Category: "event", Kind: "event", Source: "abstract", Status: "active"}
+	childRoot := models.TopicTag{Slug: "child-root", Label: "子树根", Category: "event", Kind: "event", Source: "abstract", Status: "active"}
+	childLeaf := models.TopicTag{Slug: "child-leaf", Label: "子树叶", Category: "event", Kind: "event", Source: "llm", Status: "active"}
+
+	for _, tag := range []*models.TopicTag{&root, &level2, &level3, &level4, &childRoot, &childLeaf} {
+		if err := db.Create(tag).Error; err != nil {
+			t.Fatalf("create tag: %v", err)
+		}
+	}
+
+	relations := []models.TopicTagRelation{
+		{ParentID: root.ID, ChildID: level2.ID, RelationType: "abstract"},
+		{ParentID: level2.ID, ChildID: level3.ID, RelationType: "abstract"},
+		{ParentID: level3.ID, ChildID: level4.ID, RelationType: "abstract"},
+		{ParentID: childRoot.ID, ChildID: childLeaf.ID, RelationType: "abstract"},
+	}
+	for _, relation := range relations {
+		if err := db.Create(&relation).Error; err != nil {
+			t.Fatalf("create relation: %v", err)
+		}
+	}
+
+	err := linkAbstractParentChild(childRoot.ID, level4.ID)
+	if err == nil {
+		t.Fatal("expected depth limit error")
+	}
+	if !strings.Contains(err.Error(), "depth limit") {
+		t.Fatalf("expected depth limit error, got %v", err)
+	}
+	assertAbstractRelationMissing(t, db, level4.ID, childRoot.ID)
+}
+
+func TestGetAbstractSubtreeDepthStopsAtCycles(t *testing.T) {
+	db := setupAbstractTagServiceTestDB(t)
+
+	parent := models.TopicTag{Slug: "cycle-parent", Label: "Cycle Parent", Category: "event", Kind: "event", Source: "abstract", Status: "active"}
+	child := models.TopicTag{Slug: "cycle-child", Label: "Cycle Child", Category: "event", Kind: "event", Source: "abstract", Status: "active"}
+	for _, tag := range []*models.TopicTag{&parent, &child} {
+		if err := db.Create(tag).Error; err != nil {
+			t.Fatalf("create tag: %v", err)
+		}
+	}
+	for _, relation := range []models.TopicTagRelation{
+		{ParentID: parent.ID, ChildID: child.ID, RelationType: "abstract"},
+		{ParentID: child.ID, ChildID: parent.ID, RelationType: "abstract"},
+	} {
+		if err := db.Create(&relation).Error; err != nil {
+			t.Fatalf("create relation: %v", err)
+		}
+	}
+
+	depth := getAbstractSubtreeDepth(db, parent.ID)
+	if depth != 1 {
+		t.Fatalf("depth = %d, want 1 without revisiting cycle nodes", depth)
+	}
 }
 
 func setupAbstractTagServiceTestDB(t *testing.T) *gorm.DB {

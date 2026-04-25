@@ -9,3 +9,4 @@ var DigestSchedulerInterface interface{}
 var AutoTagMergeSchedulerInterface interface{}
 var TagQualityScoreSchedulerInterface interface{}
 var NarrativeSummarySchedulerInterface interface{}
+var TagHierarchyCleanupSchedulerInterface interface{}

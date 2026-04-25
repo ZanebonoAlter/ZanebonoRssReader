@@ -197,3 +197,15 @@ func TestMinTreeDepthConstant(t *testing.T) {
 		t.Errorf("expected MinTreeDepthForCleanup=3, got %d", MinTreeDepthForCleanup)
 	}
 }
+
+func TestExecuteHierarchyCleanupPhase4SkipsShallowTrees(t *testing.T) {
+	setupAbstractTagServiceTestDB(t)
+
+	result, err := ExecuteHierarchyCleanupPhase4("event")
+	if err != nil {
+		t.Fatalf("ExecuteHierarchyCleanupPhase4 returned error: %v", err)
+	}
+	if result.TreesProcessed != 0 {
+		t.Fatalf("expected no deep trees processed, got %+v", result)
+	}
+}

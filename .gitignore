@@ -31,3 +31,5 @@ front/.output/
 front/node_modules/
 .worktrees/
 .gitnexus
+# Added by code-review-graph
+.code-review-graph/

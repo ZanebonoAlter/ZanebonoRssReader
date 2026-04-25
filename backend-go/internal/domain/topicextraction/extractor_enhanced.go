@@ -5,15 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"my-robot-backend/internal/domain/topictypes"
 	"regexp"
 	"sort"
 	"strings"
 
-	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/domain/topicanalysis"
+	"my-robot-backend/internal/domain/topictypes"
 	"my-robot-backend/internal/platform/airouter"
-	"my-robot-backend/internal/platform/database"
 	"my-robot-backend/internal/platform/jsonutil"
 )
 
@@ -121,111 +119,21 @@ func (te *TagExtractor) extractCandidates(ctx context.Context, input topictypes.
 	return parseExtractedTags(result.Content)
 }
 
-// resolveCandidate resolves a single candidate tag against existing tags
+// resolveCandidate validates and normalizes a single candidate tag.
+// Matching against existing tags is handled by findOrCreateTag downstream,
+// so this function only does validation/normalization — no DB queries.
 func (te *TagExtractor) resolveCandidate(ctx context.Context, candidate topictypes.ExtractedTag, input topictypes.ExtractionInput) (*topictypes.TopicTag, bool, error) {
-	// Validate category
 	category := validateCategory(candidate.Category)
-
-	// Step 1: Check for exact slug match
-	slug := slugify(candidate.Label)
-	var existingTag models.TopicTag
-	err := database.DB.Where("slug = ? AND category = ?", slug, category).First(&existingTag).Error
-	if err == nil {
-		// Exact match - reuse with updated score
-		return &topictypes.TopicTag{
-			Label:     existingTag.Label,
-			Slug:      existingTag.Slug,
-			Category:  existingTag.Category,
-			Icon:      existingTag.Icon,
-			Aliases:   parseAliases(existingTag.Aliases),
-			Score:     candidate.Confidence,
-			IsNew:     false,
-			MatchedTo: existingTag.ID,
-		}, false, nil
+	slug := topictypes.Slugify(candidate.Label)
+	if slug == "" {
+		return nil, true, nil
 	}
-
-	// Step 2: Check for alias match
-	var aliasMatch models.TopicTag
-	aliasMatchErr := database.DB.Where("category = ? AND ? IN (SELECT jsonb_array_elements_text(COALESCE(NULLIF(aliases, ''), '[]')::jsonb))", category, candidate.Label).First(&aliasMatch).Error
-	if aliasMatchErr == nil {
-		return &topictypes.TopicTag{
-			Label:     aliasMatch.Label,
-			Slug:      aliasMatch.Slug,
-			Category:  aliasMatch.Category,
-			Icon:      aliasMatch.Icon,
-			Aliases:   parseAliases(aliasMatch.Aliases),
-			Score:     candidate.Confidence,
-			IsNew:     false,
-			MatchedTo: aliasMatch.ID,
-		}, false, nil
-	}
-
-	// Step 3: Vector similarity matching (if embedding service available)
-	matchResult, err := te.embeddingService.TagMatch(ctx, candidate.Label, category, formatAliases(candidate.Aliases))
-	if err == nil {
-		switch matchResult.MatchType {
-		case "exact":
-			// Already handled above, but just in case
-			return &topictypes.TopicTag{
-				Label:     matchResult.ExistingTag.Label,
-				Slug:      matchResult.ExistingTag.Slug,
-				Category:  matchResult.ExistingTag.Category,
-				Icon:      matchResult.ExistingTag.Icon,
-				Aliases:   parseAliases(matchResult.ExistingTag.Aliases),
-				Score:     candidate.Confidence,
-				IsNew:     false,
-				MatchedTo: matchResult.ExistingTag.ID,
-			}, false, nil
-
-		case "candidates":
-			if len(matchResult.Candidates) > 0 && matchResult.Candidates[0].Tag != nil {
-				best := matchResult.Candidates[0]
-
-				if category == "event" && best.Similarity < te.embeddingService.GetThresholds().HighSimilarity {
-					judgment, jErr := te.aiJudgment(ctx, candidate, matchResult.Candidates, input)
-					if jErr == nil && judgment != nil {
-						if judgment.Decision == "reuse" && judgment.ReuseTagID > 0 {
-							var reuseTag models.TopicTag
-							if err := database.DB.First(&reuseTag, judgment.ReuseTagID).Error; err == nil {
-								return &topictypes.TopicTag{
-									Label:     reuseTag.Label,
-									Slug:      reuseTag.Slug,
-									Category:  reuseTag.Category,
-									Icon:      reuseTag.Icon,
-									Aliases:   parseAliases(reuseTag.Aliases),
-									Score:     candidate.Confidence,
-									IsNew:     false,
-									MatchedTo: reuseTag.ID,
-								}, false, nil
-							}
-						}
-					}
-				} else {
-					return &topictypes.TopicTag{
-						Label:     best.Tag.Label,
-						Slug:      best.Tag.Slug,
-						Category:  best.Tag.Category,
-						Icon:      best.Tag.Icon,
-						Aliases:   parseAliases(best.Tag.Aliases),
-						Score:     candidate.Confidence * best.Similarity,
-						IsNew:     false,
-						MatchedTo: best.Tag.ID,
-					}, false, nil
-				}
-			}
-
-		case "no_match":
-		}
-	}
-
-	// No embedding service or matching - create new tag
 	return &topictypes.TopicTag{
-		Label:    candidate.Label,
+		Label:    strings.TrimSpace(candidate.Label),
 		Slug:     slug,
 		Category: category,
 		Aliases:  candidate.Aliases,
 		Score:    candidate.Confidence,
-		IsNew:    true,
 	}, false, nil
 }
 
@@ -362,7 +270,7 @@ func buildExtractionUserPrompt(input topictypes.ExtractionInput) string {
 摘要内容:
 %s
 
-请返回JSON数组格式的标签列表。`, input.Title, input.FeedName, input.CategoryName, input.Summary)
+请返回JSON对象格式: {"tags": [标签列表]}。`, input.Title, input.FeedName, input.CategoryName, input.Summary)
 }
 
 func buildResolutionSystemPrompt() string {
@@ -413,20 +321,17 @@ func parseExtractedTags(content string) ([]topictypes.ExtractedTag, error) {
 		Aliases    []string `json:"aliases"`
 		Evidence   string   `json:"evidence"`
 	}
+
 	if err := json.Unmarshal([]byte(content), &raw); err != nil {
 		var wrapped struct {
-			Tags []struct {
-				Label      string   `json:"label"`
-				Category   string   `json:"category"`
-				Confidence float64  `json:"confidence"`
-				Aliases    []string `json:"aliases"`
-				Evidence   string   `json:"evidence"`
-			} `json:"tags"`
+			Tags json.RawMessage `json:"tags"`
 		}
 		if wrappedErr := json.Unmarshal([]byte(content), &wrapped); wrappedErr != nil {
 			return nil, fmt.Errorf("failed to parse tags: %w", err)
 		}
-		raw = wrapped.Tags
+		if err := json.Unmarshal(wrapped.Tags, &raw); err != nil {
+			return nil, fmt.Errorf("failed to parse tags.tags: %w", err)
+		}
 	}
 
 	result := make([]topictypes.ExtractedTag, 0, len(raw))
@@ -551,18 +456,24 @@ func dedupeTags(tags []topictypes.TopicTag) []topictypes.TopicTag {
 
 func tagExtractionSchema() *airouter.JSONSchema {
 	return &airouter.JSONSchema{
-		Type: "array",
-		Items: &airouter.JSONSchema{
-			Type: "object",
-			Properties: map[string]airouter.SchemaProperty{
-				"label":      {Type: "string", Description: "标签名称"},
-				"category":   {Type: "string", Description: "event, person 或 keyword"},
-				"confidence": {Type: "number", Description: "置信度 0.0-1.0，仅提取有信息量的标签，宁缺毋滥"},
-				"aliases":    {Type: "array", Items: &airouter.SchemaProperty{Type: "string"}},
-				"evidence":   {Type: "string", Description: "提取依据"},
+		Type: "object",
+		Properties: map[string]airouter.SchemaProperty{
+			"tags": {
+				Type: "array",
+				Items: &airouter.SchemaProperty{
+					Type: "object",
+					Properties: map[string]airouter.SchemaProperty{
+						"label":      {Type: "string", Description: "标签名称"},
+						"category":   {Type: "string", Description: "event, person 或 keyword"},
+						"confidence": {Type: "number", Description: "置信度 0.0-1.0，仅提取有信息量的标签，宁缺毋滥"},
+						"aliases":    {Type: "array", Items: &airouter.SchemaProperty{Type: "string"}},
+						"evidence":   {Type: "string", Description: "提取依据"},
+					},
+					Required: []string{"label", "category"},
+				},
 			},
-			Required: []string{"label", "category"},
 		},
+		Required: []string{"tags"},
 	}
 }
 

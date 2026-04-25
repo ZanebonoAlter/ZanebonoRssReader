@@ -143,6 +143,18 @@ func (s *MergeReembeddingQueueService) Start() {
 	}
 	s.mu.Unlock()
 
+	result := s.db.Model(&models.MergeReembeddingQueue{}).
+		Where("status = ?", models.MergeReembeddingQueueStatusProcessing).
+		Updates(map[string]interface{}{
+			"status":     models.MergeReembeddingQueueStatusPending,
+			"started_at": nil,
+		})
+	if result.Error != nil {
+		s.logger.Error("failed to reset stale processing merge re-embedding tasks", zap.Error(result.Error))
+	} else if result.RowsAffected > 0 {
+		s.logger.Info("reset stale processing merge re-embedding tasks", zap.Int64("count", result.RowsAffected))
+	}
+
 	go s.worker()
 	s.logger.Info("merge re-embedding queue worker started")
 }

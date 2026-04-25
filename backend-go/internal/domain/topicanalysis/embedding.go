@@ -47,7 +47,7 @@ var DefaultThresholds = EmbeddingMatchThresholds{
 
 // TagMatchResult represents a tag match result
 type TagMatchResult struct {
-	MatchType   string          // "exact", "candidates", "no_match"
+	MatchType   string // "exact", "candidates", "no_match"
 	ExistingTag *models.TopicTag
 	Similarity  float64
 	Candidates  []TagCandidate
@@ -125,13 +125,13 @@ func (s *EmbeddingService) GenerateEmbedding(ctx context.Context, tag *models.To
 	pgVecStr := floatsToPgVector(result.Embeddings[0])
 
 	embedding := &models.TopicTagEmbedding{
-		TopicTagID:   tag.ID,
+		TopicTagID:    tag.ID,
 		EmbeddingType: embeddingType,
-		Vector:       string(vectorJSON),
-		EmbeddingVec: pgVecStr,
-		Dimension:    result.Dimensions,
-		Model:        result.Model,
-		TextHash:     textHash,
+		Vector:        string(vectorJSON),
+		EmbeddingVec:  pgVecStr,
+		Dimension:     result.Dimensions,
+		Model:         result.Model,
+		TextHash:      textHash,
 	}
 
 	return embedding, nil
@@ -223,16 +223,38 @@ func (s *EmbeddingService) TagMatch(ctx context.Context, label, category string,
 	}
 
 	if aliases != "" {
-		var aliasTags []models.TopicTag
-		if err := database.DB.Scopes(activeTagFilter).Where("category = ?", category).Find(&aliasTags).Error; err == nil {
-			for _, t := range aliasTags {
-				if containsAlias(t.Aliases, label) {
-					logging.Infof("TagMatch: label=%q category=%s result=exact reason=alias existingID=%d existingLabel=%q", label, category, t.ID, t.Label)
-					return &TagMatchResult{
-						MatchType:   "exact",
-						ExistingTag: &t,
-						Similarity:  1.0,
-					}, nil
+		aliasScanFallback := database.DB.Dialector.Name() != "postgres"
+		if database.DB.Dialector.Name() == "postgres" {
+			var aliasMatch models.TopicTag
+			aliasSQL := `category = ? AND aliases IS NOT NULL AND aliases != '' AND EXISTS (
+				SELECT 1 FROM jsonb_array_elements_text(aliases::jsonb) AS alias(value)
+				WHERE LOWER(alias.value) = LOWER(?)
+			)`
+			if err := database.DB.Scopes(activeTagFilter).Where(aliasSQL, category, label).First(&aliasMatch).Error; err == nil {
+				logging.Infof("TagMatch: label=%q category=%s result=exact reason=alias existingID=%d existingLabel=%q", label, category, aliasMatch.ID, aliasMatch.Label)
+				return &TagMatchResult{
+					MatchType:   "exact",
+					ExistingTag: &aliasMatch,
+					Similarity:  1.0,
+				}, nil
+			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+				logging.Warnf("TagMatch: label=%q category=%s alias SQL match failed, falling back to in-memory alias scan: %v", label, category, err)
+				aliasScanFallback = true
+			}
+		}
+
+		if aliasScanFallback {
+			var aliasTags []models.TopicTag
+			if err := database.DB.Scopes(activeTagFilter).Where("category = ?", category).Find(&aliasTags).Error; err == nil {
+				for _, t := range aliasTags {
+					if containsAlias(t.Aliases, label) {
+						logging.Infof("TagMatch: label=%q category=%s result=exact reason=alias existingID=%d existingLabel=%q", label, category, t.ID, t.Label)
+						return &TagMatchResult{
+							MatchType:   "exact",
+							ExistingTag: &t,
+							Similarity:  1.0,
+						}, nil
+					}
 				}
 			}
 		}
@@ -244,10 +266,7 @@ func (s *EmbeddingService) TagMatch(ctx context.Context, label, category string,
 		Aliases:  aliases,
 	}
 
-	embType := EmbeddingTypeIdentity
-	if category == "event" {
-		embType = EmbeddingTypeSemantic
-	}
+	embType := EmbeddingTypeSemantic
 	candidates, err := s.FindSimilarTags(ctx, candidate, category, 20, embType)
 	if err != nil {
 		logging.Warnf("TagMatch: label=%q category=%s similarity search failed, result=no_match err=%v", label, category, err)

@@ -32,6 +32,7 @@ const primaryProviderForm = reactive<AIProviderUpsertRequest & { time_range: num
   model: '',
   enabled: true,
   timeout_seconds: 120,
+  enable_thinking: false,
   time_range: 180,
 })
 
@@ -43,6 +44,7 @@ const newProviderForm = reactive<AIProviderUpsertRequest>({
   model: '',
   enabled: true,
   timeout_seconds: 120,
+  enable_thinking: false,
 })
 
 const showNewProviderForm = ref(false)
@@ -60,6 +62,7 @@ const editProviderForm = reactive<AIProviderUpsertRequest>({
   model: '',
   enabled: true,
   timeout_seconds: 120,
+  enable_thinking: false,
 })
 const showEditProviderApiKey = ref(false)
 
@@ -90,6 +93,7 @@ function hydratePrimaryProvider() {
   primaryProviderForm.model = preferredProvider?.model || ''
   primaryProviderForm.enabled = preferredProvider?.enabled ?? true
   primaryProviderForm.timeout_seconds = preferredProvider?.timeout_seconds || 120
+  primaryProviderForm.enable_thinking = preferredProvider?.enable_thinking ?? false
 }
 
 function applyPrimaryProvider(provider: AIProvider | null | undefined) {
@@ -101,6 +105,7 @@ function applyPrimaryProvider(provider: AIProvider | null | undefined) {
   primaryProviderForm.model = provider?.model || ''
   primaryProviderForm.enabled = provider?.enabled ?? true
   primaryProviderForm.timeout_seconds = provider?.timeout_seconds || 120
+  primaryProviderForm.enable_thinking = provider?.enable_thinking ?? false
 }
 
 function hydrateRouteSelections() {
@@ -286,6 +291,7 @@ async function savePrimaryProvider() {
       timeout_seconds: primaryProviderForm.timeout_seconds || 120,
       max_tokens: primaryProviderForm.max_tokens ?? null,
       temperature: primaryProviderForm.temperature ?? null,
+      enable_thinking: primaryProviderForm.enable_thinking ?? false,
       metadata: primaryProviderForm.metadata,
       api_key_configured: true,
     }
@@ -359,6 +365,7 @@ async function saveNewProvider() {
     newProviderForm.model = ''
     newProviderForm.enabled = true
     newProviderForm.timeout_seconds = 120
+    newProviderForm.enable_thinking = false
     showNewProviderForm.value = false
     await loadData()
     pushMessage('success', '备用模型已添加')
@@ -378,6 +385,7 @@ function startEditingProvider(provider: AIProvider) {
   editProviderForm.model = provider.model
   editProviderForm.enabled = provider.enabled
   editProviderForm.timeout_seconds = provider.timeout_seconds
+  editProviderForm.enable_thinking = provider.enable_thinking ?? false
 }
 
 function cancelEditingProvider() {
@@ -389,6 +397,7 @@ function cancelEditingProvider() {
   editProviderForm.model = ''
   editProviderForm.enabled = true
   editProviderForm.timeout_seconds = 120
+  editProviderForm.enable_thinking = false
 }
 
 async function saveEditedProvider() {
@@ -611,6 +620,11 @@ onMounted(() => {
               <input v-model.number="primaryProviderForm.time_range" type="number" min="60" step="60" class="input w-full text-sm">
             </div>
           </div>
+
+          <label class="flex items-center gap-2.5 cursor-pointer select-none">
+            <input v-model="primaryProviderForm.enable_thinking" type="checkbox" class="rounded">
+            <span class="text-sm text-gray-700">启用 Thinking（推理模型的思考过程，会消耗额外 token）</span>
+          </label>
         </div>
       </div>
 
@@ -659,6 +673,10 @@ onMounted(() => {
               <div v-else class="md:col-span-2 rounded-lg bg-amber-50 border border-amber-200/80 px-3 py-2 text-xs text-amber-700">
                 Ollama 模式无需 API Key
               </div>
+              <label class="flex items-center gap-2 text-sm text-gray-700 self-center">
+                <input v-model="newProviderForm.enable_thinking" type="checkbox" class="rounded">
+                Thinking
+              </label>
             </div>
             <div class="flex justify-end">
               <button class="px-3 py-1.5 text-xs font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 transition-colors disabled:opacity-50" :disabled="saving" @click="saveNewProvider">
@@ -734,6 +752,10 @@ onMounted(() => {
                   <label class="flex items-center gap-2 text-sm text-gray-700 self-center">
                     <input v-model="editProviderForm.enabled" type="checkbox" class="rounded">
                     启用
+                  </label>
+                  <label class="flex items-center gap-2 text-sm text-gray-700 self-center">
+                    <input v-model="editProviderForm.enable_thinking" type="checkbox" class="rounded">
+                    Thinking
                   </label>
                 </div>
                 <div class="flex justify-end gap-2">

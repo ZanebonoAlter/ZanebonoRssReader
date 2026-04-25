@@ -30,7 +30,7 @@
 
   Feed ID:         6
   Feed Title:      10天推荐排行 - 博客园
-  Feed CategoryID: 0xc0006a1fa8
+  Feed CategoryID: 0xc000438108
   Category.Name:   技术
   Category.Slug:   技术
 
@@ -211,11 +211,5 @@
 
 ## 10. 实时调用 AI 提取
 
-  返回标签数: 7, Source: llm
+  返回标签数: 1, Source: llm
   Tag[0]: label="Maomi.Mapper" category=keyword confidence=1.00
-  Tag[1]: label="AutoMapper" category=keyword confidence=1.00
-  Tag[2]: label="表达式树" category=keyword confidence=0.95
-  Tag[3]: label="反射" category=keyword confidence=0.95
-  Tag[4]: label="类型转换" category=keyword confidence=0.90
-  Tag[5]: label="C#" category=keyword confidence=0.90
-  Tag[6]: label="对象映射框架" category=keyword confidence=0.85

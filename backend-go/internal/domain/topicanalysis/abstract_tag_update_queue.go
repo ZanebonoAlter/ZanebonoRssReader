@@ -75,6 +75,18 @@ func (s *AbstractTagUpdateQueueService) Start() {
 	}
 	s.mu.Unlock()
 
+	result := s.db.Model(&models.AbstractTagUpdateQueue{}).
+		Where("status = ?", models.AbstractTagUpdateQueueStatusProcessing).
+		Updates(map[string]interface{}{
+			"status":     models.AbstractTagUpdateQueueStatusPending,
+			"started_at": nil,
+		})
+	if result.Error != nil {
+		s.logger.Error("failed to reset stale processing abstract tag update tasks", zap.Error(result.Error))
+	} else if result.RowsAffected > 0 {
+		s.logger.Info("reset stale processing abstract tag update tasks", zap.Int64("count", result.RowsAffected))
+	}
+
 	go s.worker()
 	s.logger.Info("abstract tag update queue worker started")
 }
@@ -339,6 +351,7 @@ func regenerateAbstractLabelAndDescription(ctx context.Context, abstractTag *mod
 - label: 概括所有子标签涉及的事件主线（1-160字）。保持当前 label 如果仍然准确。
 - description: 中文，1-2 句话，客观说明事件是什么、涉及哪些方面。不要延伸到影响分析、价值判断。500 字以内。
 - 重点：这个抽象标签代表的是"事件/事态"，聚焦于事实经过和涉及方。
+- 如果子标签之间存在明显不相关的事件（例如一个是外交谈判，另一个是科技产品发布），请在 description 中如实标注各个子标签涉及的不同事件领域，而不是试图强行将它们概括为一个统一主题。例如："该标签涵盖多个不相关的独立事件：XXX和YYY。"但这种情况更理想的做法是通过 label 变更来缩小范围。
 
 返回 JSON: {"label": "your answer", "description": "your answer"}`,
 			abstractTag.Label,
