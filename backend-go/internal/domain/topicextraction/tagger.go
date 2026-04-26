@@ -92,8 +92,8 @@ func TagSummary(summary *models.AISummary, feedName, categoryName string) error 
 			articleContext += ". "
 		}
 		runes := []rune(summary.Summary)
-		if len(runes) > 2000 {
-			articleContext += string(runes[:2000])
+		if len(runes) > 1500 {
+			articleContext += string(runes[:1500])
 		} else {
 			articleContext += summary.Summary
 		}
@@ -194,6 +194,11 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 	kind := NormalizeTopicKind(tag.Kind, category)
 	logging.Infof("findOrCreateTag: start label=%q slug=%q category=%s source=%s", tag.Label, slug, category, source)
 
+	if cached, ok := GetTagCache().Get(slug, category); ok {
+		logging.Infof("findOrCreateTag: label=%q slug=%q category=%s cache=hit existingID=%d", tag.Label, slug, category, cached.ID)
+		return cached, nil
+	}
+
 	// Build aliases string for TagMatch
 	aliases := tag.Aliases
 	if len(aliases) == 0 {
@@ -234,6 +239,7 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 					}
 					go ensureTagEmbedding(es, existing.ID)
 					go backfillTagDescription(existing.ID, existing.Label, existing.Category, existing.Description, articleContext)
+					GetTagCache().Set(slug, category, existing)
 					return existing, nil
 				}
 
@@ -291,6 +297,7 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 							} else {
 								go ensureTagEmbedding(es, existing.ID)
 								go backfillTagDescription(existing.ID, existing.Label, existing.Category, existing.Description, articleContext)
+								GetTagCache().Set(slug, category, existing)
 								return existing, nil
 							}
 						}
@@ -364,9 +371,10 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 						}
 					}
 
-					if !result.HasAbstract() {
-						return existing, nil
-					}
+				if !result.HasAbstract() {
+					GetTagCache().Set(slug, category, existing)
+					return existing, nil
+				}
 				}
 
 				if result.HasAbstract() {
@@ -420,6 +428,7 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 						}
 					}
 
+					GetTagCache().Set(slug, category, newTag)
 					return newTag, nil
 				}
 
@@ -459,6 +468,7 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 			go ensureTagEmbedding(es, dbTag.ID)
 		}
 		go backfillTagDescription(dbTag.ID, dbTag.Label, dbTag.Category, dbTag.Description, articleContext)
+		GetTagCache().Set(slug, category, &dbTag)
 		return &dbTag, nil
 	}
 
@@ -484,6 +494,7 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 		go generateAndSaveEmbedding(es, &newTag)
 	}
 
+	GetTagCache().Set(slug, category, &newTag)
 	return &newTag, nil
 }
 
