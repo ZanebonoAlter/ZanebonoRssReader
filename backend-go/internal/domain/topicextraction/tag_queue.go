@@ -25,6 +25,7 @@ type TagQueue struct {
 	pollInterval time.Duration
 	lease        time.Duration
 	batchSize    int
+	concurrency  int
 }
 
 var (
@@ -40,6 +41,7 @@ func GetTagQueue() *TagQueue {
 			pollInterval: time.Second,
 			lease:        10 * time.Minute,
 			batchSize:    20,
+			concurrency:  3,
 		}
 	})
 	if instance.queue == nil {
@@ -205,13 +207,24 @@ func (q *TagQueue) drainRemaining() {
 		if len(jobs) == 0 {
 			return
 		}
+
+		sem := make(chan struct{}, q.concurrency)
+		var jobWg sync.WaitGroup
+
 		for _, job := range jobs {
 			if ctx.Err() != nil {
-				logging.Infof("Tag queue drain timed out, %d job(s) remaining for next start", len(jobs))
+				logging.Infof("Tag queue drain timed out, some job(s) remaining for next start")
+				jobWg.Wait()
 				return
 			}
-			q.processJob(job)
+			jobWg.Add(1)
+			sem <- struct{}{}
+			go func(j models.TagJob) {
+				defer func() { <-sem; jobWg.Done() }()
+				q.processJob(j)
+			}(job)
 		}
+		jobWg.Wait()
 	}
 }
 
@@ -221,10 +234,22 @@ func (q *TagQueue) processAvailableJobs() {
 		logging.Warnf("Failed to claim tag jobs: %v", err)
 		return
 	}
+	if len(jobs) == 0 {
+		return
+	}
+
+	sem := make(chan struct{}, q.concurrency)
+	var jobWg sync.WaitGroup
 
 	for _, job := range jobs {
-		q.processJob(job)
+		jobWg.Add(1)
+		sem <- struct{}{}
+		go func(j models.TagJob) {
+			defer func() { <-sem; jobWg.Done() }()
+			q.processJob(j)
+		}(job)
 	}
+	jobWg.Wait()
 }
 
 func (q *TagQueue) processJob(job models.TagJob) {
