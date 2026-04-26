@@ -123,10 +123,6 @@ func tagArticle(article *models.Article, feedName, categoryName string, options 
 	dedupedTags := dedupeTagsWithCategory(tags)
 	es := getEmbeddingService()
 
-	type tagWithMatch struct {
-		tag    topictypes.TopicTag
-		result *topicanalysis.TagExtractionResult
-	}
 	var needsJudgment []topicanalysis.BatchTagJudgmentItem
 	precomputed := make(map[string]*topicanalysis.TagExtractionResult)
 
