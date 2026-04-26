@@ -3,8 +3,10 @@ package topicanalysis
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"sort"
+	"strings"
+	"time"
 
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/domain/topictypes"
@@ -28,37 +30,6 @@ type TreeNode struct {
 	ArticleCount int
 }
 
-// TreeCleanupResult holds the result of processing a single tree
-type TreeCleanupResult struct {
-	TreeRootID       uint
-	TreeRootLabel    string
-	TagsProcessed    int
-	MergesApplied    int
-	AbstractsCreated int
-	Errors           []string
-}
-
-type HierarchyPhase4Result struct {
-	TreesProcessed   int
-	TagsProcessed    int
-	MergesApplied    int
-	ReparentsApplied int
-	Errors           []string
-}
-
-// treeCleanupJudgment is the LLM's judgment for a batch of tags
-type treeCleanupJudgment struct {
-	Merges    []treeCleanupMerge    `json:"merges,omitempty"`
-	Abstracts []treeCleanupAbstract `json:"abstracts,omitempty"`
-	Notes     string                `json:"notes,omitempty"`
-}
-
-type treeCleanupMerge struct {
-	SourceID uint   `json:"source_id"`
-	TargetID uint   `json:"target_id"`
-	Reason   string `json:"reason"`
-}
-
 type treeCleanupAbstract struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
@@ -66,19 +37,105 @@ type treeCleanupAbstract struct {
 	Reason      string `json:"reason"`
 }
 
-// tagTreeInfo is used for LLM prompt
-type tagTreeInfo struct {
-	ID           uint   `json:"id"`
-	Label        string `json:"label"`
-	Description  string `json:"description"`
-	Depth        int    `json:"depth"`
-	ArticleCount int    `json:"article_count"`
-	ChildrenIDs  []uint `json:"children_ids"`
-	ParentID     *uint  `json:"parent_id,omitempty"`
+type treeReviewMove struct {
+	TagID    uint   `json:"tag_id"`
+	ToParent uint   `json:"to_parent"`
+	Reason   string `json:"reason"`
 }
 
-// BuildTagForest builds all tag trees for a given category, filtering trees with depth >= MinTreeDepthForCleanup
-func BuildTagForest(category string) ([]*TreeNode, error) {
+type treeReviewAbstract struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	ChildrenIDs []uint `json:"children_ids"`
+	Reason      string `json:"reason"`
+}
+
+type treeReviewMerge struct {
+	SourceID uint   `json:"source_id"`
+	TargetID uint   `json:"target_id"`
+	Reason   string `json:"reason"`
+}
+
+type treeReviewJudgment struct {
+	Moves        []treeReviewMove     `json:"moves"`
+	Merges       []treeReviewMerge    `json:"merges"`
+	NewAbstracts []treeReviewAbstract `json:"new_abstracts"`
+	Notes        string               `json:"notes"`
+}
+
+const smallTreeThreshold = 20 // 节点数 ≤ 此值的小树可合并审查
+
+// reviewForestBatched merges small trees into batched LLM reviews.
+// Trees with nodeCount > smallTreeThreshold are reviewed individually.
+func reviewForestBatched(forest []*TreeNode, category string, result *TreeReviewResult) {
+	var smallTrees []*TreeNode
+	for _, root := range forest {
+		if countNodes(root) <= smallTreeThreshold {
+			smallTrees = append(smallTrees, root)
+		} else {
+			// 大树仍然逐棵审查（可能拆分）
+			for _, tree := range splitReviewTrees(root, 50) {
+				reviewOneTree(tree, category, result)
+			}
+		}
+	}
+
+	if len(smallTrees) == 0 {
+		return
+	}
+
+	// 合并小树为一次审查（最多 5 棵树或 100 个节点）
+	batch := mergeSmallTreesForReview(smallTrees, 5, 100)
+	for _, group := range batch {
+		reviewOneTree(group, category, result)
+	}
+}
+
+// mergeSmallTreesForReview merges multiple small trees under a virtual root for batched review.
+// maxTrees: max trees per batch. maxNodes: max total nodes per batch.
+func mergeSmallTreesForReview(trees []*TreeNode, maxTrees, maxNodes int) []*TreeNode {
+	var batches []*TreeNode
+	var currentBatch []*TreeNode
+	currentNodes := 0
+
+	for _, tree := range trees {
+		treeNodes := countNodes(tree)
+		if len(currentBatch) >= maxTrees || currentNodes+treeNodes > maxNodes {
+			if len(currentBatch) > 0 {
+				batches = append(batches, createVirtualRoot(currentBatch))
+			}
+			currentBatch = nil
+			currentNodes = 0
+		}
+		currentBatch = append(currentBatch, tree)
+		currentNodes += treeNodes
+	}
+	if len(currentBatch) > 0 {
+		batches = append(batches, createVirtualRoot(currentBatch))
+	}
+	return batches
+}
+
+// createVirtualRoot creates a virtual root node wrapping multiple trees for review.
+func createVirtualRoot(trees []*TreeNode) *TreeNode {
+	virtualRoot := &TreeNode{
+		Tag: &models.TopicTag{
+			ID:       0, // 虚拟根节点
+			Label:    "[合并审查]",
+			Category: trees[0].Tag.Category,
+			Source:   "virtual",
+		},
+		Depth: 0,
+	}
+	for _, tree := range trees {
+		tree.Parent = virtualRoot
+		virtualRoot.Children = append(virtualRoot.Children, tree)
+	}
+	return virtualRoot
+}
+
+// BuildTagForest builds all tag trees for a given category, filtering trees with depth >= minDepth.
+func BuildTagForest(category string, minDepth ...int) ([]*TreeNode, error) {
 	// Load all abstract relations
 	var relations []models.TopicTagRelation
 	if err := database.DB.Where("relation_type = ?", "abstract").Find(&relations).Error; err != nil {
@@ -139,6 +196,10 @@ func BuildTagForest(category string) ([]*TreeNode, error) {
 	articleCounts := countArticlesByTag(tagIDs, "")
 
 	// Build trees
+	md := MinTreeDepthForCleanup
+	if len(minDepth) > 0 {
+		md = minDepth[0]
+	}
 	var forest []*TreeNode
 	for _, rootID := range rootIDs {
 		rootTag, ok := tagMap[rootID]
@@ -147,7 +208,7 @@ func BuildTagForest(category string) ([]*TreeNode, error) {
 		}
 		root := buildTreeNode(rootTag, 1, childrenMap, tagMap, articleCounts)
 		depth := calculateTreeDepth(root)
-		if depth >= MinTreeDepthForCleanup {
+		if depth >= md {
 			forest = append(forest, root)
 		}
 	}
@@ -209,6 +270,176 @@ func collectAllTags(node *TreeNode) []*TreeNode {
 	return result
 }
 
+type TreeReviewResult struct {
+	TreesReviewed int
+	MergesApplied int
+	MovesApplied  int
+	GroupsCreated int
+	GroupsReused  int
+	Errors        []string
+}
+
+func ReviewHierarchyTrees(category string, windowDays int) (*TreeReviewResult, error) {
+	forest, err := BuildTagForest(category, 2)
+	if err != nil {
+		return nil, fmt.Errorf("build forest: %w", err)
+	}
+	if len(forest) == 0 {
+		return &TreeReviewResult{}, nil
+	}
+
+	forest = filterTreesWithRecentRelations(forest, windowDays)
+	if len(forest) == 0 {
+		return &TreeReviewResult{}, nil
+	}
+
+	result := &TreeReviewResult{}
+	reviewForestBatched(forest, category, result)
+	return result, nil
+}
+
+func filterTreesWithRecentRelations(forest []*TreeNode, windowDays int) []*TreeNode {
+	if windowDays <= 0 {
+		return forest
+	}
+	cutoff := time.Now().AddDate(0, 0, -windowDays)
+
+	forestTagIDs := make(map[uint]bool)
+	for _, root := range forest {
+		for _, node := range collectAllTags(root) {
+			forestTagIDs[node.Tag.ID] = true
+		}
+	}
+
+	var relations []models.TopicTagRelation
+	if err := database.DB.Where("relation_type = ? AND created_at >= ?", "abstract", cutoff).Find(&relations).Error; err != nil {
+		logging.Warnf("filterTreesWithRecentRelations: failed to load recent relations: %v", err)
+		return nil
+	}
+	recentTagSet := make(map[uint]bool)
+	for _, r := range relations {
+		if forestTagIDs[r.ParentID] && forestTagIDs[r.ChildID] {
+			recentTagSet[r.ParentID] = true
+			recentTagSet[r.ChildID] = true
+		}
+	}
+
+	var filtered []*TreeNode
+	for _, root := range forest {
+		if treeContainsTag(root, recentTagSet) {
+			filtered = append(filtered, root)
+		}
+	}
+	return filtered
+}
+
+func treeContainsTag(node *TreeNode, tagSet map[uint]bool) bool {
+	if tagSet[node.Tag.ID] {
+		return true
+	}
+	for _, child := range node.Children {
+		if treeContainsTag(child, tagSet) {
+			return true
+		}
+	}
+	return false
+}
+
+func splitReviewTrees(root *TreeNode, maxNodes int) []*TreeNode {
+	if countNodes(root) <= maxNodes {
+		return []*TreeNode{root}
+	}
+	parts := []*TreeNode{rootLevelReviewTree(root)}
+	for _, child := range root.Children {
+		parts = append(parts, splitReviewTrees(child, maxNodes)...)
+	}
+	return parts
+}
+
+func rootLevelReviewTree(root *TreeNode) *TreeNode {
+	clone := &TreeNode{Tag: root.Tag, Depth: root.Depth, ArticleCount: root.ArticleCount}
+	for _, child := range root.Children {
+		childClone := &TreeNode{Tag: child.Tag, Depth: child.Depth, ArticleCount: child.ArticleCount, Parent: clone}
+		clone.Children = append(clone.Children, childClone)
+	}
+	return clone
+}
+
+func reviewOneTree(tree *TreeNode, category string, result *TreeReviewResult) {
+	treeStr := serializeTreeForReview(tree)
+	prompt := buildTreeReviewPrompt(treeStr, category)
+
+	judgment, err := callTreeReviewLLMFn(prompt)
+	if err != nil {
+		rootID := uint(0)
+		if tree.Tag != nil {
+			rootID = tree.Tag.ID
+		}
+		result.Errors = append(result.Errors, fmt.Sprintf("tree root %d: %v", rootID, err))
+		return
+	}
+	result.TreesReviewed++
+
+	tagMap := make(map[uint]*TreeNode)
+	for _, node := range collectAllTags(tree) {
+		if node.Tag != nil && node.Tag.ID != 0 { // 跳过虚拟根节点
+			tagMap[node.Tag.ID] = node
+		}
+	}
+
+	// 虚拟根节点时，所有 merge/move 都允许（无 root 保护）
+	isVirtual := tree.Tag == nil || tree.Tag.ID == 0
+
+	for _, merge := range judgment.Merges {
+		if !isVirtual && merge.SourceID == tree.Tag.ID {
+			result.Errors = append(result.Errors, fmt.Sprintf("merge %d->%d: root node cannot be used as merge source", merge.SourceID, merge.TargetID))
+			continue
+		}
+		if err := validateTreeReviewMerge(merge, tagMap); err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("merge %d->%d: %v", merge.SourceID, merge.TargetID, err))
+			continue
+		}
+		if err := MergeTags(merge.SourceID, merge.TargetID); err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("merge %d->%d: %v", merge.SourceID, merge.TargetID, err))
+			continue
+		}
+		delete(tagMap, merge.SourceID)
+		result.MergesApplied++
+	}
+
+	for _, move := range judgment.Moves {
+		if !isVirtual && move.TagID == tree.Tag.ID {
+			result.Errors = append(result.Errors, fmt.Sprintf("move %d: review root node cannot be moved", move.TagID))
+			continue
+		}
+		if _, ok := tagMap[move.TagID]; !ok {
+			continue
+		}
+		if err := validateTreeReviewMove(move, tagMap); err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("move %d: %v", move.TagID, err))
+			continue
+		}
+		if err := executeTreeReviewMove(move); err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("move %d: %v", move.TagID, err))
+			continue
+		}
+		result.MovesApplied++
+	}
+
+	for _, abs := range judgment.NewAbstracts {
+		created, err := validateAndCreateReviewAbstract(abs, tagMap, category)
+		if err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("abstract %s: %v", abs.Name, err))
+			continue
+		}
+		if created {
+			result.GroupsCreated++
+		} else {
+			result.GroupsReused++
+		}
+	}
+}
+
 // findCycleRoots finds root nodes in cyclic graphs
 func findCycleRoots(relations []models.TopicTagRelation, parentSet map[uint]bool) []uint {
 	childToParent := make(map[uint]uint)
@@ -252,332 +483,64 @@ func findCycleRoots(relations []models.TopicTagRelation, parentSet map[uint]bool
 	return result
 }
 
-func ExecuteHierarchyCleanupPhase4(category string) (*HierarchyPhase4Result, error) {
-	forest, err := BuildTagForest(category)
-	if err != nil {
-		return nil, err
-	}
-
-	result := &HierarchyPhase4Result{}
-	for _, root := range forest {
-		treeResult, treeErr := cleanupDeepHierarchyTree(context.Background(), root)
-		if treeErr != nil {
-			result.Errors = append(result.Errors, fmt.Sprintf("tree %d: %v", root.Tag.ID, treeErr))
-			continue
-		}
-		result.TreesProcessed++
-		result.TagsProcessed += treeResult.TagsProcessed
-		result.MergesApplied += treeResult.MergesApplied
-		result.ReparentsApplied += treeResult.AbstractsCreated
-		result.Errors = append(result.Errors, treeResult.Errors...)
-	}
-
-	return result, nil
+func serializeTreeForReview(node *TreeNode) string {
+	var sb strings.Builder
+	serializeNodeForReview(&sb, node, "", true)
+	return sb.String()
 }
 
-func cleanupDeepHierarchyTree(ctx context.Context, root *TreeNode) (*TreeCleanupResult, error) {
-	if root == nil || root.Tag == nil {
-		return &TreeCleanupResult{}, nil
+func serializeNodeForReview(sb *strings.Builder, node *TreeNode, prefix string, isLast bool) {
+	connector := "├── "
+	if isLast {
+		connector = "└── "
 	}
-
-	result := &TreeCleanupResult{
-		TreeRootID:    root.Tag.ID,
-		TreeRootLabel: root.Tag.Label,
+	if prefix == "" {
+		fmt.Fprintf(sb, "[id:%d] %s", node.Tag.ID, node.Tag.Label)
+	} else {
+		fmt.Fprintf(sb, "%s%s[id:%d] %s", prefix, connector, node.Tag.ID, node.Tag.Label)
 	}
+	if contextInfo := formatTagPromptContext(node.Tag); contextInfo != "" {
+		fmt.Fprintf(sb, " (%s)", truncateStr(contextInfo, 160))
+	}
+	sb.WriteString("\n")
 
-	nodes := collectAllTags(root)
-	result.TagsProcessed = len(nodes)
-
-	for _, node := range nodes {
-		if node == nil || node.Tag == nil || node.Tag.Source != "abstract" {
-			continue
+	for i, child := range node.Children {
+		newPrefix := prefix
+		if prefix == "" {
+			newPrefix = "  "
+		} else if isLast {
+			newPrefix = prefix + "    "
+		} else {
+			newPrefix = prefix + "│   "
 		}
-
-		if node.Depth >= MinTreeDepthForCleanup {
-			candidates, err := findCrossLayerDuplicateCandidatesFn(ctx, node.Tag.ID, node.Tag.Category)
-			if err != nil {
-				result.Errors = append(result.Errors, fmt.Sprintf("cross-layer candidates for %d: %v", node.Tag.ID, err))
-			} else {
-				for _, candidate := range candidates {
-					if candidate.Tag == nil {
-						continue
-					}
-					shouldMerge, reason, judgeErr := judgeCrossLayerDuplicateFn(ctx, node.Tag.ID, candidate.Tag.ID)
-					if judgeErr != nil {
-						result.Errors = append(result.Errors, fmt.Sprintf("cross-layer judge %d->%d: %v", node.Tag.ID, candidate.Tag.ID, judgeErr))
-						continue
-					}
-					if !shouldMerge {
-						continue
-					}
-					if mergeErr := mergeTagsFn(node.Tag.ID, candidate.Tag.ID); mergeErr != nil {
-						result.Errors = append(result.Errors, fmt.Sprintf("cross-layer merge %d->%d: %v", node.Tag.ID, candidate.Tag.ID, mergeErr))
-						continue
-					}
-					logging.Infof("Hierarchy cleanup phase 4: merged %d into %d, reason=%s", node.Tag.ID, candidate.Tag.ID, reason)
-					result.MergesApplied++
-					break
-				}
-			}
-		}
-
-		if node.Depth > 4 && node.Parent != nil && node.Parent.Tag != nil {
-			alternativeID, reason, err := aiJudgeAlternativePlacementFn(ctx, node.Tag.ID, node.Parent.Tag.ID)
-			if err != nil {
-				result.Errors = append(result.Errors, fmt.Sprintf("depth compression judge %d: %v", node.Tag.ID, err))
-				continue
-			}
-			if alternativeID == 0 || alternativeID == node.Parent.Tag.ID || alternativeID == node.Tag.ID {
-				continue
-			}
-			if linkErr := linkAbstractParentChild(node.Tag.ID, alternativeID); linkErr != nil {
-				result.Errors = append(result.Errors, fmt.Sprintf("depth compression link %d->%d: %v", node.Tag.ID, alternativeID, linkErr))
-				continue
-			}
-			logging.Infof("Hierarchy cleanup phase 4: moved deep tag %d under %d, reason=%s", node.Tag.ID, alternativeID, reason)
-			result.AbstractsCreated++
-		}
-	}
-
-	return result, nil
-}
-
-// ProcessTree recursively processes a tag tree, splitting into batches of <= 50
-func ProcessTree(node *TreeNode) (*TreeCleanupResult, error) {
-	totalNodes := countNodes(node)
-
-	// If the tree has <= 50 nodes, process it directly
-	if totalNodes <= 50 {
-		return processBatch(node)
-	}
-
-	// Otherwise, process each child subtree recursively
-	result := &TreeCleanupResult{
-		TreeRootID:    node.Tag.ID,
-		TreeRootLabel: node.Tag.Label,
-	}
-
-	for _, child := range node.Children {
-		childResult, err := ProcessTree(child)
-		if err != nil {
-			result.Errors = append(result.Errors, err.Error())
-			continue
-		}
-		result.TagsProcessed += childResult.TagsProcessed
-		result.MergesApplied += childResult.MergesApplied
-		result.AbstractsCreated += childResult.AbstractsCreated
-		result.Errors = append(result.Errors, childResult.Errors...)
-	}
-
-	crossResult, err := processRootCrossLayer(node)
-	if err != nil {
-		result.Errors = append(result.Errors, fmt.Sprintf("cross-layer: %v", err))
-	} else if crossResult != nil {
-		result.TagsProcessed += crossResult.TagsProcessed
-		result.MergesApplied += crossResult.MergesApplied
-		result.Errors = append(result.Errors, crossResult.Errors...)
-	}
-
-	return result, nil
-}
-
-func processRootCrossLayer(root *TreeNode) (*TreeCleanupResult, error) {
-	var deepNodes []*TreeNode
-	collectDeepNodes(root, 3, &deepNodes)
-
-	if len(deepNodes) == 0 {
-		return nil, nil
-	}
-
-	batch := append([]*TreeNode{root}, deepNodes...)
-	if len(batch) > 50 {
-		batch = batch[:50]
-	}
-
-	prompt := buildCleanupPrompt(root, batch)
-	judgment, err := callCleanupLLM(prompt)
-	if err != nil {
-		return nil, err
-	}
-
-	result := &TreeCleanupResult{
-		TreeRootID:    root.Tag.ID,
-		TreeRootLabel: root.Tag.Label,
-		TagsProcessed: len(batch),
-	}
-
-	tagMap := make(map[uint]*TreeNode)
-	for _, tag := range batch {
-		tagMap[tag.Tag.ID] = tag
-	}
-
-	for _, merge := range judgment.Merges {
-		if err := validateAndExecuteMerge(merge, tagMap); err != nil {
-			result.Errors = append(result.Errors, fmt.Sprintf("cross-layer merge %d->%d: %v", merge.SourceID, merge.TargetID, err))
-			continue
-		}
-		result.MergesApplied++
-	}
-
-	return result, nil
-}
-
-func collectDeepNodes(node *TreeNode, minDepth int, result *[]*TreeNode) {
-	if node.Depth >= minDepth {
-		*result = append(*result, node)
-	}
-	for _, child := range node.Children {
-		collectDeepNodes(child, minDepth, result)
+		serializeNodeForReview(sb, child, newPrefix, i == len(node.Children)-1)
 	}
 }
 
-// processBatch processes a batch of tags (<= 50 nodes)
-func processBatch(root *TreeNode) (*TreeCleanupResult, error) {
-	tags := collectAllTags(root)
-
-	// Build prompt
-	prompt := buildCleanupPrompt(root, tags)
-
-	// Call LLM
-	judgment, err := callCleanupLLM(prompt)
-	if err != nil {
-		return nil, err
-	}
-
-	result := &TreeCleanupResult{
-		TreeRootID:    root.Tag.ID,
-		TreeRootLabel: root.Tag.Label,
-		TagsProcessed: len(tags),
-	}
-
-	// Create a tag map for quick lookup
-	tagMap := make(map[uint]*TreeNode)
-	for _, tag := range tags {
-		tagMap[tag.Tag.ID] = tag
-	}
-
-	// Execute merges
-	for _, merge := range judgment.Merges {
-		if err := validateAndExecuteMerge(merge, tagMap); err != nil {
-			result.Errors = append(result.Errors, fmt.Sprintf("merge %d->%d: %v", merge.SourceID, merge.TargetID, err))
-			continue
-		}
-		result.MergesApplied++
-	}
-
-	// Execute abstracts
-	for _, abstract := range judgment.Abstracts {
-		if err := validateAndExecuteAbstract(abstract, tagMap, root.Tag.Category); err != nil {
-			result.Errors = append(result.Errors, fmt.Sprintf("abstract %s: %v", abstract.Name, err))
-			continue
-		}
-		result.AbstractsCreated++
-	}
-
-	return result, nil
-}
-
-// buildCleanupPrompt builds the LLM prompt for tree cleanup
-func buildCleanupPrompt(root *TreeNode, tags []*TreeNode) string {
-	// Collect tree info
-	treeInfo := map[string]interface{}{
-		"root_label": root.Tag.Label,
-		"max_depth":  calculateTreeDepth(root),
-		"total_tags": len(tags),
-		"category":   root.Tag.Category,
-	}
-
-	// Collect tag info, sorted by depth then label
-	var tagInfos []tagTreeInfo
-	for _, tag := range tags {
-		info := tagTreeInfo{
-			ID:           tag.Tag.ID,
-			Label:        tag.Tag.Label,
-			Description:  truncateStr(tag.Tag.Description, 200),
-			Depth:        tag.Depth,
-			ArticleCount: tag.ArticleCount,
-		}
-		for _, child := range tag.Children {
-			info.ChildrenIDs = append(info.ChildrenIDs, child.Tag.ID)
-		}
-		if tag.Parent != nil {
-			pid := tag.Parent.Tag.ID
-			info.ParentID = &pid
-		}
-		tagInfos = append(tagInfos, info)
-	}
-
-	sort.Slice(tagInfos, func(i, j int) bool {
-		if tagInfos[i].Depth != tagInfos[j].Depth {
-			return tagInfos[i].Depth < tagInfos[j].Depth
-		}
-		return tagInfos[i].Label < tagInfos[j].Label
-	})
-
-	// Build prompt data
-	promptData := map[string]interface{}{
-		"tree_info": treeInfo,
-		"tags":      tagInfos,
-	}
-
-	promptJSON, _ := json.MarshalIndent(promptData, "", "  ")
-
-	return fmt.Sprintf(`你是一位标签分类专家。请分析以下标签树，找出问题并提出清理建议。
-
-当前标签树结构：
-%s
-
-请分析并返回以下格式的 JSON：
-{
-  "merges": [
-    {
-      "source_id": 123,
-      "target_id": 456,
-      "reason": "这两个标签描述的是同一个概念，应该合并"
-    }
-  ],
-  "abstracts": [
-    {
-      "name": "新的抽象标签名称",
-      "description": "对这个抽象标签的客观描述（500字以内）",
-      "children_ids": [123, 456, 789],
-      "reason": "这些标签共享一个共同的上层概念，应该被归入一个抽象父标签"
-    }
-  ],
-  "notes": "其他观察（可选）"
-}
-
-规则：
-1. merges 和 abstracts 都是可选的，可以为空数组
-2. merge: 当两个非相邻层级的标签描述的是同一核心概念时使用
-   - source_id: 被合并的标签（会被淘汰）
-   - target_id: 保留的目标标签
-   - 两个标签的 depth 差必须 >= 2
-   - 优先保留更上层（depth 更小）的标签作为 target
-3. abstract: 当一组标签（2个以上）共享一个共同的上层概念，但当前树中没有合适的抽象标签时使用
-   - name: 新的抽象标签名称（1-160字符）
-   - description: 客观描述（500字以内）
-   - children_ids: 应该归入这个抽象标签的子标签 ID 列表（至少2个）
-   - 新抽象标签会连接到这些子标签的最小公共祖先下
-4. 不要修改直接父子关系（depth 差 = 1 的标签）
-5. 如果树结构合理，没有需要修改的地方，返回空的 merges 和 abstracts
-6. 只返回真正有把握的建议`, string(promptJSON))
-}
-
-// callCleanupLLM calls LLM for tree cleanup judgment
-func callCleanupLLM(prompt string) (*treeCleanupJudgment, error) {
+func callTreeReviewLLM(prompt string) (*treeReviewJudgment, error) {
 	router := airouter.NewRouter()
-
 	req := airouter.ChatRequest{
 		Capability: airouter.CapabilityTopicTagging,
 		Messages: []airouter.Message{
-			{Role: "system", Content: "You are a tag taxonomy cleanup assistant. Respond only with valid JSON."},
+			{Role: "system", Content: "You are a tag taxonomy review assistant. Respond only with valid JSON."},
 			{Role: "user", Content: prompt},
 		},
 		JSONMode: true,
 		JSONSchema: &airouter.JSONSchema{
 			Type: "object",
 			Properties: map[string]airouter.SchemaProperty{
+				"moves": {
+					Type: "array",
+					Items: &airouter.SchemaProperty{
+						Type: "object",
+						Properties: map[string]airouter.SchemaProperty{
+							"tag_id":    {Type: "integer"},
+							"to_parent": {Type: "integer"},
+							"reason":    {Type: "string"},
+						},
+						Required: []string{"tag_id", "to_parent", "reason"},
+					},
+				},
 				"merges": {
 					Type: "array",
 					Items: &airouter.SchemaProperty{
@@ -590,7 +553,7 @@ func callCleanupLLM(prompt string) (*treeCleanupJudgment, error) {
 						Required: []string{"source_id", "target_id", "reason"},
 					},
 				},
-				"abstracts": {
+				"new_abstracts": {
 					Type: "array",
 					Items: &airouter.SchemaProperty{
 						Type: "object",
@@ -608,88 +571,400 @@ func callCleanupLLM(prompt string) (*treeCleanupJudgment, error) {
 		},
 		Temperature: func() *float64 { f := 0.2; return &f }(),
 		Metadata: map[string]any{
-			"operation": "tag_hierarchy_cleanup",
+			"operation": "tree_review",
 		},
 	}
 
 	result, err := router.Chat(context.Background(), req)
 	if err != nil {
-		return nil, fmt.Errorf("LLM call failed: %w", err)
+		return nil, fmt.Errorf("tree review LLM call failed: %w", err)
 	}
 
 	content := jsonutil.SanitizeLLMJSON(result.Content)
-
-	var judgment treeCleanupJudgment
+	var judgment treeReviewJudgment
 	if err := json.Unmarshal([]byte(content), &judgment); err != nil {
-		return nil, fmt.Errorf("parse LLM response: %w", err)
+		return nil, fmt.Errorf("parse tree review response: %w", err)
 	}
 
-	logging.Infof("Hierarchy cleanup LLM judgment: %d merges, %d abstracts",
-		len(judgment.Merges), len(judgment.Abstracts))
+	logging.Infof("Tree review LLM judgment: %d merges, %d moves, %d new abstracts",
+		len(judgment.Merges), len(judgment.Moves), len(judgment.NewAbstracts))
 
 	return &judgment, nil
 }
 
-// validateAndExecuteMerge validates and executes a merge suggestion
-func validateAndExecuteMerge(merge treeCleanupMerge, tagMap map[uint]*TreeNode) error {
-	source, ok := tagMap[merge.SourceID]
+func buildTreeReviewPrompt(treeStr string, category string) string {
+	return fmt.Sprintf(`请审查以下 %s 类别的标签树，检查子标签的归属是否合理，并给出调整建议。
+
+%s
+
+规则:
+- 检查每个子标签是否真正属于其父标签
+- 地理/区域不同且无直接关联的标签，不应在同一抽象父下
+- 概念领域明显不同的标签，不应在同一父下
+- 树的顶级根节点（第一个 [id:...] ）不允许被 move 为其他节点的子节点，也不允许作为 merge 的 source
+- [id:0] 是虚拟根节点（合并审查用），不是真实标签，不允许在 moves/merges/new_abstracts 中引用 id=0
+- 非 root 的子节点可以 merge（source 合并进 target），合并后 source 的子节点会自动迁移到 target 下
+- to_parent=0 表示脱离成为独立根节点
+- 非零 to_parent 表示迁移到树中已有标签下
+- merges 用于合并树中语义重复的抽象标签，source 合并进 target（target 保留）
+- new_abstracts 用于建议创建新分组，children_ids 至少 2 个
+- 可以同时返回 moves、merges、new_abstracts，不必只选一种
+- 如果树结构合理无需调整，返回空的 moves、merges 和 new_abstracts
+
+返回 JSON:
+{
+  "moves": [
+    {"tag_id": 123, "to_parent": 0, "reason": "..."}
+  ],
+  "merges": [
+    {"source_id": 123, "target_id": 456, "reason": "..."}
+  ],
+  "new_abstracts": [
+    {"name": "新抽象名", "description": "描述", "children_ids": [123, 456], "reason": "..."}
+  ]
+}`, category, treeStr)
+}
+
+func validateTreeReviewMove(move treeReviewMove, tagMap map[uint]*TreeNode) error {
+	node, ok := tagMap[move.TagID]
 	if !ok {
-		return fmt.Errorf("source tag %d not found", merge.SourceID)
+		return fmt.Errorf("tag %d not found in tree", move.TagID)
 	}
-
-	target, ok := tagMap[merge.TargetID]
+	if node.Tag.Status != "active" {
+		return fmt.Errorf("tag %d is not active", move.TagID)
+	}
+	if move.ToParent == 0 {
+		return nil
+	}
+	if move.ToParent == move.TagID {
+		return fmt.Errorf("tag %d cannot be its own parent", move.TagID)
+	}
+	target, ok := tagMap[move.ToParent]
 	if !ok {
-		return fmt.Errorf("target tag %d not found", merge.TargetID)
+		return fmt.Errorf("target parent %d not found in tree", move.ToParent)
 	}
-
-	// Check same tag
-	if merge.SourceID == merge.TargetID {
-		return fmt.Errorf("source and target are the same tag")
+	if target.Tag.Status != "active" {
+		return fmt.Errorf("target parent %d is not active", move.ToParent)
 	}
-
-	// Check active status
-	if source.Tag.Status != "active" || target.Tag.Status != "active" {
-		return fmt.Errorf("one or both tags are not active")
+	if database.DB == nil {
+		return nil
 	}
-
-	// Check direct parent-child
-	if isDirectParentChild(source, target) {
-		return fmt.Errorf("direct parent-child relationship")
+	wouldCycle, err := wouldCreateCycle(database.DB, move.TagID, move.ToParent)
+	if err != nil {
+		return fmt.Errorf("check cycle for move %d -> %d: %w", move.TagID, move.ToParent, err)
 	}
-
-	// Check depth difference
-	depthDiff := abs(source.Depth - target.Depth)
-	if depthDiff < 2 {
-		return fmt.Errorf("depth difference < 2")
+	if wouldCycle {
+		return fmt.Errorf("move %d -> %d would create cycle", move.TagID, move.ToParent)
 	}
-
-	// Execute merge
-	logging.Infof("Hierarchy cleanup: merging tag %d (%s) into %d (%s), reason: %s",
-		merge.SourceID, source.Tag.Label, merge.TargetID, target.Tag.Label, merge.Reason)
-
-	if err := MergeTags(merge.SourceID, merge.TargetID); err != nil {
-		return fmt.Errorf("merge failed: %w", err)
+	childSubtreeDepth := getAbstractSubtreeDepth(database.DB, move.TagID)
+	parentAncestryDepth := getTagDepthFromRoot(move.ToParent)
+	if childSubtreeDepth+parentAncestryDepth+1 > maxHierarchyDepth {
+		return fmt.Errorf("move %d -> %d would exceed max depth %d", move.TagID, move.ToParent, maxHierarchyDepth)
 	}
-
 	return nil
 }
 
-func validateAndExecuteAbstract(abstract treeCleanupAbstract, tagMap map[uint]*TreeNode, category string) error {
-	if len(abstract.ChildrenIDs) < 2 {
-		return fmt.Errorf("abstract tag needs at least 2 children, got %d", len(abstract.ChildrenIDs))
+func validateTreeReviewMerge(merge treeReviewMerge, tagMap map[uint]*TreeNode) error {
+	sourceNode, ok := tagMap[merge.SourceID]
+	if !ok {
+		return fmt.Errorf("source tag %d not found in tree", merge.SourceID)
+	}
+	if sourceNode.Tag.Status != "active" {
+		return fmt.Errorf("source tag %d is not active (status=%s)", merge.SourceID, sourceNode.Tag.Status)
+	}
+	targetNode, ok := tagMap[merge.TargetID]
+	if !ok {
+		return fmt.Errorf("target tag %d not found in tree", merge.TargetID)
+	}
+	if targetNode.Tag.Status != "active" {
+		return fmt.Errorf("target tag %d is not active", merge.TargetID)
+	}
+	if merge.SourceID == merge.TargetID {
+		return fmt.Errorf("cannot merge tag %d into itself", merge.SourceID)
+	}
+	if isAncestorReviewNode(sourceNode, targetNode) || isAncestorReviewNode(targetNode, sourceNode) {
+		return fmt.Errorf("cannot merge ancestor and descendant tags %d -> %d", merge.SourceID, merge.TargetID)
+	}
+	if database.DB == nil {
+		return nil
+	}
+	wouldCycle, err := wouldCreateCycle(database.DB, merge.TargetID, merge.SourceID)
+	if err != nil {
+		return fmt.Errorf("check cycle for merge %d -> %d: %w", merge.SourceID, merge.TargetID, err)
+	}
+	if wouldCycle {
+		return fmt.Errorf("merge %d -> %d would create cycle (source is ancestor of target)", merge.SourceID, merge.TargetID)
+	}
+	childSubtreeDepth := getAbstractSubtreeDepth(database.DB, merge.SourceID)
+	parentAncestryDepth := getTagDepthFromRoot(merge.TargetID)
+	if childSubtreeDepth+parentAncestryDepth+1 > maxHierarchyDepth {
+		return fmt.Errorf("merge %d -> %d would exceed max depth %d after migration", merge.SourceID, merge.TargetID, maxHierarchyDepth)
+	}
+	if err := validateTreeReviewMergeRelationMigrations(database.DB, merge); err != nil {
+		return err
+	}
+	return nil
+}
+
+func isAncestorReviewNode(ancestor *TreeNode, node *TreeNode) bool {
+	for current := node.Parent; current != nil; current = current.Parent {
+		if current.Tag != nil && ancestor.Tag != nil && current.Tag.ID == ancestor.Tag.ID {
+			return true
+		}
+	}
+	return false
+}
+
+func validateTreeReviewMergeRelationMigrations(db *gorm.DB, merge treeReviewMerge) error {
+	var sourceParentRelations []models.TopicTagRelation
+	if err := db.Where("parent_id = ? AND relation_type = ?", merge.SourceID, "abstract").Find(&sourceParentRelations).Error; err != nil {
+		return fmt.Errorf("load source child relations for merge %d -> %d: %w", merge.SourceID, merge.TargetID, err)
+	}
+	for _, rel := range sourceParentRelations {
+		if rel.ChildID == merge.TargetID || hasAbstractRelation(db, merge.TargetID, rel.ChildID) {
+			continue
+		}
+		wouldCycle, err := wouldCreateCycle(db, rel.ChildID, merge.TargetID)
+		if err != nil {
+			return fmt.Errorf("check migrated child relation %d -> %d: %w", merge.TargetID, rel.ChildID, err)
+		}
+		if wouldCycle {
+			return fmt.Errorf("merge %d -> %d would create cycle by migrating child relation %d -> %d", merge.SourceID, merge.TargetID, merge.TargetID, rel.ChildID)
+		}
+		if err := checkDepthLimit(db, merge.TargetID, rel.ChildID); err != nil {
+			return fmt.Errorf("merge %d -> %d would exceed max depth for migrated child %d: %w", merge.SourceID, merge.TargetID, rel.ChildID, err)
+		}
 	}
 
-	for _, childID := range abstract.ChildrenIDs {
-		node, ok := tagMap[childID]
+	var sourceChildRelations []models.TopicTagRelation
+	if err := db.Where("child_id = ? AND relation_type = ?", merge.SourceID, "abstract").Find(&sourceChildRelations).Error; err != nil {
+		return fmt.Errorf("load source parent relations for merge %d -> %d: %w", merge.SourceID, merge.TargetID, err)
+	}
+	for _, rel := range sourceChildRelations {
+		if rel.ParentID == merge.TargetID || hasAbstractRelation(db, rel.ParentID, merge.TargetID) {
+			continue
+		}
+		wouldCycle, err := wouldCreateCycle(db, merge.TargetID, rel.ParentID)
+		if err != nil {
+			return fmt.Errorf("check migrated parent relation %d -> %d: %w", rel.ParentID, merge.TargetID, err)
+		}
+		if wouldCycle {
+			return fmt.Errorf("merge %d -> %d would create cycle by migrating parent relation %d -> %d", merge.SourceID, merge.TargetID, rel.ParentID, merge.TargetID)
+		}
+		if err := checkDepthLimit(db, rel.ParentID, merge.TargetID); err != nil {
+			return fmt.Errorf("merge %d -> %d would exceed max depth for migrated parent %d: %w", merge.SourceID, merge.TargetID, rel.ParentID, err)
+		}
+	}
+	return nil
+}
+
+func hasAbstractRelation(db *gorm.DB, parentID uint, childID uint) bool {
+	var count int64
+	db.Model(&models.TopicTagRelation{}).
+		Where("parent_id = ? AND child_id = ? AND relation_type = ?", parentID, childID, "abstract").
+		Count(&count)
+	return count > 0
+}
+
+func executeTreeReviewMove(move treeReviewMove) error {
+	if move.ToParent == 0 {
+		var oldParents []models.TopicTagRelation
+		if err := database.DB.Where(
+			"child_id = ? AND relation_type = ?", move.TagID, "abstract",
+		).Find(&oldParents).Error; err != nil {
+			return fmt.Errorf("load old parents for detach tag %d: %w", move.TagID, err)
+		}
+		result := database.DB.Where(
+			"child_id = ? AND relation_type = ?", move.TagID, "abstract",
+		).Delete(&models.TopicTagRelation{})
+		if result.Error != nil {
+			return fmt.Errorf("detach tag %d: %w", move.TagID, result.Error)
+		}
+		for _, old := range oldParents {
+			EnqueueAbstractTagUpdate(old.ParentID, "child_moved")
+		}
+		logging.Infof("Tree review: detached tag %d (reason: %s)", move.TagID, move.Reason)
+		return nil
+	}
+
+	var oldParents []models.TopicTagRelation
+	if err := database.DB.Where("child_id = ? AND relation_type = ?", move.TagID, "abstract").Find(&oldParents).Error; err != nil {
+		return fmt.Errorf("load old parents for tag %d: %w", move.TagID, err)
+	}
+
+	if err := database.DB.Transaction(func(tx *gorm.DB) error {
+		var parent, child models.TopicTag
+		if err := tx.First(&parent, move.ToParent).Error; err != nil {
+			return fmt.Errorf("load parent tag %d: %w", move.ToParent, err)
+		}
+		if err := tx.First(&child, move.TagID).Error; err != nil {
+			return fmt.Errorf("load child tag %d: %w", move.TagID, err)
+		}
+		if parent.Kind != "abstract" && parent.Source != "abstract" {
+			return fmt.Errorf("parent %d (%q) is not abstract", move.ToParent, parent.Label)
+		}
+		if child.Kind != "abstract" && child.Source != "abstract" {
+			return fmt.Errorf("child %d (%q) is not abstract", move.TagID, child.Label)
+		}
+		wouldCycle, err := wouldCreateCycle(tx, move.TagID, move.ToParent)
+		if err != nil {
+			return fmt.Errorf("cycle check: %w", err)
+		}
+		if wouldCycle {
+			return fmt.Errorf("would create cycle: parent=%d, child=%d", move.ToParent, move.TagID)
+		}
+		childSubtreeDepth := getAbstractSubtreeDepth(tx, move.TagID)
+		parentAncestryDepth := getTagDepthFromRootDB(tx, move.ToParent)
+		if childSubtreeDepth+parentAncestryDepth+1 > maxHierarchyDepth {
+			return fmt.Errorf("depth limit: placing subtree(depth=%d) under parent(ancestry=%d) would exceed max depth %d", childSubtreeDepth, parentAncestryDepth, maxHierarchyDepth)
+		}
+
+		var count int64
+		if err := tx.Model(&models.TopicTagRelation{}).
+			Where("parent_id = ? AND child_id = ? AND relation_type = ?", move.ToParent, move.TagID, "abstract").
+			Count(&count).Error; err != nil {
+			return fmt.Errorf("check existing relation: %w", err)
+		}
+		if count == 0 {
+			relation := models.TopicTagRelation{ParentID: move.ToParent, ChildID: move.TagID, RelationType: "abstract"}
+			if err := tx.Create(&relation).Error; err != nil {
+				return fmt.Errorf("create new parent relation: %w", err)
+			}
+		}
+
+		for _, old := range oldParents {
+			if old.ParentID == move.ToParent {
+				continue
+			}
+			if err := tx.Delete(&models.TopicTagRelation{}, old.ID).Error; err != nil {
+				return fmt.Errorf("delete old parent relation %d for tag %d: %w", old.ID, move.TagID, err)
+			}
+		}
+		return nil
+	}); err != nil {
+		logging.Warnf("Tree review: move %d -> %d failed, keeping old parents: %v", move.TagID, move.ToParent, err)
+		return err
+	}
+
+	for _, old := range oldParents {
+		if old.ParentID == move.ToParent {
+			continue
+		}
+		EnqueueAbstractTagUpdate(old.ParentID, "child_moved")
+	}
+	EnqueueAbstractTagUpdate(move.ToParent, "child_adopted")
+
+	logging.Infof("Tree review: moved tag %d under %d (reason: %s)", move.TagID, move.ToParent, move.Reason)
+	return nil
+}
+
+func validateAndCreateReviewAbstract(abs treeReviewAbstract, tagMap map[uint]*TreeNode, category string) (bool, error) {
+	if len(abs.ChildrenIDs) < 2 {
+		return false, fmt.Errorf("need at least 2 children, got %d", len(abs.ChildrenIDs))
+	}
+	for _, id := range abs.ChildrenIDs {
+		node, ok := tagMap[id]
 		if !ok {
-			return fmt.Errorf("child tag %d not found in tree", childID)
+			return false, fmt.Errorf("child %d not in tree", id)
 		}
 		if node.Tag.Status != "active" {
-			return fmt.Errorf("child tag %d is not active", childID)
+			return false, fmt.Errorf("child %d not active", id)
 		}
 	}
 
-	return createAbstractTagDirectly(abstract, tagMap, category)
+	var candidates []TagCandidate
+	for _, id := range abs.ChildrenIDs {
+		candidates = append(candidates, TagCandidate{Tag: tagMap[id].Tag, Similarity: 0.9})
+	}
+
+	if existing := findSimilarExistingAbstractFn(context.Background(), abs.Name, abs.Description, category, candidates); existing != nil {
+		logging.Infof("Tree review: reusing existing abstract %d (%q) instead of creating %q", existing.ID, existing.Label, abs.Name)
+		if err := attachChildrenToReviewAbstract(existing.ID, abs.ChildrenIDs); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+
+	slug := topictypes.Slugify(abs.Name)
+	if slug == "" {
+		return false, fmt.Errorf("generated empty slug for abstract name %q", abs.Name)
+	}
+	var existingBySlug models.TopicTag
+	if err := database.DB.Where("slug = ? AND category = ? AND status = ?", slug, category, "active").First(&existingBySlug).Error; err == nil {
+		if err := attachChildrenToReviewAbstract(existingBySlug.ID, abs.ChildrenIDs); err != nil {
+			return false, err
+		}
+		return false, nil
+	} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, fmt.Errorf("check existing abstract slug %q: %w", slug, err)
+	}
+	for _, id := range abs.ChildrenIDs {
+		if tagMap[id].Tag.Slug == slug {
+			logging.Infof("Tree review: abstract name %q (slug=%s) collides with candidate tag, skipping", abs.Name, slug)
+			return false, nil
+		}
+	}
+
+	treeCleanupAbs := treeCleanupAbstract{
+		Name:        abs.Name,
+		Description: abs.Description,
+		ChildrenIDs: abs.ChildrenIDs,
+		Reason:      abs.Reason,
+	}
+	return true, createAbstractTagDirectly(treeCleanupAbs, tagMap, category)
+}
+
+func attachChildrenToReviewAbstract(parentID uint, childIDs []uint) error {
+	for _, childID := range childIDs {
+		if childID == parentID {
+			continue
+		}
+		if err := createReviewAbstractRelation(parentID, childID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func createReviewAbstractRelation(parentID, childID uint) error {
+	return database.DB.Transaction(func(tx *gorm.DB) error {
+		var parent, child models.TopicTag
+		if err := tx.First(&parent, parentID).Error; err != nil {
+			return fmt.Errorf("load parent tag %d: %w", parentID, err)
+		}
+		if err := tx.First(&child, childID).Error; err != nil {
+			return fmt.Errorf("load child tag %d: %w", childID, err)
+		}
+		if parent.Kind != "abstract" && parent.Source != "abstract" {
+			return fmt.Errorf("parent %d (%q) is not abstract", parentID, parent.Label)
+		}
+		if child.Kind != "abstract" && child.Source != "abstract" {
+			return fmt.Errorf("child %d (%q) is not abstract", childID, child.Label)
+		}
+		wouldCycle, err := wouldCreateCycle(tx, childID, parentID)
+		if err != nil {
+			return fmt.Errorf("cycle check: %w", err)
+		}
+		if wouldCycle {
+			return fmt.Errorf("would create cycle: parent=%d, child=%d", parentID, childID)
+		}
+		childSubtreeDepth := getAbstractSubtreeDepth(tx, childID)
+		parentAncestryDepth := getTagDepthFromRootDB(tx, parentID)
+		if childSubtreeDepth+parentAncestryDepth+1 > maxHierarchyDepth {
+			return fmt.Errorf("depth limit: placing subtree(depth=%d) under parent(ancestry=%d) would exceed max depth %d", childSubtreeDepth, parentAncestryDepth, maxHierarchyDepth)
+		}
+		var count int64
+		if err := tx.Model(&models.TopicTagRelation{}).
+			Where("parent_id = ? AND child_id = ? AND relation_type = ?", parentID, childID, "abstract").
+			Count(&count).Error; err != nil {
+			return fmt.Errorf("check existing relation: %w", err)
+		}
+		if count > 0 {
+			return nil
+		}
+		relation := models.TopicTagRelation{ParentID: parentID, ChildID: childID, RelationType: "abstract", SimilarityScore: 0.9}
+		return tx.Create(&relation).Error
+	})
 }
 
 func createAbstractTagDirectly(abstract treeCleanupAbstract, tagMap map[uint]*TreeNode, category string) error {
@@ -760,6 +1035,14 @@ func createAbstractTagDirectly(abstract treeCleanupAbstract, tagMap map[uint]*Tr
 				continue
 			}
 
+			childSubtreeDepth := getAbstractSubtreeDepth(tx, node.Tag.ID)
+			parentAncestryDepth := getTagDepthFromRootDB(tx, abstractTag.ID)
+			if childSubtreeDepth+parentAncestryDepth+1 > maxHierarchyDepth {
+				logging.Warnf("Hierarchy cleanup: skipping depth overflow relation: abstract %d -> child %d (subtree=%d, ancestry=%d)",
+					abstractTag.ID, node.Tag.ID, childSubtreeDepth, parentAncestryDepth)
+				continue
+			}
+
 			var count int64
 			tx.Model(&models.TopicTagRelation{}).
 				Where("parent_id = ? AND child_id = ? AND relation_type = ?", abstractTag.ID, node.Tag.ID, "abstract").
@@ -792,6 +1075,11 @@ func createAbstractTagDirectly(abstract treeCleanupAbstract, tagMap map[uint]*Tr
 		abstractTag.ID, abstractTag.Label, len(abstractChildren))
 
 	go func(tagID uint, name, cat string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logging.Warnf("Hierarchy cleanup: async post-create task panic for abstract tag %d: %v", tagID, r)
+			}
+		}()
 		es := NewEmbeddingService()
 		tag := &models.TopicTag{ID: tagID, Label: name, Category: cat}
 		for _, embType := range []string{EmbeddingTypeIdentity, EmbeddingTypeSemantic} {
@@ -806,13 +1094,18 @@ func createAbstractTagDirectly(abstract treeCleanupAbstract, tagMap map[uint]*Tr
 			}
 		}
 		MatchAbstractTagHierarchy(context.Background(), tagID)
-		adoptNarrowerAbstractChildren(context.Background(), tagID)
+		EnqueueAdoptNarrower(tagID, "createAbstractTagDirectly")
 	}(abstractTag.ID, abstract.Name, category)
 
 	go EnqueueAbstractTagUpdate(abstractTag.ID, "new_child_added")
 
 	for _, child := range abstractChildren {
 		go func(childID uint) {
+			defer func() {
+				if r := recover(); r != nil {
+					logging.Warnf("Hierarchy cleanup: multi-parent conflict task panic for child tag %d: %v", childID, r)
+				}
+			}()
 			_, _ = resolveMultiParentConflict(childID)
 		}(child.ID)
 	}

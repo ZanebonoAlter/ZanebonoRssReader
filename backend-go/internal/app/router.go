@@ -167,6 +167,7 @@ func SetupRoutes(r *gin.Engine) {
 		topicanalysisdomain.RegisterEmbeddingQueueRoutes(api)
 		topicanalysisdomain.RegisterMergeReembeddingQueueRoutes(api)
 		topicanalysisdomain.RegisterAbstractTagUpdateQueueRoutes(api)
+		topicanalysisdomain.RegisterAdoptNarrowerQueueRoutes(api)
 		topicextractiondomain.RegisterTagQueueRoutes(api)
 		topicanalysisdomain.RegisterTagManagementRoutes(api)
 		topicanalysisdomain.RegisterWatchedTagsRoutes(api)

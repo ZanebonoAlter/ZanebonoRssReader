@@ -19,6 +19,8 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+const maxConcurrentHierarchyMatches = 3
+
 type AbstractTagUpdateQueueService struct {
 	db        *gorm.DB
 	embedding *EmbeddingService
@@ -27,6 +29,8 @@ type AbstractTagUpdateQueueService struct {
 	mu     sync.Mutex
 	closed bool
 	stopCh chan struct{}
+
+	hierarchySem chan struct{}
 }
 
 func NewAbstractTagUpdateQueueService(logger *zap.Logger) *AbstractTagUpdateQueueService {
@@ -34,10 +38,11 @@ func NewAbstractTagUpdateQueueService(logger *zap.Logger) *AbstractTagUpdateQueu
 		logger = zap.NewNop()
 	}
 	return &AbstractTagUpdateQueueService{
-		db:        database.DB,
-		embedding: NewEmbeddingService(),
-		logger:    logger,
-		stopCh:    make(chan struct{}),
+		db:           database.DB,
+		embedding:    NewEmbeddingService(),
+		logger:       logger,
+		stopCh:       make(chan struct{}),
+		hierarchySem: make(chan struct{}, maxConcurrentHierarchyMatches),
 	}
 }
 
@@ -219,17 +224,21 @@ func (s *AbstractTagUpdateQueueService) refreshAbstractTag(abstractTagID uint) e
 	if newLabel != "" && newLabel != tag.Label {
 		newSlug := topictypes.Slugify(newLabel)
 		if newSlug != "" && newSlug != tag.Slug {
-			var conflictCount int64
-			s.db.Model(&models.TopicTag{}).
-				Where("slug = ? AND id != ? AND status = ?", newSlug, abstractTagID, "active").
-				Count(&conflictCount)
-			if conflictCount == 0 {
-				updates["label"] = newLabel
-				updates["slug"] = newSlug
-				tag.Label = newLabel
-				tag.Slug = newSlug
+			if isAbstractRoot(s.db, abstractTagID) {
+				logging.Infof("Skipping label update for root abstract tag %d (%q): root labels are protected", abstractTagID, tag.Label)
 			} else {
-				logging.Warnf("Skipping label update for abstract tag %d: slug %q already in use", abstractTagID, newSlug)
+				var conflictCount int64
+				s.db.Model(&models.TopicTag{}).
+					Where("slug = ? AND id != ? AND status = ?", newSlug, abstractTagID, "active").
+					Count(&conflictCount)
+				if conflictCount == 0 {
+					updates["label"] = newLabel
+					updates["slug"] = newSlug
+					tag.Label = newLabel
+					tag.Slug = newSlug
+				} else {
+					logging.Warnf("Skipping label update for abstract tag %d: slug %q already in use", abstractTagID, newSlug)
+				}
 			}
 		}
 	}
@@ -274,9 +283,21 @@ func (s *AbstractTagUpdateQueueService) refreshAbstractTag(abstractTagID uint) e
 		return fmt.Errorf("save semantic embedding for abstract tag %d: %w", abstractTagID, err)
 	}
 
-	go MatchAbstractTagHierarchy(context.Background(), abstractTagID)
+	s.hierarchySem <- struct{}{}
+	go func() {
+		defer func() { <-s.hierarchySem }()
+		MatchAbstractTagHierarchy(context.Background(), abstractTagID)
+	}()
 
 	return nil
+}
+
+func isAbstractRoot(db *gorm.DB, tagID uint) bool {
+	var count int64
+	db.Model(&models.TopicTagRelation{}).
+		Where("child_id = ? AND relation_type = ?", tagID, "abstract").
+		Count(&count)
+	return count == 0
 }
 
 func (s *AbstractTagUpdateQueueService) loadChildren(abstractTagID uint) ([]models.TopicTag, error) {
@@ -306,8 +327,8 @@ func regenerateAbstractLabelAndDescription(ctx context.Context, abstractTag *mod
 	var childParts []string
 	for _, c := range children {
 		entry := fmt.Sprintf("- %q", c.Label)
-		if c.Description != "" {
-			entry += fmt.Sprintf(" (描述: %s)", truncateStr(c.Description, 100))
+		if contextInfo := formatTagPromptContext(&c); contextInfo != "" {
+			entry += fmt.Sprintf(" (%s)", truncateStr(contextInfo, 160))
 		}
 		childParts = append(childParts, entry)
 	}

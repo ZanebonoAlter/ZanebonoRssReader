@@ -1,0 +1,11 @@
+Total abstract relations: 462
+Total unique tag IDs: 490
+Active tags in tagMap: 490
+  62547: 国际军事冲突与恐怖袭击 (category=event)
+  63231: 美伊冲突升级与外交博弈事件链 (category=event)
+
+parentSet size: 118
+childSet size: 461
+Normal roots: 29
+  62547: parentSet=True, childSet=True
+  63231: parentSet=True, childSet=True

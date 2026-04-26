@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -13,6 +14,15 @@ import (
 )
 
 const maxResponseSnippet = 10000
+
+var defaultConcurrency = map[Capability]int{
+	CapabilitySummary:            2,
+	CapabilityArticleCompletion:  2,
+	CapabilityTopicTagging:       3,
+	CapabilityDigestPolish:       2,
+	CapabilityOpenNotebook:       2,
+	CapabilityEmbedding:          5,
+}
 
 func truncateSnippet(s string) string {
 	runes := []rune(s)
@@ -25,6 +35,7 @@ func truncateSnippet(s string) string {
 type Router struct {
 	store   *Store
 	clients map[string]ProviderClient
+	semMap  sync.Map // map[Capability]chan struct{}
 }
 
 func NewRouter() *Router {
@@ -55,6 +66,38 @@ func (r *Router) RegisterClient(providerType string, client ProviderClient) {
 	r.clients[providerType] = client
 }
 
+func (r *Router) resolveConcurrency(capability Capability, route *models.AIRoute) int {
+	if route != nil && route.MaxConcurrency > 0 {
+		return route.MaxConcurrency
+	}
+	if n, ok := defaultConcurrency[capability]; ok {
+		return n
+	}
+	return 3
+}
+
+func (r *Router) getSemaphore(capability Capability, route *models.AIRoute) chan struct{} {
+	n := r.resolveConcurrency(capability, route)
+	ch, _ := r.semMap.LoadOrStore(capability, make(chan struct{}, n))
+	return ch.(chan struct{})
+}
+
+func (r *Router) acquireSem(ctx context.Context, sem chan struct{}) error {
+	select {
+	case sem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (r *Router) releaseSem(sem chan struct{}) {
+	select {
+	case <-sem:
+	default:
+	}
+}
+
 func (r *Router) Chat(ctx context.Context, req ChatRequest) (result *ChatResult, err error) {
 	ctx, span := otel.Tracer("rss-reader-backend").Start(ctx, "Router.Chat")
 	defer span.End()
@@ -77,6 +120,12 @@ func (r *Router) Chat(ctx context.Context, req ChatRequest) (result *ChatResult,
 	if err != nil {
 		return nil, err
 	}
+
+	sem := r.getSemaphore(req.Capability, route)
+	if err := r.acquireSem(ctx, sem); err != nil {
+		return nil, err
+	}
+	defer r.releaseSem(sem)
 
 	var attemptErrors []error
 	for idx, provider := range providers {
@@ -140,6 +189,12 @@ func (r *Router) Embed(ctx context.Context, req EmbeddingRequest, capability Cap
 	if err != nil {
 		return nil, err
 	}
+
+	sem := r.getSemaphore(capability, route)
+	if err := r.acquireSem(ctx, sem); err != nil {
+		return nil, err
+	}
+	defer r.releaseSem(sem)
 
 	var attemptErrors []error
 	for idx, provider := range providers {

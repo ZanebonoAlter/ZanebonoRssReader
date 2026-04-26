@@ -2,8 +2,6 @@ package topicextraction
 
 import (
 	"strings"
-	"time"
-
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/platform/database"
 	"my-robot-backend/internal/platform/logging"
@@ -40,15 +38,25 @@ func BackfillMissingDescriptions() (int, error) {
 		results := batchGenerateTagDescriptions(batch)
 		for _, tag := range batch {
 			if desc, ok := results[tag.ID]; ok {
+				if desc == "" {
+					// Single-tag path already saved to DB + enqueued embedding
+					processed++
+					continue
+				}
 				if err := database.DB.Model(&models.TopicTag{}).Where("id = ?", tag.ID).
 					Update("description", desc).Error; err != nil {
 					logging.Warnf("description backfill: failed to update tag %d: %v", tag.ID, err)
 				} else {
 					processed++
+					// Re-embed after description update, matching single-tag path (tagger.go:690)
+					if qs := getEmbeddingQueueService(); qs != nil {
+						if err := qs.Enqueue(tag.ID); err != nil {
+							logging.Warnf("description backfill: failed to enqueue re-embedding for tag %d: %v", tag.ID, err)
+						}
+					}
 				}
 			}
 		}
-		time.Sleep(500 * time.Millisecond)
 	}
 
 	logging.Infof("description backfill: updated %d/%d tags", processed, len(tags))

@@ -12,12 +12,13 @@ import (
 	"github.com/robfig/cron/v3"
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/domain/topicanalysis"
+	"my-robot-backend/internal/domain/topicextraction"
 	"my-robot-backend/internal/platform/database"
 	"my-robot-backend/internal/platform/logging"
 	"my-robot-backend/internal/platform/tracing"
 )
 
-// TagHierarchyCleanupScheduler cleans up deep tag hierarchies by merging duplicates and creating abstract tags
+// TagHierarchyCleanupScheduler runs a 4-phase tag cleanup cycle: zombie cleanup, flat merge, hierarchy pruning, and tree review
 type TagHierarchyCleanupScheduler struct {
 	cron           *cron.Cron
 	checkInterval  time.Duration
@@ -28,19 +29,24 @@ type TagHierarchyCleanupScheduler struct {
 
 // TagHierarchyCleanupRunSummary records the results of a cleanup run
 type TagHierarchyCleanupRunSummary struct {
-	TriggerSource     string `json:"trigger_source"`
-	StartedAt         string `json:"started_at"`
-	FinishedAt        string `json:"finished_at"`
-	ZombieDeactivated int    `json:"zombie_deactivated"`
-	FlatMergesApplied int    `json:"flat_merges_applied"`
-	OrphanedRelations int    `json:"orphaned_relations"`
-	MultiParentFixed  int    `json:"multi_parent_fixed"`
-	EmptyAbstracts    int    `json:"empty_abstracts"`
-	Phase4Trees       int    `json:"phase4_trees"`
-	Phase4Merges      int    `json:"phase4_merges"`
-	Phase4Reparents   int    `json:"phase4_reparents"`
-	Errors            int    `json:"errors"`
-	Reason            string `json:"reason"`
+	TriggerSource          string `json:"trigger_source"`
+	StartedAt              string `json:"started_at"`
+	FinishedAt             string `json:"finished_at"`
+	ZombieDeactivated      int    `json:"zombie_deactivated"`
+	FlatMergesApplied      int    `json:"flat_merges_applied"`
+	OrphanedRelations      int    `json:"orphaned_relations"`
+	MultiParentFixed       int    `json:"multi_parent_fixed"`
+	EmptyAbstracts         int    `json:"empty_abstracts"`
+	AdoptNarrowerProcessed int    `json:"adopt_narrower_processed"`
+	AbstractUpdateProcessed int   `json:"abstract_update_processed"`
+	TreesReviewed          int    `json:"trees_reviewed"`
+	MergesApplied          int    `json:"merges_applied"`
+	MovesApplied           int    `json:"moves_applied"`
+	GroupsCreated          int    `json:"tree_groups_created"`
+	GroupsReused           int    `json:"tree_groups_reused"`
+	DescriptionBackfilled  int    `json:"description_backfilled"`
+	Errors                 int    `json:"errors"`
+	Reason                 string `json:"reason"`
 }
 
 // NewTagHierarchyCleanupScheduler creates a new scheduler
@@ -174,11 +180,11 @@ func (s *TagHierarchyCleanupScheduler) initSchedulerTask() {
 
 	if err := database.DB.Where("name = ?", "tag_hierarchy_cleanup").First(&task).Error; err == nil {
 		updates := map[string]interface{}{
-			"description":         "Auto-cleanup deep tag hierarchies by merging duplicates and creating abstract tags",
+			"description":         "7-phase tag cleanup: zombie, flat merge, hierarchy pruning, adopt narrower, abstract update, tree review, description backfill",
 			"check_interval":      int(s.checkInterval.Seconds()),
 			"next_execution_time": &nextRun,
 		}
-		if task.Status == "" || task.Status == "success" || task.Status == "failed" {
+		if task.Status == "" || task.Status == "success" || task.Status == "failed" || task.Status == "running" {
 			updates["status"] = "idle"
 		}
 		database.DB.Model(&task).Updates(updates)
@@ -187,7 +193,7 @@ func (s *TagHierarchyCleanupScheduler) initSchedulerTask() {
 
 	task = models.SchedulerTask{
 		Name:              "tag_hierarchy_cleanup",
-		Description:       "Auto-cleanup deep tag hierarchies by merging duplicates and creating abstract tags",
+		Description:       "7-phase tag cleanup: zombie, flat merge, hierarchy pruning, adopt narrower, abstract update, tree review, description backfill",
 		CheckInterval:     int(s.checkInterval.Seconds()),
 		Status:            "idle",
 		NextExecutionTime: &nextRun,
@@ -224,7 +230,7 @@ func (s *TagHierarchyCleanupScheduler) runCleanupCycle(triggerSource string) {
 	}
 	s.updateSchedulerStatus("running", "", nil, nil)
 
-	logging.Infoln("Starting tag cleanup cycle (4-phase)")
+	logging.Infoln("Starting tag cleanup cycle (7-phase)")
 
 	// Phase 1: Zombie tag cleanup (no LLM)
 	zombieCount, err := topicanalysis.CleanupZombieTags(topicanalysis.ZombieTagCriteria{
@@ -240,6 +246,7 @@ func (s *TagHierarchyCleanupScheduler) runCleanupCycle(triggerSource string) {
 	}
 
 	// Phase 2: Flat merge (LLM-assisted)
+	phaseStart := time.Now()
 	for _, category := range []string{"event", "keyword"} {
 		merged, mergeErrors, err := topicanalysis.ExecuteFlatMerge(category, 50)
 		if err != nil {
@@ -254,6 +261,7 @@ func (s *TagHierarchyCleanupScheduler) runCleanupCycle(triggerSource string) {
 		}
 		logging.Infof("Phase 2 (%s): %d merges applied", category, merged)
 	}
+	logging.Infof("Phase 2 completed in %v (processed %d)", time.Since(phaseStart), summary.FlatMergesApplied)
 
 	// Phase 3: Hierarchy pruning
 	orphaned, err := topicanalysis.CleanupOrphanedRelations()
@@ -284,27 +292,67 @@ func (s *TagHierarchyCleanupScheduler) runCleanupCycle(triggerSource string) {
 	summary.EmptyAbstracts = emptied
 	logging.Infof("Phase 3: deactivated %d empty abstract tags", emptied)
 
-	// Phase 4: Cross-layer dedup + depth compression
-	for _, category := range []string{"event", "keyword"} {
-		phase4Result, phase4Err := topicanalysis.ExecuteHierarchyCleanupPhase4(category)
-		if phase4Err != nil {
-			logging.Errorf("Phase 4 cleanup failed for %s: %v", category, phase4Err)
+	// Phase 4: Adopt narrower queue processing (before tree review)
+	phaseStart = time.Now()
+	adopted, err := topicanalysis.ProcessPendingAdoptNarrowerTasks()
+	if err != nil {
+		logging.Errorf("Phase 4 adopt narrower failed: %v", err)
+		summary.Errors++
+	} else {
+		summary.AdoptNarrowerProcessed = adopted
+		logging.Infof("Phase 4: processed %d adopt-narrower tasks", adopted)
+	}
+	logging.Infof("Phase 4 completed in %v (processed %d)", time.Since(phaseStart), adopted)
+
+	// Phase 5: Abstract tag update queue processing (label/description refresh)
+	phaseStart = time.Now()
+	updated, err := topicanalysis.ProcessPendingAbstractTagUpdateTasks()
+	if err != nil {
+		logging.Errorf("Phase 5 abstract tag update failed: %v", err)
+		summary.Errors++
+	} else {
+		summary.AbstractUpdateProcessed = updated
+		logging.Infof("Phase 5: processed %d abstract-tag-update tasks", updated)
+	}
+	logging.Infof("Phase 5 completed in %v (processed %d)", time.Since(phaseStart), updated)
+
+	// Phase 6: Tree review
+	phaseStart = time.Now()
+	for _, category := range []string{"event", "keyword", "person"} {
+		reviewResult, reviewErr := topicanalysis.ReviewHierarchyTrees(category, 14)
+		if reviewErr != nil {
+			logging.Errorf("Phase 6 tree review failed for %s: %v", category, reviewErr)
 			summary.Errors++
 			continue
 		}
-		summary.Phase4Trees += phase4Result.TreesProcessed
-		summary.Phase4Merges += phase4Result.MergesApplied
-		summary.Phase4Reparents += phase4Result.ReparentsApplied
-		summary.Errors += len(phase4Result.Errors)
-		for _, errMsg := range phase4Result.Errors {
-			logging.Warnf("Phase 4 %s: %s", category, errMsg)
+		summary.TreesReviewed += reviewResult.TreesReviewed
+		summary.MergesApplied += reviewResult.MergesApplied
+		summary.MovesApplied += reviewResult.MovesApplied
+		summary.GroupsCreated += reviewResult.GroupsCreated
+		summary.GroupsReused += reviewResult.GroupsReused
+		summary.Errors += len(reviewResult.Errors)
+		for _, errMsg := range reviewResult.Errors {
+			logging.Warnf("Phase 6 %s: %s", category, errMsg)
 		}
-		logging.Infof("Phase 4 (%s): processed %d trees, %d merges, %d reparentings", category, phase4Result.TreesProcessed, phase4Result.MergesApplied, phase4Result.ReparentsApplied)
+		logging.Infof("Phase 6 (%s): reviewed %d trees, %d merges, %d moves, %d groups created, %d groups reused", category, reviewResult.TreesReviewed, reviewResult.MergesApplied, reviewResult.MovesApplied, reviewResult.GroupsCreated, reviewResult.GroupsReused)
 	}
+	logging.Infof("Phase 6 completed in %v (processed %d)", time.Since(phaseStart), summary.TreesReviewed)
+
+	// Phase 7: Description backfill for tags missing descriptions
+	phaseStart = time.Now()
+	backfilled, err := topicextraction.BackfillMissingDescriptions()
+	if err != nil {
+		logging.Errorf("Phase 7 description backfill failed: %v", err)
+		summary.Errors++
+	} else {
+		summary.DescriptionBackfilled = backfilled
+		logging.Infof("Phase 7: triggered description backfill for %d tags", backfilled)
+	}
+	logging.Infof("Phase 7 completed in %v (processed %d)", time.Since(phaseStart), backfilled)
 
 	summary.FinishedAt = time.Now().Format(time.RFC3339)
-	summary.Reason = fmt.Sprintf("zombie=%d, flat_merges=%d, orphaned_rels=%d, multi_parent=%d, empty_abstracts=%d, phase4_trees=%d, phase4_merges=%d, phase4_reparents=%d",
-		summary.ZombieDeactivated, summary.FlatMergesApplied, summary.OrphanedRelations, summary.MultiParentFixed, summary.EmptyAbstracts, summary.Phase4Trees, summary.Phase4Merges, summary.Phase4Reparents)
+	summary.Reason = fmt.Sprintf("zombie=%d, flat_merges=%d, orphaned_rels=%d, multi_parent=%d, empty_abstracts=%d, adopt_narrower=%d, abstract_update=%d, trees_reviewed=%d, merges=%d, moves=%d, groups_created=%d, groups_reused=%d, desc_backfilled=%d",
+		summary.ZombieDeactivated, summary.FlatMergesApplied, summary.OrphanedRelations, summary.MultiParentFixed, summary.EmptyAbstracts, summary.AdoptNarrowerProcessed, summary.AbstractUpdateProcessed, summary.TreesReviewed, summary.MergesApplied, summary.MovesApplied, summary.GroupsCreated, summary.GroupsReused, summary.DescriptionBackfilled)
 
 	logging.Infof("Tag cleanup cycle completed: %s", summary.Reason)
 
@@ -362,7 +410,7 @@ func (s *TagHierarchyCleanupScheduler) updateSchedulerStatus(status, lastError s
 
 	task = models.SchedulerTask{
 		Name:              "tag_hierarchy_cleanup",
-		Description:       "Auto-cleanup deep tag hierarchies by merging duplicates and creating abstract tags",
+		Description:       "7-phase tag cleanup: zombie, flat merge, hierarchy pruning, adopt narrower, abstract update, tree review, description backfill",
 		CheckInterval:     int(s.checkInterval.Seconds()),
 		Status:            status,
 		LastError:         lastError,

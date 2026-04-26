@@ -1,6 +1,6 @@
 # 打标签流程全景说明
 
-> **版本**：基于 `backend-go/internal/domain/topicanalysis/` 与 `topicextraction/tagger.go` 实际代码整理  
+> **版本**：基于 `backend-go/internal/domain/topicanalysis/` 与 `topicextraction/tagger.go` 实际代码整理（2026-04 更新：清理调度器扩展为 7 阶段）  
 > **阅读建议**：先看主流程图，再按需深入各子章节
 
 ---
@@ -34,14 +34,12 @@ flowchart TD
     
     REUSE --> END1([返回标签])
     CREATE --> END1
-    LLM --> RESULT{判断结果<br/>可部分覆盖候选}
+    LLM --> RESULT{判断结果<br/>merges/abstracts/none}
     RESULT -->|merge| MERGE[合并到目标<br/>目标相似度须≥0.85]
     RESULT -->|abstract| ABSTRACT[创建抽象父标签]
-    RESULT -->|merge+abstract| BOTH["MERGE后继续ABSTRACT<br/>其余候选视为none"]
     RESULT -->|none| CREATE
     MERGE --> END1
     ABSTRACT --> END1
-    BOTH --> END1
 ```
 
 ---
@@ -61,7 +59,7 @@ flowchart TD
 ## 3. LLM 批量判断：`callLLMForTagJudgment`
 
 **输入**：候选列表(≤8个/批)、新标签名、分类、叙事上下文  
-**输出**：`tagJudgment` (merge / abstract / merge+abstract / none)，部分覆盖即可，未覆盖的候选视为独立
+**输出**：`tagJudgment` (merges / abstracts / none 三个数组，每个候选必须且只能出现在一个数组中)
 
 ```mermaid
 sequenceDiagram
@@ -71,11 +69,15 @@ sequenceDiagram
     Caller->>Caller: 检查候选最高相似度<br/>≥0.85? 正常merge提示 : 加CAUTION警告
     Caller->>LLM: 构建Prompt(merge始终可用+含分类专属规则)
     Note right of Caller: person/event/keyword<br/>规则各不相同
-    LLM-->>Caller: JSON响应<br/>{merge?: {...}, abstract?: {...}}
-    Note right of Caller: merge和abstract可同时返回<br/>未覆盖的候选隐式为none<br/>例：候选A merge + BCD abstract + EF none
-    Caller->>Caller: parseTagJudgmentResponse<br/>过滤无效候选、去重、截断
+    LLM-->>Caller: JSON响应<br/>{merges: [...], abstracts: [...], none: [...]}
+    Note right of Caller: 三个数组都必须返回<br/>每个候选只能出现在一个数组中<br/>例：候选A merge + BCD abstract + EF none
+    Caller->>Caller: parseTagJudgmentResponse<br/>过滤无效候选、去重、交叉验证、截断
     Caller->>Caller: ensureNewLabelCandidateInAbstract<br/>确保newLabel在abstract.children中
 ```
+
+### Prompt 标签上下文
+
+所有标签判断类 prompt 统一通过 `formatTagPromptContext` 补充标签上下文：普通字段包含 `description`，人物标签还会追加 `metadata` 中的 `country / organization / role / domains`。这些结构化人物属性会进入 merge、abstract、收养更窄标签、多父冲突、层级判断、跨层去重、树审查、flat merge 与抽象标签刷新等 prompt，避免只靠姓名和 embedding 相似度误判不同人物为同一人。
 
 ### 判断规则速查
 
@@ -111,7 +113,7 @@ flowchart LR
 **异步副作用**：
 - 生成 `identity` + `semantic` embedding
 - 触发 `MatchAbstractTagHierarchy`
-- `adoptNarrowerAbstractChildren` 收养更窄的抽象标签
+- `EnqueueAdoptNarrower` 入队收养更窄标签（异步批量处理，见第10节）
 - 入队 `abstract_tag_update_queues`
 
 ---
@@ -147,14 +149,27 @@ flowchart TD
     C -->|否| F
     
     F --> G[FindSimilarAbstractTags]
-    G --> H{相似度区间}
-    H -->|≥0.97| I[mergeOrLinkSimilarAbstract<br/>merge/parent_A/parent_B]
-    H -->|0.78~0.97| J{深度检查}
-    J -->|childDepth+parentDepth+1 > 4| K[aiJudgeAlternativePlacement<br/>建议替代父标签]
-    J -->|≤4| L[aiJudgeAbstractHierarchy<br/>AI判断谁更宽泛]
-    L --> M[linkAbstractParentChild]
-    H -->|<0.78| N[无操作]
+    G --> SPLIT[按相似度分桶]
+    SPLIT -->|≥0.97| I[mergeOrLinkSimilarAbstract<br/>逐个处理]
+    I --> MERGED{已merge?}
+    MERGED -->|是| END1([结束])
+    MERGED -->|否| CHECK{中相似候选<br/>0.78~0.97?}
+    SPLIT -->|0.78~0.97| COLLECT[收集到mediumSimilars]
+    SPLIT -->|<0.78| SKIP[跳过]
+    COLLECT --> CHECK
+
+    CHECK -->|0个| END2([结束])
+    CHECK -->|1个| SINGLE[judgeAbstractRelationship<br/>单候选逐个判断]
+    CHECK -->|多个| BATCH[batchJudgeAbstractRelationships<br/>批量LLM判断]
+    
+    BATCH --> BATCHRESULT{批量结果}
+    BATCHRESULT --> MERGE_FIRST[优先处理merge]
+    MERGE_FIRST -->|有merge| END3([结束])
+    MERGE_FIRST -->|无merge| PARENT[处理parent_A/parent_B]
+    SINGLE --> SINGLEPROC[processAbstractRelationJudgment]
 ```
+
+**LLM 调用优化**：中等相似度候选（0.78~0.97）不再逐个调用 LLM，而是打包一次性 `batchJudgeAbstractRelationships`，仅在单候选时 fallback 到 `judgeAbstractRelationship`。
 
 ---
 
@@ -165,7 +180,7 @@ flowchart TD
 | 检查项 | 失败行为 |
 |--------|----------|
 | 循环检测 | 返回错误 |
-| 深度限制(≤4层) | 触发AI建议替代位置 |
+| 深度限制(≤4条边，常量 `maxHierarchyDepth`) | 触发AI建议替代位置 |
 | 已存在关系 | 静默跳过 |
 
 ### `resolveMultiParentConflict`
@@ -211,10 +226,13 @@ flowchart TD
 - `tag_merged` — 合并到抽象标签
 - `adopted_narrower_children` — 收养更窄子标签
 
+**批量处理**：除了实时队列 worker（3s 轮询）外，`TagHierarchyCleanupScheduler` Phase 5 会批量处理所有 pending 的刷新任务，确保整树审查前抽象标签的 label/description 已更新。
+
 ```mermaid
 flowchart TD
     TRIGGER([子标签变化触发入队]) --> |去重: 已有pending/processing则跳过| PENDING[pending]
     PENDING --> |worker 3s轮询 FOR UPDATE锁定| PROCESSING[processing]
+    PENDING --> |Phase 5 批量处理| PROCESSING
     PROCESSING --> |LLM重生成label+desc → 检查slug冲突 → 生成identity+semantic embedding → 触发MatchAbstractTagHierarchy| COMPLETED[completed]
     PROCESSING --> |异常| FAILED[failed]
     FAILED --> |retry_count++ 可手动重试| DONE1([*])
@@ -226,11 +244,79 @@ flowchart TD
     style FAILED fill:#ffebee,stroke:#c62828
 ```
 
-> 核心文件: `abstract_tag_update_queue.go`
+> 核心文件: `abstract_tag_update_queue.go`、`queue_batch_processor.go`
 
 ---
 
-## 10. 核心方法速查
+## 10. 收养更窄标签队列：`adopt_narrower_queues`
+
+**目的**：新抽象标签创建后，异步查找语义更窄的已有抽象标签并收养为子标签。通过队列去重 + 批量 LLM 判断，大幅减少 AI 调用次数。
+
+**触发来源**：
+
+| 来源 | source 标记 | 文件 |
+|------|------------|------|
+| `processAbstractJudgment` 新建抽象 | `processAbstractJudgment` | `abstract_tag_service.go` |
+| `processAbstractJudgment` 复用已有抽象 | `processAbstractJudgment_reuse` | `abstract_tag_service.go` |
+| `createAbstractTagDirectly` Phase 6 整树审查 | `createAbstractTagDirectly` | `hierarchy_cleanup.go` |
+
+**批量处理**：除了实时队列 worker（5s 轮询）外，`TagHierarchyCleanupScheduler` Phase 4 会批量处理所有 pending 的收养任务，确保整树审查前窄概念标签已挂到对应抽象节点下。
+
+### 队列流程
+
+```mermaid
+flowchart TD
+    TRIGGER([抽象标签创建/复用]) --> EQ[EnqueueAdoptNarrower<br/>去重: 已有pending/processing则跳过]
+    EQ --> PENDING[pending]
+    PENDING --> |worker 5s轮询 FOR UPDATE锁定| PROCESSING[processing]
+    PENDING --> |Phase 4 批量处理| PROCESSING
+    PROCESSING --> EXEC[adoptNarrowerAbstractChildren]
+    
+    EXEC --> SEARCH[embedding相似搜索<br/>找同类抽象标签]
+    SEARCH --> FILTER{过滤<br/>similarity ≥ LowSimilarity?}
+    FILTER -->|无候选| COMPLETED[completed]
+    FILTER -->|有候选eligible| BATCH
+    
+    BATCH[batchJudgeNarrowerConcepts<br/>批量LLM判断]
+    Note right of BATCH | 旧: 逐候选调LLM → N次调用<br/>新: 打包一次LLM → 1次调用
+    BATCH --> LINK[reparentOrLinkAbstractChild<br/>逐个建立父子关系]
+    LINK --> |有收养| ENQUEUE2[入队抽象标签刷新<br/>adopted_narrower_children]
+    LINK --> COMPLETED
+    ENQUEUE2 --> COMPLETED
+    
+    PROCESSING --> |异常/panic| FAILED[failed]
+    FAILED --> |retry_count++ 可手动重试| DONE1([*])
+    COMPLETED --> DONE2([*])
+
+    style PENDING fill:#fff3e0,stroke:#e65100
+    style PROCESSING fill:#e3f2fd,stroke:#1565c0
+    style COMPLETED fill:#e8f5e9,stroke:#2e7d32
+    style FAILED fill:#ffebee,stroke:#c62828
+    style BATCH fill:#e8eaf6,stroke:#283593
+```
+
+### 批量判断：`batchJudgeNarrowerConcepts`
+
+将一个抽象标签的所有候选打包给 LLM，一次返回哪些是更窄概念：
+
+```
+输入: parentTag, candidates []TagCandidate (已过滤 LowSimilarity)
+输出: narrowerIDs []uint (被判定为更窄的候选Tag ID列表)
+
+特殊: 单候选时走 aiJudgeNarrowerConcept 逐个判断，保持向后兼容
+      多候选时构建列表式 prompt，LLM 返回 {narrower_ids: [1,3,...]}
+```
+
+**LLM 调用优化**：假设 1 个抽象标签有 5 个候选 → 旧方案 5 次 `adopt_narrower_abstract` → 新方案 1 次 `adopt_narrower_abstract_batch`。
+
+**去重保护**：PostgreSQL 部分唯一索引 `idx_adopt_narrower_active ON adopt_narrower_queues (abstract_tag_id) WHERE status IN ('pending', 'processing')`，同一标签不会有多个活跃任务。
+
+> 核心文件: `adopt_narrower_queue.go`、`adopt_narrower_queue_handler.go`、`queue_batch_processor.go`  
+> API: `GET /api/embedding/adopt-narrower/status`、`POST /api/embedding/adopt-narrower/retry`
+
+---
+
+## 11. 核心方法速查
 
 | 方法 | 文件 | 输入 | 输出 | 一句话职责 |
 |------|------|------|------|-----------|
@@ -245,16 +331,46 @@ flowchart TD
 | `ExpandEventCandidatesByArticleCoTags` | `topicanalysis/cotag_expansion.go` | articleID/abstractTagID | []TagCandidate | **co-tag扩展** |
 | `refreshAbstractTag` | `topicanalysis/abstract_tag_update_queue.go` | abstractTagID | error | **刷新label/desc/emb** |
 | `MergeTags` | `topicanalysis/embedding.go` | sourceID, targetID | error | **合并标签** |
+| `adoptNarrowerAbstractChildren` | `topicanalysis/abstract_tag_hierarchy.go` | abstractTagID | error | **批量收养更窄标签** |
+| `batchJudgeNarrowerConcepts` | `topicanalysis/abstract_tag_judgment.go` | parentTag, candidates | []uint | **批量LLM判断更窄** |
+| `batchJudgeAbstractRelationships` | `topicanalysis/abstract_tag_judgment.go` | tagA, candidates | []batchAbstractRelationResult | **批量LLM判断抽象关系** |
+| `EnqueueAdoptNarrower` | `topicanalysis/adopt_narrower_queue.go` | abstractTagID, source | - | **入队收养任务** |
+| `ProcessPendingAdoptNarrowerTasks` | `topicanalysis/queue_batch_processor.go` | - | int | **批量处理pending收养任务** |
+| `ProcessPendingAbstractTagUpdateTasks` | `topicanalysis/queue_batch_processor.go` | - | int | **批量处理pending抽象标签刷新** |
+| `BackfillMissingDescriptions` | `topicextraction/description_backfill.go` | - | int | **批量补全缺失description** |
+| `formatTagPromptContext` | `topicanalysis/tag_prompt_context.go` | TopicTag | string | **统一生成LLM标签上下文，人物包含结构化属性** |
 
 ---
 
-## 11. 标签清理机制
+## 12. 标签清理机制
 
 ### 实时清理：`cleanupOrphanedTags`
 
 文章重新打标签后，旧标签若不再被任何 `article_topic_tags` 或 `ai_summary_topics` 引用，直接删除（含 embedding）。`article_tagger.go:369`
 
-### 定时调度：`TagHierarchyCleanupScheduler`（4 阶段）
+### 深度限制：`maxHierarchyDepth`
+
+深度限制统一使用常量 `maxHierarchyDepth = 4`（4条边，即5个节点）。所有创建抽象父子关系的路径都必须调用 `checkDepthLimit(tx, parentID, childID)` 检查，该函数计算 `getAbstractSubtreeDepth(child) + getTagDepthFromRoot(parent) + 1` 是否超过限制。
+
+涉及的代码路径：
+- `linkAbstractParentChild` — `abstract_tag_hierarchy.go`
+- `reparentOrLinkAbstractChild` — `abstract_tag_judgment.go`
+- `processAbstractJudgment` — `abstract_tag_service.go`
+- `validateTreeReviewMove` / `executeTreeReviewMove` — `hierarchy_cleanup.go`
+- `validateAndCreateReviewAbstract` — `hierarchy_cleanup.go`
+- `createAbstractTagDirectly` — `hierarchy_cleanup.go`
+
+### 数据清理工具：`cmd/fix-hierarchy-depth`
+
+用于修复历史超限数据。从每个标签出发沿 parent 方向 DFS，如果任何路径超过4条边，断开该标签的所有父关系使其成为根节点。
+
+```bash
+cd backend-go
+go run ./cmd/fix-hierarchy-depth --dry-run        # 预览
+go run ./cmd/fix-hierarchy-depth --dry-run=false   # 执行
+```
+
+### 定时调度：`TagHierarchyCleanupScheduler`（7 阶段）
 
 ```mermaid
 flowchart TD
@@ -264,17 +380,29 @@ flowchart TD
     P3 --> P3A[删除孤儿关系]
     P3A --> P3B[解决多父冲突]
     P3B --> P3C[清理空抽象节点]
-    P3C --> P4[Phase 4: 深度压缩]
-    P4 --> P4A{深度≥3的标签树}
-    P4A --> |跨层去重merge| P4B[LLM判断merge]
-    P4A --> |深度>4| P4C[AI建议重新挂载]
-    P4B --> END1([完成])
-    P4C --> END1
+    P3C --> P4[Phase 4: 收养更窄标签]
+    P4 --> |批量处理pending队列| P5[Phase 5: 抽象标签刷新]
+    P5 --> |批量处理pending队列<br/>LLM重生成label+desc| P6[Phase 6: 整树审查]
+    P6 --> P6A{含14天内新关系?}
+    P6A -->|否| P7[Phase 7: Description回填]
+    P6A -->|是| P6B[构建 minDepth=2 标签树]
+    P6B --> P6C{节点数>50?}
+    P6C -->|是| P6D[root+直接子节点审查<br/>并递归拆分子树]
+    P6C -->|否| P6E[整树序列化审查]
+    P6D --> P6F[LLM返回 merges/moves/new_abstracts]
+    P6E --> P6F
+    P6F --> P6G[校验环/深度/active/目标存在]
+    P6G --> P6H[安全迁移或复用/创建分组]
+    P6H --> P7
+    P7 --> |批量补全缺失description| END1([完成])
 
     style P1 fill:#fff3e0
     style P2 fill:#e3f2fd
     style P3 fill:#f3e5f5
-    style P4 fill:#e8f5e9
+    style P4 fill:#e8eaf6
+    style P5 fill:#e8eaf6
+    style P6 fill:#e8f5e9
+    style P7 fill:#fff8e1
 ```
 
 | 阶段 | 文件 | LLM? | 条件 |
@@ -282,27 +410,51 @@ flowchart TD
 | Phase 1 Zombie | `tag_cleanup.go` `CleanupZombieTags` | 否 | age>7d + 无关系 + 无文章/摘要引用 |
 | Phase 2 Flat Merge | `tag_cleanup.go` `ExecuteFlatMerge` | 是 | 同类 abstract 标签去重 |
 | Phase 3 层级修剪 | `tag_cleanup.go` 三个函数 | 否 | 孤儿关系 / 多父 / 空抽象 |
-| Phase 4 深度压缩 | `hierarchy_cleanup.go` `ExecuteHierarchyCleanupPhase4` | 是 | 深度≥3 的标签树 |
+| Phase 4 收养更窄标签 | `queue_batch_processor.go` `ProcessPendingAdoptNarrowerTasks` | 是 | 处理 pending 的 adopt_narrower 队列任务 |
+| Phase 5 抽象标签刷新 | `queue_batch_processor.go` `ProcessPendingAbstractTagUpdateTasks` | 是 | 处理 pending 的 abstract_tag_update 队列任务 |
+| Phase 6 整树审查 | `hierarchy_cleanup.go` `ReviewHierarchyTrees` | 是 | 含 windowDays 内新关系的 minDepth=2 标签树 |
+| Phase 7 Description回填 | `description_backfill.go` `BackfillMissingDescriptions` | 是 | active 标签中 description 为空的，从关联文章获取上下文生成 |
 
-核心文件: `jobs/tag_hierarchy_cleanup.go`（调度器）、`topicanalysis/tag_cleanup.go`（Phase 1-3）、`topicanalysis/hierarchy_cleanup.go`（Phase 4）
+核心文件: `jobs/tag_hierarchy_cleanup.go`（调度器）、`topicanalysis/tag_cleanup.go`（Phase 1-3）、`topicanalysis/queue_batch_processor.go`（Phase 4-5）、`topicanalysis/hierarchy_cleanup.go`（Phase 6）、`topicextraction/description_backfill.go`（Phase 7）
+
+Phase 4-5 在整树审查前执行：先收养更窄标签挂到对应抽象节点下，再刷新抽象标签的 label/description，确保审查时层级结构已经是最新的。
+
+Phase 6 不再只做"深度压缩"。它会把 `event`、`keyword`、`person` 三类抽象树序列化给 LLM 审查子标签归属是否合理。LLM 可同时返回三种操作：
+
+- `merges`：合并树中语义重复的抽象标签（source 合并进 target），消除因多父关系导致的同一标签在树中重复出现。树的根节点不允许作为 merge source。
+- `moves`：把标签迁移到树中已有父节点，或 `to_parent=0` 让其脱离为根节点。树的顶级根节点不允许被 move 为其他节点的子节点。
+- `new_abstracts`：建议新的分组；系统先复用已有相似抽象或 slug 命中抽象，找不到才创建新抽象。
+
+执行顺序：先 merges（消除重复节点）→ 再 moves（调整归属）→ 最后 new_abstracts（新建分组）。
+
+执行 merge/move 前会校验标签存在、active、目标在当前审查树中、不会成环、深度不超过 4。非 detach 迁移在事务中先创建新父关系，再删除旧父关系；失败时保留旧关系，避免产生孤儿标签。大树会先审查 `root + 直接子节点`，再递归审查子树，防止第一层错挂漏审。
+
+此外，根抽象标签的 label 受保护：`refreshAbstractTag` 不会修改根节点的 label 和 slug，仅允许更新 description。
+
+Phase 7 批量查询 active 标签中 description 为空的记录，通过关联的 `article_topic_tags` 获取最近 3 篇文章标题作为上下文，调用 LLM 生成 description。每次最多处理 50 个标签，间隔 500ms。
 
 ---
 
 ## 总结
 
 ```
-新标签 → Embedding三级匹配 → 有候选则LLM判断(merge/abstract/merge+abstract/none)
+新标签 → Embedding三级匹配 → 有候选则LLM判断(merges/abstracts/none三个必填数组)
                                      ↓
                           event标签额外走co-tag扩展补充候选
                                      ↓
-               LLM输出可同时包含merge和abstract: 高相似候选merge，其余候选abstract
+               LLM输出三个数组: merges(同概念merge) + abstracts(相关但不同) + none(无关/独立)
                                      ↓
                merge: processJudgment验证目标相似度≥0.85 → 合并
                abstract: 查重 → 子标签数保护 → 事务落库
+               none: 未放入任何数组的候选自动补入none
                                      ↓
-               异步: 生成embedding → 层级匹配 → 收养更窄标签 → 入队刷新
+               异步: 生成embedding → 层级匹配 → EnqueueAdoptNarrower入队 → 入队刷新
                                      ↓
-               层级匹配: C+D保护(跨层去重+深度限制) → AI判断父子
+               定时清理(7阶段): zombie → flat merge → 层级修剪 → 收养窄标签 → 抽象刷新 → 整树审查 → description回填
+                                     ↓
+               收养队列: 5s轮询 + Phase4批量处理 → batchJudgeNarrowerConcepts批量LLM → 收养更窄标签
+                                     ↓
+               层级匹配: 跨层去重 + 深度限制 → AI判断父子
                                      ↓
                链接成功: 解决多父冲突 → embedding动态管理 → 父标签入队刷新
 ```

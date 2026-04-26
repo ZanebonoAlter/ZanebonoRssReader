@@ -55,9 +55,14 @@ func TestRunCleanupCycleSummaryOmitsLegacyTreeFields(t *testing.T) {
 		t.Fatalf("unmarshal summary: %v", err)
 	}
 
-	for _, key := range []string{"trees_processed", "tags_processed", "merges_applied", "abstracts_created"} {
+	for _, key := range []string{"trees_processed", "tags_processed", "abstracts_created", "phase4_trees", "phase4_merges", "phase4_reparents"} {
 		if _, exists := payload[key]; exists {
 			t.Fatalf("summary should not contain legacy key %q: %#v", key, payload)
+		}
+	}
+	for _, key := range []string{"trees_reviewed", "merges_applied", "moves_applied", "tree_groups_created", "tree_groups_reused"} {
+		if _, exists := payload[key]; !exists {
+			t.Fatalf("summary missing expected key %q: %#v", key, payload)
 		}
 	}
 	if _, exists := payload["flat_merges_applied"]; !exists {

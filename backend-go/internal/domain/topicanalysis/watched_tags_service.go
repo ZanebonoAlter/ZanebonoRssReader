@@ -134,8 +134,7 @@ func ListWatchedTags(db *gorm.DB) ([]WatchedTagInfo, error) {
 	return result, nil
 }
 
-// GetWatchedTagIDsExpanded returns all watched tag IDs plus child tag IDs of abstract watched tags.
-// This is used to query articles matching any watched tag or its children.
+// GetWatchedTagIDsExpanded returns all watched tag IDs plus recursively expanded child tag IDs.
 func GetWatchedTagIDsExpanded(db *gorm.DB) ([]uint, []uint, error) {
 	var watchedTags []models.TopicTag
 	if err := db.Where("is_watched = ? AND status = ?", true, "active").
@@ -149,22 +148,30 @@ func GetWatchedTagIDsExpanded(db *gorm.DB) ([]uint, []uint, error) {
 	}
 
 	watchedIDs := make([]uint, len(watchedTags))
-	watchedIDSet := make(map[uint]bool)
 	for i, t := range watchedTags {
 		watchedIDs[i] = t.ID
-		watchedIDSet[t.ID] = true
 	}
 
-	// Find child IDs for abstract watched tags
-	var relations []models.TopicTagRelation
-	if err := db.Where("parent_id IN ?", watchedIDs).Find(&relations).Error; err != nil {
-		return nil, nil, fmt.Errorf("query tag relations for expansion: %w", err)
+	allChildIDs := make([]uint, 0)
+	visited := make(map[uint]bool)
+	queue := make([]uint, len(watchedIDs))
+	copy(queue, watchedIDs)
+
+	for len(queue) > 0 {
+		var relations []models.TopicTagRelation
+		if err := db.Where("parent_id IN ?", queue).Find(&relations).Error; err != nil {
+			return nil, nil, fmt.Errorf("query tag relations for expansion: %w", err)
+		}
+
+		queue = queue[:0]
+		for _, rel := range relations {
+			if !visited[rel.ChildID] {
+				visited[rel.ChildID] = true
+				allChildIDs = append(allChildIDs, rel.ChildID)
+				queue = append(queue, rel.ChildID)
+			}
+		}
 	}
 
-	childTagIDs := make([]uint, 0)
-	for _, rel := range relations {
-		childTagIDs = append(childTagIDs, rel.ChildID)
-	}
-
-	return watchedIDs, childTagIDs, nil
+	return watchedIDs, allChildIDs, nil
 }

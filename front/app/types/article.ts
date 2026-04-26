@@ -50,6 +50,7 @@ export interface ArticleFilters {
   start_date?: string
   end_date?: string
   watched_tag_ids?: string
+  watched_tags?: boolean
   sort_by?: 'relevance' | 'date'
 }
 

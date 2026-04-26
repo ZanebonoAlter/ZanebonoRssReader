@@ -91,12 +91,13 @@ func quoteCategories(categories []string) string {
 }
 
 type FlatTagInfo struct {
-	ID           uint   `json:"id"`
-	Label        string `json:"label"`
-	Description  string `json:"description"`
-	Source       string `json:"source"`
-	ArticleCount int    `json:"article_count"`
-	ChildCount   int    `json:"child_count"`
+	ID           uint               `json:"id"`
+	Label        string             `json:"label"`
+	Description  string             `json:"description"`
+	Source       string             `json:"source"`
+	ArticleCount int                `json:"article_count"`
+	ChildCount   int                `json:"child_count"`
+	Metadata     models.MetadataMap `json:"person_attrs,omitempty"`
 }
 
 type flatMergeJudgment struct {
@@ -149,6 +150,7 @@ func CollectFlatTagBatch(category string, batchSize int) ([]FlatTagInfo, error) 
 			Source:       t.Source,
 			ArticleCount: articleCounts[t.ID],
 			ChildCount:   childCounts[t.ID],
+			Metadata:     t.Metadata,
 		}
 	}
 	return result, nil
@@ -323,21 +325,51 @@ func CleanupMultiParentConflicts() (int, []string, error) {
 		return 0, nil, nil
 	}
 
-	totalResolved := 0
-	var errors []string
+	// 收集所有冲突详情
+	var multiConflicts []multiParentConflict
 	for _, c := range conflicts {
-		resolved, err := resolveMultiParentConflict(c.ChildID)
-		if err != nil {
-			errors = append(errors, fmt.Sprintf("child %d: %v", c.ChildID, err))
+		var relations []models.TopicTagRelation
+		if err := database.DB.Where("child_id = ? AND relation_type = ?", c.ChildID, "abstract").
+			Preload("Parent").Find(&relations).Error; err != nil {
 			continue
 		}
-		if resolved {
-			totalResolved++
+		var parents []parentWithInfo
+		var childTag models.TopicTag
+		for _, r := range relations {
+			if r.Parent != nil {
+				parents = append(parents, parentWithInfo{RelationID: r.ID, Parent: r.Parent})
+			}
 		}
+		if len(parents) <= 1 {
+			continue
+		}
+		if err := database.DB.First(&childTag, c.ChildID).Error; err != nil {
+			continue
+		}
+		multiConflicts = append(multiConflicts, multiParentConflict{
+			ChildID: c.ChildID,
+			Parents: parents,
+			Child:   &childTag,
+		})
+	}
+
+	// 批量解决（每批最多 10 个冲突）
+	batchSize := 10
+	totalResolved := 0
+	var allErrors []string
+	for i := 0; i < len(multiConflicts); i += batchSize {
+		end := i + batchSize
+		if end > len(multiConflicts) {
+			end = len(multiConflicts)
+		}
+		batch := multiConflicts[i:end]
+		resolved, errors := batchResolveMultiParentConflicts(batch)
+		totalResolved += resolved
+		allErrors = append(allErrors, errors...)
 	}
 
 	logging.Infof("CleanupMultiParentConflicts: resolved %d conflicts", totalResolved)
-	return totalResolved, errors, nil
+	return totalResolved, allErrors, nil
 }
 
 func CleanupEmptyAbstractNodes() (int, error) {

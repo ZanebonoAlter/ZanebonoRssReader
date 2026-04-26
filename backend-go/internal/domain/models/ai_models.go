@@ -161,6 +161,7 @@ type AIRoute struct {
 	Priority       int               `gorm:"not null;default:100;index" json:"priority"`
 	Strategy       string            `gorm:"size:50;not null;default:ordered_failover" json:"strategy"`
 	Description    string            `gorm:"size:255" json:"description"`
+	MaxConcurrency int               `gorm:"not null;default:0" json:"max_concurrency"` // 0 means use default per capability
 	RouteProviders []AIRouteProvider `gorm:"foreignKey:RouteID" json:"route_providers,omitempty"`
 	CreatedAt      time.Time         `json:"created_at"`
 	UpdatedAt      time.Time         `json:"updated_at"`

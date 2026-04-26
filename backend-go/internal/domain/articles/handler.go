@@ -1,7 +1,6 @@
 package articles
 
 import (
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -9,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 	"my-robot-backend/internal/domain/models"
+	"my-robot-backend/internal/domain/topicanalysis"
 	"my-robot-backend/internal/domain/topicextraction"
 	"my-robot-backend/internal/platform/database"
 )
@@ -72,6 +72,7 @@ func GetArticles(c *gin.Context) {
 	startDate := c.Query("start_date")
 	endDate := c.Query("end_date")
 	watchedTagIDsStr := c.Query("watched_tag_ids")
+	watchedTagsMode := c.Query("watched_tags") == "true"
 	sortBy := c.Query("sort_by")
 
 	maxPerPage := 100
@@ -79,11 +80,22 @@ func GetArticles(c *gin.Context) {
 		perPage = maxPerPage
 	}
 
-	// Parse and expand watched tag IDs (include child tags of abstract tags)
 	var expandedTagIDs []uint
 	var childTagIDs []uint
 	usingWatchedTags := false
-	if watchedTagIDsStr != "" {
+
+	if watchedTagsMode {
+		watchedIDs, children, err := topicanalysis.GetWatchedTagIDsExpanded(database.DB)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "failed to expand watched tags"})
+			return
+		}
+		if len(watchedIDs) > 0 {
+			expandedTagIDs = append(watchedIDs, children...)
+			childTagIDs = children
+			usingWatchedTags = true
+		}
+	} else if watchedTagIDsStr != "" {
 		parsedIDs, children, err := parseAndExpandWatchedTagIDs(watchedTagIDsStr)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid watched_tag_ids format"})
@@ -106,10 +118,11 @@ func GetArticles(c *gin.Context) {
 	}
 
 	// Select fields — vary by watched tags mode and sort
+	articleCols := "articles.id, articles.feed_id, articles.title, articles.description, articles.content, articles.link, articles.image_url, articles.pub_date, articles.author, articles.read, articles.favorite, articles.summary_status, articles.summary_generated_at, articles.summary_processing_started_at, articles.feed_summary_id, articles.feed_summary_generated_at, articles.completion_attempts, articles.completion_error, articles.ai_content_summary, articles.firecrawl_status, articles.firecrawl_error, articles.firecrawl_content, articles.firecrawl_crawled_at, articles.created_at"
 	if usingWatchedTags && sortBy == "relevance" {
 		query = query.
-			Select("articles.*, feeds.category_id AS category_id, (SELECT COUNT(*) FROM article_topic_tags att_cnt WHERE att_cnt.article_id = articles.id) AS tag_count, (SELECT COALESCE(SUM(CASE WHEN att2.topic_tag_id IN ? THEN 2.0 ELSE 1.0 END), 0) FROM article_topic_tags att2 WHERE att2.article_id = articles.id AND att2.topic_tag_id IN ?) AS relevance_score", childTagIDs, expandedTagIDs).
-			Group("articles.id")
+			Select(articleCols+", feeds.category_id AS category_id, (SELECT COUNT(*) FROM article_topic_tags att_cnt WHERE att_cnt.article_id = articles.id) AS tag_count, (SELECT COALESCE(SUM(CASE WHEN att2.topic_tag_id IN ? THEN 2.0 ELSE 1.0 END), 0) FROM article_topic_tags att2 WHERE att2.article_id = articles.id AND att2.topic_tag_id IN ?) AS relevance_score", childTagIDs, expandedTagIDs).
+			Group("articles.id, feeds.category_id")
 	} else if usingWatchedTags {
 		query = query.
 			Select("DISTINCT articles.*, feeds.category_id AS category_id, (SELECT COUNT(*) FROM article_topic_tags att_cnt WHERE att_cnt.article_id = articles.id) AS tag_count")
@@ -233,7 +246,7 @@ func GetArticles(c *gin.Context) {
 	})
 }
 
-// parseAndExpandWatchedTagIDs parses comma-separated tag IDs and expands abstract tag children.
+// parseAndExpandWatchedTagIDs parses comma-separated tag IDs and recursively expands abstract tag children.
 func parseAndExpandWatchedTagIDs(raw string) ([]uint, []uint, error) {
 	parts := strings.Split(raw, ",")
 	ids := make([]uint, 0, len(parts))
@@ -254,18 +267,34 @@ func parseAndExpandWatchedTagIDs(raw string) ([]uint, []uint, error) {
 		return nil, nil, nil
 	}
 
-	// Find child tags of abstract watched tags (parents in topic_tag_relations)
-	var relations []models.TopicTagRelation
-	if err := database.DB.Where("parent_id IN ?", ids).Find(&relations).Error; err != nil {
-		return nil, nil, fmt.Errorf("query tag relations for expansion: %w", err)
-	}
-
-	childIDs := make([]uint, 0)
-	for _, rel := range relations {
-		childIDs = append(childIDs, rel.ChildID)
-	}
-
+	childIDs := collectDescendantTagIDs(ids)
 	return ids, childIDs, nil
+}
+
+// collectDescendantTagIDs recursively collects all descendant tag IDs for the given parent IDs.
+func collectDescendantTagIDs(parentIDs []uint) []uint {
+	allChildren := make([]uint, 0)
+	visited := make(map[uint]bool)
+	queue := make([]uint, len(parentIDs))
+	copy(queue, parentIDs)
+
+	for len(queue) > 0 {
+		var relations []models.TopicTagRelation
+		if err := database.DB.Where("parent_id IN ?", queue).Find(&relations).Error; err != nil {
+			break
+		}
+
+		queue = queue[:0]
+		for _, rel := range relations {
+			if !visited[rel.ChildID] {
+				visited[rel.ChildID] = true
+				allChildren = append(allChildren, rel.ChildID)
+				queue = append(queue, rel.ChildID)
+			}
+		}
+	}
+
+	return allChildren
 }
 
 func GetArticle(c *gin.Context) {

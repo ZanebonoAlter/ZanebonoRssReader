@@ -73,27 +73,43 @@ func getAllTreeTagIDs(tagID uint) []uint {
 	return ids
 }
 
-func getTagDepthFromRoot(tagID uint) int {
-	if database.DB == nil || tagID == 0 {
+func getTagDepthFromRootDB(db *gorm.DB, tagID uint) int {
+	if db == nil || tagID == 0 {
 		return 0
 	}
 
-	depth := 0
-	current := tagID
-	visited := map[uint]bool{}
-	for current != 0 && !visited[current] {
-		visited[current] = true
-
-		var relation models.TopicTagRelation
-		err := database.DB.Where("child_id = ? AND relation_type = ?", current, "abstract").Order("id ASC").First(&relation).Error
-		if err != nil {
-			break
-		}
-		depth++
-		current = relation.ParentID
+	type node struct {
+		id    uint
+		depth int
 	}
+	maxDepth := 0
+	visited := map[uint]bool{tagID: true}
+	queue := []node{{id: tagID, depth: 0}}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
 
-	return depth
+		var relations []models.TopicTagRelation
+		if err := db.Where("child_id = ? AND relation_type = ?", current.id, "abstract").Find(&relations).Error; err != nil {
+			continue
+		}
+		for _, r := range relations {
+			if visited[r.ParentID] {
+				continue
+			}
+			visited[r.ParentID] = true
+			d := current.depth + 1
+			if d > maxDepth {
+				maxDepth = d
+			}
+			queue = append(queue, node{id: r.ParentID, depth: d})
+		}
+	}
+	return maxDepth
+}
+
+func getTagDepthFromRoot(tagID uint) int {
+	return getTagDepthFromRootDB(database.DB, tagID)
 }
 
 func loadTagPathLabels(tagID uint, maxDepth int) []string {

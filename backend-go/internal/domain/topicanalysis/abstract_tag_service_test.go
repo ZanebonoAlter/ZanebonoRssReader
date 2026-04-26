@@ -76,19 +76,44 @@ func TestBuildCandidateList(t *testing.T) {
 	}
 }
 
+func TestBuildCandidateListIncludesPersonMetadata(t *testing.T) {
+	candidates := []TagCandidate{
+		{Tag: &models.TopicTag{
+			Label:       "李宗伟",
+			Category:    "person",
+			Source:      "llm",
+			Description: "马来西亚羽毛球运动员",
+			Metadata: models.MetadataMap{
+				"country":      "马来西亚",
+				"organization": "马来西亚国家羽毛球队",
+				"role":         "羽毛球运动员",
+				"domains":      []any{"羽毛球", "体育"},
+			},
+		}, Similarity: 0.91},
+	}
+
+	result := buildCandidateList(candidates)
+
+	for _, want := range []string{"属性", "国籍/地区: 马来西亚", "组织: 马来西亚国家羽毛球队", "身份/职务: 羽毛球运动员", "领域: 羽毛球, 体育"} {
+		if !strings.Contains(result, want) {
+			t.Fatalf("candidate list missing %q in:\n%s", want, result)
+		}
+	}
+}
+
 func TestBuildTagJudgmentPromptRejectsParentChildMerge(t *testing.T) {
 	candidates := []TagCandidate{
 		{Tag: &models.TopicTag{Label: "Anthropic 协议", Slug: "anthropic-xie-yi"}, Similarity: 0.70},
 		{Tag: &models.TopicTag{Label: "DeepSeek V4 Pro", Slug: "deepseek-v4-pro"}, Similarity: 0.67},
 	}
 
-	prompt := buildTagJudgmentPrompt(candidates, "Anthropic", "keyword", "", true)
+	prompt := buildTagJudgmentPrompt(candidates, "Anthropic", "keyword", "", true, 0)
 
 	for _, want := range []string{
 		"parent/child",
 		"organization/product",
 		"ecosystem",
-		"MUST use abstract or null",
+		"MUST use abstracts or none",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("expected prompt to contain %q, got:\n%s", want, prompt)
@@ -102,10 +127,10 @@ func TestBuildTagJudgmentPromptWeakCandidatesKeepsMergeButCautions(t *testing.T)
 		{Tag: &models.TopicTag{Label: "DeepSeek V4 Pro", Slug: "deepseek-v4-pro"}, Similarity: 0.67},
 	}
 
-	prompt := buildTagJudgmentPrompt(candidates, "Claude", "keyword", "", false)
+	prompt := buildTagJudgmentPrompt(candidates, "Claude", "keyword", "", false, 0)
 
-	if !strings.Contains(prompt, `"merge"`) {
-		t.Fatalf("prompt should still expose merge option for weak candidates, got:\n%s", prompt)
+	if !strings.Contains(prompt, `"merges"`) {
+		t.Fatalf("prompt should still expose merges option for weak candidates, got:\n%s", prompt)
 	}
 	if !strings.Contains(prompt, "CAUTION") {
 		t.Fatalf("expected prompt to contain merge caution for low-similarity candidates, got:\n%s", prompt)
@@ -114,12 +139,122 @@ func TestBuildTagJudgmentPromptWeakCandidatesKeepsMergeButCautions(t *testing.T)
 
 func TestBuildTagJudgmentSchemaAlwaysIncludesMerge(t *testing.T) {
 	schema := buildTagJudgmentSchema()
-	if _, ok := schema.Properties["merge"]; !ok {
-		t.Fatalf("schema should always expose merge: %#v", schema.Properties)
+	if _, ok := schema.Properties["merges"]; !ok {
+		t.Fatalf("schema should always expose merges: %#v", schema.Properties)
 	}
-	if _, ok := schema.Properties["abstract"]; !ok {
-		t.Fatalf("schema should always expose abstract")
+	if _, ok := schema.Properties["abstracts"]; !ok {
+		t.Fatalf("schema should always expose abstracts")
 	}
+	if _, ok := schema.Properties["none"]; !ok {
+		t.Fatalf("schema should always expose none")
+	}
+	// All three should be required
+	for _, field := range []string{"merges", "abstracts", "none"} {
+		found := false
+		for _, r := range schema.Required {
+			if r == field {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("schema should require %q, got required: %v", field, schema.Required)
+		}
+	}
+}
+
+func TestNormalizeAbstractRelationJudgment(t *testing.T) {
+	t.Run("rejects nil judgment", func(t *testing.T) {
+		if err := normalizeAbstractRelationJudgment(nil); err == nil {
+			t.Fatal("expected nil judgment error")
+		}
+	})
+
+	t.Run("accepts merge target", func(t *testing.T) {
+		judgment := &abstractRelationJudgment{Action: "merge", Target: "A", Reason: "same"}
+		if err := normalizeAbstractRelationJudgment(judgment); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if judgment.Target != "A" {
+			t.Fatalf("normalized judgment = %+v", judgment)
+		}
+	})
+
+	t.Run("normalizes action", func(t *testing.T) {
+		judgment := &abstractRelationJudgment{Action: " merge ", Target: "B"}
+		if err := normalizeAbstractRelationJudgment(judgment); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if judgment.Action != "merge" {
+			t.Fatalf("normalized judgment = %+v", judgment)
+		}
+	})
+
+	t.Run("normalizes action case variants", func(t *testing.T) {
+		cases := []struct {
+			action string
+			want   string
+		}{
+			{action: " MERGE ", want: "merge"},
+			{action: " Parent_B ", want: "parent_B"},
+		}
+		for _, tc := range cases {
+			judgment := &abstractRelationJudgment{Action: tc.action, Target: "B"}
+			if err := normalizeAbstractRelationJudgment(judgment); err != nil {
+				t.Fatalf("unexpected error for %q: %v", tc.action, err)
+			}
+			if judgment.Action != tc.want {
+				t.Fatalf("normalized judgment = %+v, want action %q", judgment, tc.want)
+			}
+		}
+	})
+
+	t.Run("normalizes target and reason", func(t *testing.T) {
+		judgment := &abstractRelationJudgment{Action: "parent_A", Target: " b ", Reason: " same "}
+		if err := normalizeAbstractRelationJudgment(judgment); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if judgment.Target != "B" || judgment.Reason != "same" {
+			t.Fatalf("normalized judgment = %+v", judgment)
+		}
+	})
+
+	t.Run("accepts skip action", func(t *testing.T) {
+		judgment := &abstractRelationJudgment{Action: "skip", Target: "A"}
+		if err := normalizeAbstractRelationJudgment(judgment); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("accepts parent B action", func(t *testing.T) {
+		judgment := &abstractRelationJudgment{Action: "parent_B", Target: "B"}
+		if err := normalizeAbstractRelationJudgment(judgment); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("clears invalid non merge target", func(t *testing.T) {
+		judgment := &abstractRelationJudgment{Action: "skip", Target: "C"}
+		if err := normalizeAbstractRelationJudgment(judgment); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if judgment.Target != "" {
+			t.Fatalf("normalized judgment = %+v", judgment)
+		}
+	})
+
+	t.Run("rejects invalid merge target", func(t *testing.T) {
+		judgment := &abstractRelationJudgment{Action: "merge", Target: "C"}
+		if err := normalizeAbstractRelationJudgment(judgment); err == nil {
+			t.Fatal("expected invalid target error")
+		}
+	})
+
+	t.Run("rejects unknown action", func(t *testing.T) {
+		judgment := &abstractRelationJudgment{Action: "link", Target: "A"}
+		if err := normalizeAbstractRelationJudgment(judgment); err == nil {
+			t.Fatal("expected invalid action error")
+		}
+	})
 }
 
 func TestParseTagJudgmentResponse(t *testing.T) {
@@ -130,63 +265,134 @@ func TestParseTagJudgmentResponse(t *testing.T) {
 	}
 
 	t.Run("merge only", func(t *testing.T) {
-		input := `{"merge":{"target":"GPT-4","label":"GPT-4","children":["ChatGPT"],"reason":"same concept"},"abstract":null}`
+		input := `{"merges":[{"target":"GPT-4","label":"GPT-4","children":["ChatGPT"],"reason":"same concept"}],"abstracts":[],"none":["AI研究"]}`
 		result, err := parseTagJudgmentResponse(input, candidates)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if result.Merge == nil {
-			t.Fatal("expected merge judgment")
+		if len(result.Merges) != 1 {
+			t.Fatalf("expected 1 merge, got %d", len(result.Merges))
 		}
-		if result.Merge.Target != "GPT-4" {
-			t.Errorf("expected target 'GPT-4', got %q", result.Merge.Target)
+		if result.Merges[0].Target != "GPT-4" {
+			t.Errorf("expected target 'GPT-4', got %q", result.Merges[0].Target)
 		}
-		if len(result.Merge.Children) != 1 || result.Merge.Children[0] != "ChatGPT" {
-			t.Errorf("expected children [ChatGPT], got %v", result.Merge.Children)
+		if len(result.Merges[0].Children) != 1 || result.Merges[0].Children[0] != "ChatGPT" {
+			t.Errorf("expected children [ChatGPT], got %v", result.Merges[0].Children)
 		}
-		if result.Abstract != nil {
-			t.Error("expected no abstract judgment")
+		if len(result.Abstracts) != 0 {
+			t.Error("expected no abstracts")
+		}
+		if len(result.None) != 1 || result.None[0] != "AI研究" {
+			t.Errorf("expected none [AI研究], got %v", result.None)
 		}
 	})
 
-	t.Run("both merge and abstract", func(t *testing.T) {
-		input := `{"merge":{"target":"GPT-4","label":"GPT-4","children":[],"reason":""},"abstract":{"name":"AI技术","description":"AI技术相关","children":["AI研究"],"reason":""}}`
+	t.Run("both merges and abstracts", func(t *testing.T) {
+		input := `{"merges":[{"target":"GPT-4","label":"GPT-4","children":[],"reason":""}],"abstracts":[{"name":"AI技术","description":"AI技术相关","children":["AI研究"],"reason":""}],"none":[]}`
 		result, err := parseTagJudgmentResponse(input, candidates)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if result.Merge == nil {
-			t.Fatal("expected merge judgment")
+		if len(result.Merges) != 1 {
+			t.Fatalf("expected 1 merge, got %d", len(result.Merges))
 		}
-		if result.Abstract == nil {
-			t.Fatal("expected abstract judgment")
+		if len(result.Abstracts) != 1 {
+			t.Fatalf("expected 1 abstract, got %d", len(result.Abstracts))
 		}
-		if result.Abstract.Name != "AI技术" {
-			t.Errorf("expected abstract name 'AI技术', got %q", result.Abstract.Name)
+		if result.Abstracts[0].Name != "AI技术" {
+			t.Errorf("expected abstract name 'AI技术', got %q", result.Abstracts[0].Name)
 		}
 	})
 
-	t.Run("dedup across merge and abstract children", func(t *testing.T) {
-		input := `{"merge":{"target":"GPT-4","label":"GPT-4","children":["ChatGPT"],"reason":""},"abstract":{"name":"AI","description":"AI","children":["ChatGPT","AI研究"],"reason":""}}`
+	t.Run("dedup across merges and abstracts children", func(t *testing.T) {
+		input := `{"merges":[{"target":"GPT-4","label":"GPT-4","children":["ChatGPT"],"reason":""}],"abstracts":[{"name":"AI","description":"AI","children":["ChatGPT","AI研究"],"reason":""}],"none":[]}`
 		result, err := parseTagJudgmentResponse(input, candidates)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		for _, ch := range result.Abstract.Children {
-			if ch == "ChatGPT" {
-				t.Error("ChatGPT should not appear in abstract children (already in merge children)")
+		for _, abstract := range result.Abstracts {
+			for _, ch := range abstract.Children {
+				if ch == "ChatGPT" {
+					t.Error("ChatGPT should not appear in abstract children (already in merge children)")
+				}
+			}
+		}
+	})
+
+	t.Run("none auto-fills unplaced candidates", func(t *testing.T) {
+		input := `{"merges":[],"abstracts":[],"none":[]}`
+		result, err := parseTagJudgmentResponse(input, candidates)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		// All candidates should be auto-placed into none since none were placed
+		if len(result.None) != 3 {
+			t.Fatalf("expected 3 auto-filled none candidates, got %d: %v", len(result.None), result.None)
+		}
+	})
+
+	t.Run("none cross-validates against merges and abstracts", func(t *testing.T) {
+		input := `{"merges":[{"target":"GPT-4","label":"GPT-4","children":["ChatGPT"],"reason":""}],"abstracts":[],"none":["GPT-4","ChatGPT"]}`
+		result, err := parseTagJudgmentResponse(input, candidates)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		// GPT-4 and ChatGPT are already in merges, so none should not include them
+		for _, label := range result.None {
+			if label == "GPT-4" || label == "ChatGPT" {
+				t.Errorf("candidate %q should not be in none (already in merges)", label)
 			}
 		}
 	})
 
 	t.Run("invalid children filtered", func(t *testing.T) {
-		input := `{"merge":{"target":"GPT-4","label":"GPT-4","children":["NonExistent"],"reason":""}}`
+		input := `{"merges":[{"target":"GPT-4","label":"GPT-4","children":["NonExistent"],"reason":""}],"abstracts":[]}`
 		result, err := parseTagJudgmentResponse(input, candidates)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if len(result.Merge.Children) != 0 {
-			t.Errorf("non-existent children should be filtered, got %v", result.Merge.Children)
+		if len(result.Merges) != 1 {
+			t.Fatalf("expected 1 merge, got %d", len(result.Merges))
+		}
+		if len(result.Merges[0].Children) != 0 {
+			t.Errorf("non-existent children should be filtered, got %v", result.Merges[0].Children)
+		}
+	})
+
+	t.Run("backward compatibility with single merge/abstract", func(t *testing.T) {
+		input := `{"merge":{"target":"GPT-4","label":"GPT-4","children":["ChatGPT"],"reason":"same concept"},"abstract":{"name":"AI技术","description":"AI技术相关","children":["AI研究"],"reason":""}}`
+		result, err := parseTagJudgmentResponse(input, candidates)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result.Merges) != 1 {
+			t.Fatalf("expected 1 merge from legacy format, got %d", len(result.Merges))
+		}
+		if result.Merges[0].Target != "GPT-4" {
+			t.Errorf("expected target 'GPT-4', got %q", result.Merges[0].Target)
+		}
+		if len(result.Abstracts) != 1 {
+			t.Fatalf("expected 1 abstract from legacy format, got %d", len(result.Abstracts))
+		}
+		if result.Abstracts[0].Name != "AI技术" {
+			t.Errorf("expected abstract name 'AI技术', got %q", result.Abstracts[0].Name)
+		}
+	})
+
+	t.Run("multiple abstracts", func(t *testing.T) {
+		input := `{"merges":[],"abstracts":[{"name":"AI大模型","description":"大模型相关","children":["GPT-4","ChatGPT"],"reason":"same domain"},{"name":"AI研究","description":"AI研究相关","children":["AI研究"],"reason":"research topic"}],"none":[]}`
+		result, err := parseTagJudgmentResponse(input, candidates)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result.Abstracts) != 2 {
+			t.Fatalf("expected 2 abstracts, got %d", len(result.Abstracts))
+		}
+		if result.Abstracts[0].Name != "AI大模型" {
+			t.Errorf("expected first abstract name 'AI大模型', got %q", result.Abstracts[0].Name)
+		}
+		if result.Abstracts[1].Name != "AI研究" {
+			t.Errorf("expected second abstract name 'AI研究', got %q", result.Abstracts[1].Name)
 		}
 	})
 }
@@ -243,52 +449,60 @@ func TestEnsureNewLabelCandidateInAbstractJudgment(t *testing.T) {
 
 	t.Run("adds current candidate when abstract only names sibling", func(t *testing.T) {
 		judgment := &tagJudgment{
-			Abstract: &tagJudgmentAbstract{
-				Name:     "AbortController 与 AbortSignal",
-				Children: []string{"AbortSignal"},
+			Abstracts: []tagJudgmentAbstract{
+				{
+					Name:     "AbortController 与 AbortSignal",
+					Children: []string{"AbortSignal"},
+				},
 			},
 		}
 
 		ensureNewLabelCandidateInAbstractJudgment(judgment, candidates, "AbortController")
 
-		if len(judgment.Abstract.Children) != 2 {
-			t.Fatalf("expected two children, got %v", judgment.Abstract.Children)
+		if len(judgment.Abstracts[0].Children) != 2 {
+			t.Fatalf("expected two children, got %v", judgment.Abstracts[0].Children)
 		}
-		if !labelInSlice(judgment.Abstract.Children, "AbortController") {
-			t.Fatalf("expected current candidate to be added, got %v", judgment.Abstract.Children)
+		if !labelInSlice(judgment.Abstracts[0].Children, "AbortController") {
+			t.Fatalf("expected current candidate to be added, got %v", judgment.Abstracts[0].Children)
 		}
 	})
 
 	t.Run("does not duplicate existing current candidate", func(t *testing.T) {
 		judgment := &tagJudgment{
-			Abstract: &tagJudgmentAbstract{
-				Name:     "AbortController 与 AbortSignal",
-				Children: []string{"AbortController", "AbortSignal"},
+			Abstracts: []tagJudgmentAbstract{
+				{
+					Name:     "AbortController 与 AbortSignal",
+					Children: []string{"AbortController", "AbortSignal"},
+				},
 			},
 		}
 
 		ensureNewLabelCandidateInAbstractJudgment(judgment, candidates, "AbortController")
 
-		if len(judgment.Abstract.Children) != 2 {
-			t.Fatalf("expected no duplicate child, got %v", judgment.Abstract.Children)
+		if len(judgment.Abstracts[0].Children) != 2 {
+			t.Fatalf("expected no duplicate child, got %v", judgment.Abstracts[0].Children)
 		}
 	})
 
 	t.Run("does not add candidate already consumed by merge", func(t *testing.T) {
 		judgment := &tagJudgment{
-			Merge: &tagJudgmentMerge{
-				Target: "AbortController",
+			Merges: []tagJudgmentMerge{
+				{
+					Target: "AbortController",
+				},
 			},
-			Abstract: &tagJudgmentAbstract{
-				Name:     "Abort APIs",
-				Children: []string{"AbortSignal"},
+			Abstracts: []tagJudgmentAbstract{
+				{
+					Name:     "Abort APIs",
+					Children: []string{"AbortSignal"},
+				},
 			},
 		}
 
 		ensureNewLabelCandidateInAbstractJudgment(judgment, candidates, "AbortController")
 
-		if labelInSlice(judgment.Abstract.Children, "AbortController") {
-			t.Fatalf("expected merged candidate not to be added, got %v", judgment.Abstract.Children)
+		if labelInSlice(judgment.Abstracts[0].Children, "AbortController") {
+			t.Fatalf("expected merged candidate not to be added, got %v", judgment.Abstracts[0].Children)
 		}
 	})
 }

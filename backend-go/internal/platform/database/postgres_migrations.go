@@ -353,5 +353,29 @@ func postgresMigrations() []Migration {
 				return nil
 			},
 		},
+		{
+			Version:     "20260426_0001",
+			Description: "Create adopt_narrower_queues table with partial unique index for dedup.",
+			Up: func(db *gorm.DB) error {
+				if err := db.Exec(`CREATE TABLE IF NOT EXISTS adopt_narrower_queues (
+					id SERIAL PRIMARY KEY,
+					abstract_tag_id INTEGER NOT NULL,
+					source VARCHAR(50) NOT NULL,
+					status VARCHAR(20) NOT NULL DEFAULT 'pending',
+					error_message TEXT,
+					retry_count INTEGER DEFAULT 0,
+					created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+					started_at TIMESTAMP,
+					completed_at TIMESTAMP,
+					CONSTRAINT fk_adopt_narrower_queues_abstract_tag FOREIGN KEY (abstract_tag_id) REFERENCES topic_tags(id) ON DELETE CASCADE
+				)`).Error; err != nil {
+					return fmt.Errorf("create adopt_narrower_queues table: %w", err)
+				}
+				if err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_adopt_narrower_active ON adopt_narrower_queues (abstract_tag_id) WHERE status IN ('pending', 'processing')`).Error; err != nil {
+					return fmt.Errorf("create adopt_narrower active unique index: %w", err)
+				}
+				return nil
+			},
+		},
 	}
 }

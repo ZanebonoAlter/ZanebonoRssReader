@@ -163,7 +163,7 @@ func (s *TagQualityScoreScheduler) initSchedulerTask() {
 			"check_interval":      int(s.checkInterval.Seconds()),
 			"next_execution_time": &nextRun,
 		}
-		if task.Status == "" || task.Status == "success" || task.Status == "failed" {
+		if task.Status == "" || task.Status == "success" || task.Status == "failed" || task.Status == "running" {
 			updates["status"] = "idle"
 		}
 		database.DB.Model(&task).Updates(updates)

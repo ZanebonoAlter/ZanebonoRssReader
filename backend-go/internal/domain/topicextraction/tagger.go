@@ -831,7 +831,8 @@ func batchGenerateTagDescriptions(tags []models.TopicTag) map[uint]string {
 			return nil
 		}
 		generateTagDescription(tags[0].ID, tags[0].Label, tags[0].Category, articleContext)
-		return nil
+		// Return non-nil map so caller knows it was processed
+		return map[uint]string{tags[0].ID: ""} // empty string = already saved by generateTagDescription
 	}
 
 	type tagContext struct {
@@ -904,9 +905,18 @@ func batchGenerateTagDescriptions(tags []models.TopicTag) map[uint]string {
 		},
 	}
 
-	result, err := router.Chat(context.Background(), req)
+	const maxBatchRetries = 2
+	var result *airouter.ChatResult
+	var err error
+	for attempt := 1; attempt <= maxBatchRetries; attempt++ {
+		result, err = router.Chat(context.Background(), req)
+		if err == nil {
+			break
+		}
+		logging.Warnf("batchGenerateTagDescriptions: LLM call failed (attempt %d/%d): %v", attempt, maxBatchRetries, err)
+	}
 	if err != nil {
-		logging.Warnf("batchGenerateTagDescriptions: LLM call failed: %v", err)
+		logging.Warnf("batchGenerateTagDescriptions: all %d attempts failed", maxBatchRetries)
 		return nil
 	}
 
@@ -923,9 +933,17 @@ func batchGenerateTagDescriptions(tags []models.TopicTag) map[uint]string {
 	}
 
 	results := make(map[uint]string)
+	validIDs := make(map[uint]bool, len(items))
+	for _, item := range items {
+		validIDs[item.ID] = true
+	}
 	for _, d := range parsed.Descriptions {
-		if d.Description != "" && len([]rune(d.Description)) <= 500 {
-			results[d.ID] = d.Description
+		if d.Description != "" && validIDs[d.ID] {
+			desc := d.Description
+			if len([]rune(desc)) > 500 {
+				desc = string([]rune(desc)[:500])
+			}
+			results[d.ID] = desc
 		}
 	}
 	return results

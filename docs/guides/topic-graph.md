@@ -531,7 +531,7 @@ flowchart TD
 
 #### 周期清理里的复用
 
-定时任务 `tag_hierarchy_cleanup` 现在新增了 Phase 4，专门处理 event 树的深层重复和过深层级：
+定时任务 `tag_hierarchy_cleanup` 的 Phase 6（整树审查）会处理 event 树的深层重复和过深层级：
 
 1. BuildTagForest 构建当前 event forest
 2. 只处理深度较深的树

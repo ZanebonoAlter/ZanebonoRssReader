@@ -76,6 +76,30 @@ func TestBuildFlatMergePrompt(t *testing.T) {
 	}
 }
 
+func TestBuildFlatMergePromptIncludesPersonMetadata(t *testing.T) {
+	tags := []FlatTagInfo{
+		{
+			ID:          1,
+			Label:       "李宗伟",
+			Description: "马来西亚羽毛球运动员",
+			Source:      "abstract",
+			Metadata: models.MetadataMap{
+				"country": "马来西亚",
+				"role":    "羽毛球运动员",
+				"domains": []any{"羽毛球"},
+			},
+		},
+	}
+
+	prompt := BuildFlatMergePrompt(tags, "person")
+
+	for _, want := range []string{"person_attrs", "马来西亚", "羽毛球运动员", "羽毛球"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("flat merge prompt missing %q in:\n%s", want, prompt)
+		}
+	}
+}
+
 func TestFlatMergeJudgment_Parse(t *testing.T) {
 	judgment := flatMergeJudgment{}
 	if len(judgment.Merges) != 0 {
@@ -240,14 +264,8 @@ func TestCleanupMultiParentConflicts_OnlyCountsSuccessfulResolutions(t *testing.
 		}
 	}
 
-	originalJudge := aiJudgeBestParentFn
-	aiJudgeBestParentFn = func(ctx context.Context, childTag *models.TopicTag, parents []parentWithInfo) (int, error) {
-		return 0, errors.New("judge failed")
-	}
-	t.Cleanup(func() {
-		aiJudgeBestParentFn = originalJudge
-	})
-
+	// Batch approach handles LLM failures internally (logs warning, returns 0 resolved).
+	// No aiJudgeBestParentFn mock needed — the batch function calls airouter directly.
 	resolved, errs, err := CleanupMultiParentConflicts()
 	if err != nil {
 		t.Fatalf("CleanupMultiParentConflicts returned error: %v", err)
@@ -255,8 +273,9 @@ func TestCleanupMultiParentConflicts_OnlyCountsSuccessfulResolutions(t *testing.
 	if resolved != 0 {
 		t.Fatalf("resolved = %d, want 0", resolved)
 	}
-	if len(errs) != 1 {
-		t.Fatalf("len(errs) = %d, want 1", len(errs))
+	// LLM failure is logged, not propagated as error string
+	if len(errs) != 0 {
+		t.Fatalf("len(errs) = %d, want 0", len(errs))
 	}
 
 	var relationCount int64

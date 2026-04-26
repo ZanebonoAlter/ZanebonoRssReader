@@ -188,7 +188,7 @@ func GetTagHierarchy(category string, scopeFeedID uint, scopeCategoryID uint, ti
 		})
 	}
 
-	if len(roots) == 0 && len(parentSet) > 0 {
+	if len(parentSet) > 0 {
 		childToParent := make(map[uint]uint, len(relations))
 		for _, r := range relations {
 			childToParent[r.ChildID] = r.ParentID
@@ -220,7 +220,14 @@ func GetTagHierarchy(category string, scopeFeedID uint, scopeCategoryID uint, ti
 				globalVisited[id] = true
 			}
 		}
+		existingRoots := make(map[uint]bool)
+		for _, r := range roots {
+			existingRoots[r.ID] = true
+		}
 		for rootID := range cycleRoots {
+			if existingRoots[rootID] {
+				continue
+			}
 			parent, ok := tagMap[rootID]
 			if !ok {
 				continue

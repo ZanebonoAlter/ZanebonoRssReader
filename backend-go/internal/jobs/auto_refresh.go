@@ -381,7 +381,7 @@ func (s *AutoRefreshScheduler) initSchedulerTask() {
 			"next_execution_time": &nextRun,
 		}
 
-		if task.Status == "" || task.Status == "success" || task.Status == "failed" {
+		if task.Status == "" || task.Status == "success" || task.Status == "failed" || task.Status == "running" {
 			updates["status"] = "idle"
 			updates["last_error"] = ""
 		}

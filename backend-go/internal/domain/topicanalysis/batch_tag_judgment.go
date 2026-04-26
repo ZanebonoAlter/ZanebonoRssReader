@@ -12,9 +12,10 @@ import (
 )
 
 type BatchTagJudgmentItem struct {
-	Label      string
-	Category   string
-	Candidates []TagCandidate
+	Label       string
+	Category    string
+	Description string
+	Candidates  []TagCandidate
 }
 
 type BatchTagJudgmentResult struct {
@@ -65,6 +66,9 @@ func buildBatchTagJudgmentPrompt(items []BatchTagJudgmentItem, narrativeContext 
 
 	for i, item := range items {
 		sb.WriteString(fmt.Sprintf("### New Tag %d: %q (category: %s)\n", i+1, item.Label, item.Category))
+		if item.Description != "" {
+			sb.WriteString(fmt.Sprintf("Description: %s\n", item.Description))
+		}
 		sb.WriteString("Existing candidates:\n")
 		sb.WriteString(buildCandidateList(item.Candidates))
 		sb.WriteString("\n\n")

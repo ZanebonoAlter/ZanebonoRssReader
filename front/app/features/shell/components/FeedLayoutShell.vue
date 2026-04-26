@@ -101,8 +101,8 @@ function buildArticleFilters() {
     if (selectedWatchedTagId.value) {
       filters.watched_tag_ids = selectedWatchedTagId.value
       filters.sort_by = 'date'
-    } else if (watchedTags.value.length > 0) {
-      filters.watched_tag_ids = watchedTags.value.map(t => t.id).join(',')
+    } else {
+      filters.watched_tags = true
       filters.sort_by = 'relevance'
     }
   } else if (selectedFeed.value) {

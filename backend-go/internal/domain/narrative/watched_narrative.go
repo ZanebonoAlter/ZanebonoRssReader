@@ -192,6 +192,11 @@ func generateSingleWatchedNarrative(watchedTagID uint, since, until time.Time) {
 			Required: []string{"summary"},
 		},
 		Temperature: func() *float64 { f := 0.4; return &f }(),
+		Metadata: map[string]any{
+			"operation": "watched_narrative_summary",
+			"tag_id":    tag.ID,
+			"tag_label": tag.Label,
+		},
 	})
 	if err != nil {
 		logging.Warnf("watched-narrative: LLM call failed for tag %d (%s): %v", tag.ID, tag.Label, err)

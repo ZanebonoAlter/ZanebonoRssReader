@@ -73,6 +73,11 @@ Respond with JSON: {"country": "...", "organization": "...", "role": "...", "dom
 			Required: []string{"country", "organization", "role", "domains"},
 		},
 		Temperature: func() *float64 { f := 0.2; return &f }(),
+		Metadata: map[string]any{
+			"operation": "backfill_person_metadata",
+			"tag_id":    tag.ID,
+			"tag_label": tag.Label,
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("LLM call failed: %w", err)

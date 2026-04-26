@@ -1,0 +1,25 @@
+API root-level nodes: 30
+API total nodes in tree: 316
+
+Simulation roots: 35
+API root-level: 30
+
+In simulation but NOT in API (7):
+  62039: 缇庡浗鏀挎不浜虹墿 (category=person, cycle_root=True)
+  62049: 鐧藉璁拌€呭崗浼氭櫄瀹?(category=keyword, cycle_root=True)
+  62365: 鐢垫睜鎶€鏈?(category=keyword, cycle_root=True)
+  62633: DeepSeek 妯″瀷鐢熸€?(category=keyword, cycle_root=True)
+  63231: 缇庝紛鍐茬獊鍗囩骇涓庡浜ゅ崥寮堜簨浠堕摼 (category=event, cycle_root=True)
+  63651: 鏅鸿兘椹鹃┒涓庤溅杞借绠楁妧鏈?(category=keyword, cycle_root=True)
+  63899: 閾佺┕绯荤粺閮ㄧ讲鑷抽樋鑱旈厠 (category=event, cycle_root=False)
+
+In API but NOT in simulation (2):
+  63882: 浼婃湕灏侀攣闇嶅皵鏈ㄥ吂娴峰场鐩稿叧浜嬩欢閾?(category=event)
+  63883: 浼婃湕灏侀攣闇嶅皵鏈ㄥ吂娴峰场鍚庣画浜洪亾涓讳箟涓庢仮澶嶈鍔?(category=event)
+
+62547 in API tree: False
+63231 in API tree: False
+
+63231 NOT found in API tree
+
+62547 NOT found in API tree

@@ -99,7 +99,7 @@ func (c *openAICompatibleClient) Chat(ctx context.Context, provider models.AIPro
 		temperature = *provider.Temperature
 	}
 
-	maxTokens := 16000
+	maxTokens := 16384
 	if req.MaxTokens != nil {
 		maxTokens = *req.MaxTokens
 	} else if provider.MaxTokens != nil {
@@ -164,8 +164,8 @@ func (c *openAICompatibleClient) Chat(ctx context.Context, provider models.AIPro
 	if err != nil {
 		return "", &ProviderError{Message: err.Error(), Code: "read_error", Retryable: true}
 	}
-
-	logging.Infof("openai_chat_raw: provider=%s model=%s status=%d body=%s", provider.Name, provider.Model, resp.StatusCode, truncateDebugBody(string(responseBody)))
+	logging.Infof("openai: message=%s ", req.Messages)
+	// logging.Infof("openai_chat_raw: provider=%s model=%s status=%d body=%s", provider.Name, provider.Model, resp.StatusCode, truncateDebugBody(string(responseBody)))
 
 	var parsed struct {
 		Choices []struct {

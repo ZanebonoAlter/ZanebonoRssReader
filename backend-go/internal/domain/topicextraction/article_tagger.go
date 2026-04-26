@@ -178,9 +178,10 @@ func tagArticle(article *models.Article, feedName, categoryName string, options 
 				}
 			}
 			needsJudgment = append(needsJudgment, topicanalysis.BatchTagJudgmentItem{
-				Label:      tag.Label,
-				Category:   category,
-				Candidates: candidates,
+				Label:       tag.Label,
+				Category:    category,
+				Description: tag.Description,
+				Candidates:  candidates,
 			})
 		case "no_match":
 			continue
@@ -189,7 +190,7 @@ func tagArticle(article *models.Article, feedName, categoryName string, options 
 
 	if len(needsJudgment) > 0 {
 		logging.Infof("tagArticle batch: judging %d tags in single LLM call", len(needsJudgment))
-		batchResult, err := topicanalysis.BatchCallLLMForTagJudgment(context.Background(), needsJudgment, "")
+		batchResult, err := topicanalysis.BatchCallLLMForTagJudgment(context.Background(), needsJudgment, articleContext)
 		if err != nil {
 			logging.Warnf("tagArticle batch: batch judgment failed: %v, falling back to individual", err)
 		} else {

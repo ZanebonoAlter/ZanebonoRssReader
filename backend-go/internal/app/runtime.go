@@ -9,9 +9,11 @@ import (
 	"my-robot-backend/internal/app/runtimeinfo"
 	"my-robot-backend/internal/domain/contentprocessing"
 	"my-robot-backend/internal/domain/digest"
+	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/domain/topicanalysis"
 	"my-robot-backend/internal/domain/topicextraction"
 	"my-robot-backend/internal/jobs"
+	"my-robot-backend/internal/platform/database"
 	"my-robot-backend/internal/platform/logging"
 )
 
@@ -29,8 +31,68 @@ type Runtime struct {
 	TagHierarchyCleanup    *jobs.TagHierarchyCleanupScheduler
 }
 
+func resetStaleStates() {
+	resetCount := 0
+
+	result := database.DB.Model(&models.SchedulerTask{}).
+		Where("status = ?", "running").
+		Updates(map[string]interface{}{
+			"status":  "idle",
+			"last_error": "reset on startup: previous process terminated unexpectedly",
+		})
+	resetCount += int(result.RowsAffected)
+
+	if resetCount > 0 {
+		logging.Infof("Reset %d scheduler task(s) stuck in 'running' state", resetCount)
+	}
+
+	feedResult := database.DB.Model(&models.Feed{}).
+		Where("refresh_status = ?", "refreshing").
+		Updates(map[string]interface{}{
+			"refresh_status": "idle",
+			"refresh_error":  "reset on startup: previous process terminated unexpectedly",
+		})
+	if feedResult.RowsAffected > 0 {
+		logging.Infof("Reset %d feed(s) stuck in 'refreshing' state", feedResult.RowsAffected)
+	}
+
+	articleResult := database.DB.Model(&models.Article{}).
+		Where("firecrawl_status = ?", "processing").
+		Updates(map[string]interface{}{
+			"firecrawl_status": "pending",
+			"firecrawl_error":  "reset on startup: previous process terminated unexpectedly",
+		})
+	if articleResult.RowsAffected > 0 {
+		logging.Infof("Reset %d article(s) stuck in 'processing' firecrawl state", articleResult.RowsAffected)
+	}
+
+	jobResult := database.DB.Model(&models.FirecrawlJob{}).
+		Where("status = ?", "leased").
+		Updates(map[string]interface{}{
+			"status":           "pending",
+			"leased_at":        nil,
+			"lease_expires_at": nil,
+		})
+	if jobResult.RowsAffected > 0 {
+		logging.Infof("Reset %d firecrawl job(s) stuck in 'leased' state", jobResult.RowsAffected)
+	}
+
+	tagJobResult := database.DB.Model(&models.TagJob{}).
+		Where("status = ?", "leased").
+		Updates(map[string]interface{}{
+			"status":           "pending",
+			"leased_at":        nil,
+			"lease_expires_at": nil,
+		})
+	if tagJobResult.RowsAffected > 0 {
+		logging.Infof("Reset %d tag job(s) stuck in 'leased' state", tagJobResult.RowsAffected)
+	}
+}
+
 func StartRuntime() *Runtime {
 	runtime := &Runtime{}
+
+	resetStaleStates()
 
 	// Start the tag queue worker for async article tagging
 	if err := topicextraction.GetTagQueue().Start(); err != nil {
@@ -46,6 +108,8 @@ func StartRuntime() *Runtime {
 	logging.Infoln("Merge re-embedding queue worker started successfully")
 	topicanalysis.StartAbstractTagUpdateQueueWorker()
 	logging.Infoln("Abstract tag update queue worker started successfully")
+	topicanalysis.StartAdoptNarrowerQueueWorker()
+	logging.Infoln("Adopt narrower queue worker started successfully")
 
 	runtime.AutoRefresh = jobs.NewAutoRefreshScheduler(60)
 	if err := runtime.AutoRefresh.Start(); err != nil {
@@ -172,6 +236,9 @@ func SetupGracefulShutdown(runtime *Runtime) {
 
 			logging.Infoln("Stopping abstract tag update queue worker...")
 			topicanalysis.StopAbstractTagUpdateQueueWorker()
+
+			logging.Infoln("Stopping adopt narrower queue worker...")
+			topicanalysis.StopAdoptNarrowerQueueWorker()
 
 			if runtime.AutoRefresh != nil {
 				logging.Infoln("Stopping auto-refresh scheduler...")
