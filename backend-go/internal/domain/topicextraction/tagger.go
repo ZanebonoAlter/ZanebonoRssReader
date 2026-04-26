@@ -14,6 +14,7 @@ import (
 	"my-robot-backend/internal/domain/topictypes"
 	"my-robot-backend/internal/platform/airouter"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/jsonutil"
 	"my-robot-backend/internal/platform/logging"
 )
 
@@ -106,8 +107,8 @@ func TagSummary(summary *models.AISummary, feedName, categoryName string) error 
 			articleContext += ". "
 		}
 		runes := []rune(summary.Summary)
-		if len(runes) > 1500 {
-			articleContext += string(runes[:1500])
+		if len(runes) > 800 {
+			articleContext += string(runes[:800])
 		} else {
 			articleContext += summary.Summary
 		}
@@ -252,7 +253,6 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 						return nil, err
 					}
 					go ensureTagEmbedding(es, existing.ID)
-					go backfillTagDescription(existing.ID, existing.Label, existing.Category, existing.Description, articleContext)
 					GetTagCache().Set(slug, category, existing)
 					return existing, nil
 				}
@@ -317,7 +317,6 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 								logging.Warnf("Failed to save event fallback tag %d: %v", existing.ID, err)
 							} else {
 								go ensureTagEmbedding(es, existing.ID)
-								go backfillTagDescription(existing.ID, existing.Label, existing.Category, existing.Description, articleContext)
 								GetTagCache().Set(slug, category, existing)
 								return existing, nil
 							}
@@ -382,7 +381,6 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 						break
 					}
 					go ensureTagEmbedding(es, existing.ID)
-					go backfillTagDescription(existing.ID, existing.Label, existing.Category, existing.Description, articleContext)
 
 					for _, child := range result.MergeChildren {
 						if child.ID != existing.ID {
@@ -488,7 +486,6 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 		if es != nil {
 			go ensureTagEmbedding(es, dbTag.ID)
 		}
-		go backfillTagDescription(dbTag.ID, dbTag.Label, dbTag.Category, dbTag.Description, articleContext)
 		GetTagCache().Set(slug, category, &dbTag)
 		return &dbTag, nil
 	}
@@ -594,15 +591,6 @@ func shouldDeleteAbstractChildEmbedding(childID, parentID uint) bool {
 	}
 
 	return abstractSiblingCount == 0
-}
-
-// backfillTagDescription triggers async description generation only if the tag currently has no description.
-// Safe to call from any reuse path — skips silently if description already exists or context is empty.
-func backfillTagDescription(tagID uint, label, category, currentDesc, articleContext string) {
-	if currentDesc != "" || articleContext == "" {
-		return
-	}
-	go generateTagDescription(tagID, label, category, articleContext)
 }
 
 // generateTagDescription generates a description for a tag via LLM and updates the database.
@@ -711,6 +699,12 @@ func generatePersonTagDescription(tagID uint, label, articleContext string) {
 			logging.Warnf("generatePersonTagDescription panic for tag %d: %v", tagID, r)
 		}
 	}()
+
+	// Person tags only need identity context, truncate to reduce noise
+	runes := []rune(articleContext)
+	if len(runes) > 400 {
+		articleContext = string(runes[:400])
+	}
 
 	router := airouter.NewRouter()
 
@@ -823,6 +817,118 @@ Respond with JSON: {"description": "your answer", "person_attrs": {"country": ".
 	if err := qs.Enqueue(tagID); err != nil {
 		logging.Warnf("Failed to enqueue re-embedding after person description update for tag %d: %v", tagID, err)
 	}
+}
+
+// batchGenerateTagDescriptions generates descriptions for multiple tags in a single LLM call.
+// Returns a map of tagID -> description.
+func batchGenerateTagDescriptions(tags []models.TopicTag) map[uint]string {
+	if len(tags) == 0 {
+		return nil
+	}
+	if len(tags) == 1 {
+		articleContext := buildArticleContextForTag(tags[0].ID)
+		if articleContext == "" {
+			return nil
+		}
+		generateTagDescription(tags[0].ID, tags[0].Label, tags[0].Category, articleContext)
+		return nil
+	}
+
+	type tagContext struct {
+		ID       uint   `json:"id"`
+		Label    string `json:"label"`
+		Category string `json:"category"`
+		Context  string `json:"context"`
+	}
+	var items []tagContext
+	for _, tag := range tags {
+		ctx := buildArticleContextForTag(tag.ID)
+		if ctx == "" {
+			continue
+		}
+		items = append(items, tagContext{
+			ID:       tag.ID,
+			Label:    tag.Label,
+			Category: tag.Category,
+			Context:  ctx,
+		})
+	}
+	if len(items) == 0 {
+		return nil
+	}
+
+	itemsJSON, _ := json.MarshalIndent(items, "", "  ")
+	prompt := fmt.Sprintf(`为以下标签批量生成 description（中文，每个 1-2 句话，客观事实，500 字以内）。
+
+标签列表：
+%s
+
+规则：
+- 每个标签的 description 必须解释该标签是什么，不能只重复标签名
+- person 类标签说明人物身份
+- event 类标签说明事件经过
+- keyword 类标签说明概念领域
+
+返回 JSON: {"descriptions": [{"id": 标签ID, "description": "描述内容"}, ...]}`,
+		string(itemsJSON))
+
+	router := airouter.NewRouter()
+	req := airouter.ChatRequest{
+		Capability: airouter.CapabilityTopicTagging,
+		Messages: []airouter.Message{
+			{Role: "system", Content: "你是一个标签分类助手，只输出合法JSON。"},
+			{Role: "user", Content: prompt},
+		},
+		JSONMode: true,
+		JSONSchema: &airouter.JSONSchema{
+			Type: "object",
+			Properties: map[string]airouter.SchemaProperty{
+				"descriptions": {
+					Type: "array",
+					Items: &airouter.SchemaProperty{
+						Type: "object",
+						Properties: map[string]airouter.SchemaProperty{
+							"id":          {Type: "integer"},
+							"description": {Type: "string"},
+						},
+						Required: []string{"id", "description"},
+					},
+				},
+			},
+			Required: []string{"descriptions"},
+		},
+		Temperature: func() *float64 { f := 0.3; return &f }(),
+		Metadata: map[string]any{
+			"operation": "tag_description_batch",
+			"count":     len(items),
+		},
+	}
+
+	result, err := router.Chat(context.Background(), req)
+	if err != nil {
+		logging.Warnf("batchGenerateTagDescriptions: LLM call failed: %v", err)
+		return nil
+	}
+
+	content := jsonutil.SanitizeLLMJSON(result.Content)
+	var parsed struct {
+		Descriptions []struct {
+			ID          uint   `json:"id"`
+			Description string `json:"description"`
+		} `json:"descriptions"`
+	}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		logging.Warnf("batchGenerateTagDescriptions: parse failed: %v", err)
+		return nil
+	}
+
+	results := make(map[uint]string)
+	for _, d := range parsed.Descriptions {
+		if d.Description != "" && len([]rune(d.Description)) <= 500 {
+			results[d.ID] = d.Description
+		}
+	}
+	return results
 }
 
 // generateAndSaveEmbedding generates and stores an embedding for a tag in a goroutine.
