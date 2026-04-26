@@ -23,11 +23,13 @@ var errInsufficientAbstractChildren = errors.New("abstract tag needs enough chil
 var (
 	findSimilarExistingAbstractFn       = findSimilarExistingAbstract
 	aiJudgeNarrowerConceptFn            = aiJudgeNarrowerConcept
+	batchJudgeNarrowerConceptsFn        = batchJudgeNarrowerConcepts
 	aiJudgeBestParentFn                 = aiJudgeBestParent
 	findCrossLayerDuplicateCandidatesFn = findCrossLayerDuplicateCandidates
 	judgeCrossLayerDuplicateFn          = judgeCrossLayerDuplicate
 	aiJudgeAlternativePlacementFn       = aiJudgeAlternativePlacement
 	mergeTagsFn                         = MergeTags
+	callTreeReviewLLMFn                 = callTreeReviewLLM
 )
 
 type TagExtractionResult struct {
@@ -93,16 +95,18 @@ func ExtractAbstractTag(ctx context.Context, candidates []TagCandidate, newLabel
 		return nil, err
 	}
 
-	return processJudgment(ctx, judgment, candidates, newLabel, category)
+	return ProcessJudgment(ctx, judgment, candidates, newLabel, category)
 }
 
-func processJudgment(ctx context.Context, judgment *tagJudgment, candidates []TagCandidate, newLabel string, category string) (*TagExtractionResult, error) {
+func ProcessJudgment(ctx context.Context, judgment *tagJudgment, candidates []TagCandidate, newLabel string, category string) (*TagExtractionResult, error) {
 	result := &TagExtractionResult{}
 
-	if judgment.Merge != nil {
-		mergeTarget := selectMergeTarget(candidates, judgment.Merge.Target, judgment.Merge.Label)
+	// Process all merges
+	for _, mergeJudgment := range judgment.Merges {
+		mergeTarget := selectMergeTarget(candidates, mergeJudgment.Target, mergeJudgment.Label)
 		if mergeTarget == nil {
-			return nil, fmt.Errorf("no suitable merge target found for label %q (target=%q)", judgment.Merge.Label, judgment.Merge.Target)
+			logging.Warnf("No suitable merge target found for label %q (target=%q), skipping", mergeJudgment.Label, mergeJudgment.Target)
+			continue
 		}
 
 		var topSim float64
@@ -114,43 +118,56 @@ func processJudgment(ctx context.Context, judgment *tagJudgment, candidates []Ta
 		}
 		if topSim > 0 && topSim < mergeMinSimilarity {
 			logging.Warnf("Tag judgment: rejecting merge for %q — top candidate %q similarity %.4f < %.2f", newLabel, mergeTarget.Label, topSim, mergeMinSimilarity)
-			result.Merge = nil
-		} else {
-			logging.Infof("Tag judgment: merge into existing tag %q (id=%d), label=%q", mergeTarget.Label, mergeTarget.ID, judgment.Merge.Label)
+			continue
+		}
 
+		logging.Infof("Tag judgment: merge into existing tag %q (id=%d), label=%q", mergeTarget.Label, mergeTarget.ID, mergeJudgment.Label)
+
+		if result.Merge == nil {
 			result.Merge = &MergeResult{
 				Target: mergeTarget,
-				Label:  judgment.Merge.Label,
+				Label:  mergeJudgment.Label,
 			}
+		}
 
-			for _, childLabel := range judgment.Merge.Children {
-				for _, c := range candidates {
-					if c.Tag != nil && c.Tag.Label == childLabel && c.Tag.ID != mergeTarget.ID {
-						result.MergeChildren = append(result.MergeChildren, c.Tag)
-					}
+		for _, childLabel := range mergeJudgment.Children {
+			for _, c := range candidates {
+				if c.Tag != nil && c.Tag.Label == childLabel && c.Tag.ID != mergeTarget.ID {
+					result.MergeChildren = append(result.MergeChildren, c.Tag)
 				}
 			}
 		}
 	}
 
-	if judgment.Abstract != nil {
+	// Process all abstracts
+	for _, abstractJudgment := range judgment.Abstracts {
 		ensureNewLabelCandidateInAbstractJudgment(judgment, candidates, newLabel)
-		abstractResult, err := processAbstractJudgment(ctx, candidates, judgment.Abstract, newLabel, category)
+		abstractResult, err := processAbstractJudgment(ctx, candidates, &abstractJudgment, newLabel, category)
 		if err != nil {
 			if result.HasMerge() {
-				logging.Warnf("Abstract judgment failed but merge succeeded, returning merge only: %v", err)
-				return result, nil
+				logging.Warnf("Abstract judgment failed but merge succeeded, skipping: %v", err)
+				continue
 			}
 			return nil, err
 		}
 		if abstractResult != nil {
-			result.Abstract = abstractResult
+			// Multiple abstracts are supported
+			if result.Abstract == nil {
+				result.Abstract = abstractResult
+			} else {
+				// Merge children into existing abstract result
+				result.Abstract.Children = append(result.Abstract.Children, abstractResult.Children...)
+			}
 		}
 	}
 
 	if !result.HasAction() {
 		result.LLMExplicitNone = true
 		logging.Infof("Tag judgment: all candidates independent for %q", newLabel)
+	}
+
+	if len(judgment.None) > 0 {
+		logging.Infof("Tag judgment: %d candidates classified as none for %q: %v", len(judgment.None), newLabel, judgment.None)
 	}
 
 	return result, nil
@@ -236,7 +253,7 @@ func processAbstractJudgment(ctx context.Context, candidates []TagCandidate, jud
 					}
 				}
 				MatchAbstractTagHierarchy(context.Background(), tagID)
-				adoptNarrowerAbstractChildren(context.Background(), tagID)
+				EnqueueAdoptNarrower(tagID, "processAbstractJudgment")
 			}(abstractTag.ID, abstractName, category)
 		}
 
@@ -257,6 +274,11 @@ func processAbstractJudgment(ctx context.Context, candidates []TagCandidate, jud
 			}
 			if wouldCycle {
 				logging.Warnf("Skipping cyclic relation: abstract tag %d -> candidate %d", abstractTag.ID, candidate.Tag.ID)
+				continue
+			}
+
+			if err := checkDepthLimit(tx, abstractTag.ID, candidate.Tag.ID); err != nil {
+				logging.Warnf("Skipping depth overflow relation: abstract %d -> candidate %d: %v", abstractTag.ID, candidate.Tag.ID, err)
 				continue
 			}
 
@@ -306,7 +328,7 @@ func processAbstractJudgment(ctx context.Context, candidates []TagCandidate, jud
 
 	if len(abstractChildren) > 0 {
 		if !createdNewAbstract && abstractTag.Source == "abstract" {
-			go adoptNarrowerAbstractChildren(context.Background(), abstractTag.ID)
+			go EnqueueAdoptNarrower(abstractTag.ID, "processAbstractJudgment_reuse")
 		}
 		go EnqueueAbstractTagUpdate(abstractTag.ID, "new_child_added")
 		for _, child := range abstractChildren {

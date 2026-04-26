@@ -19,6 +19,8 @@ import (
 
 var errTopicAIUnavailable = errors.New("topic AI unavailable")
 
+type batchJudgmentContextKey struct{}
+
 var (
 	embeddingService          *topicanalysis.EmbeddingService
 	embeddingServiceOnce      sync.Once
@@ -38,6 +40,18 @@ func getEmbeddingQueueService() *topicanalysis.EmbeddingQueueService {
 		embeddingQueueService = topicanalysis.NewEmbeddingQueueService(nil)
 	})
 	return embeddingQueueService
+}
+
+func WithBatchJudgments(ctx context.Context, results map[string]*topicanalysis.TagExtractionResult) context.Context {
+	return context.WithValue(ctx, batchJudgmentContextKey{}, results)
+}
+
+func getBatchJudgment(ctx context.Context, label string) *topicanalysis.TagExtractionResult {
+	results, ok := ctx.Value(batchJudgmentContextKey{}).(map[string]*topicanalysis.TagExtractionResult)
+	if !ok {
+		return nil
+	}
+	return results[label]
 }
 
 // TagSummary extracts and stores tags for an AI summary
@@ -264,7 +278,14 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 					}
 				}
 
-				result, judgmentErr := topicanalysis.ExtractAbstractTag(ctx, candidates, tag.Label, category, topicanalysis.WithCaller("findOrCreateTag"))
+				var result *topicanalysis.TagExtractionResult
+				var judgmentErr error
+				if batchResult := getBatchJudgment(ctx, tag.Label); batchResult != nil {
+					result = batchResult
+					logging.Infof("findOrCreateTag: label=%q category=%s using precomputed batch judgment", tag.Label, category)
+				} else {
+					result, judgmentErr = topicanalysis.ExtractAbstractTag(ctx, candidates, tag.Label, category, topicanalysis.WithCaller("findOrCreateTag"))
+				}
 				if judgmentErr != nil || result == nil || !result.HasAction() {
 					if judgmentErr != nil {
 						logging.Warnf("findOrCreateTag: label=%q category=%s LLM judgment failed, skipping event_fallback: %v", tag.Label, category, judgmentErr)

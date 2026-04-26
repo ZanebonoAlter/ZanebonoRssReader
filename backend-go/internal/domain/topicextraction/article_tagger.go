@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"my-robot-backend/internal/domain/models"
+	"my-robot-backend/internal/domain/topicanalysis"
 	"my-robot-backend/internal/domain/topictypes"
 	"my-robot-backend/internal/platform/database"
 	"my-robot-backend/internal/platform/logging"
@@ -119,22 +120,103 @@ func tagArticle(article *models.Article, feedName, categoryName string, options 
 		articleContext += articleSummary
 	}
 
-	// Process each tag
+	dedupedTags := dedupeTagsWithCategory(tags)
+	es := getEmbeddingService()
+
+	type tagWithMatch struct {
+		tag    topictypes.TopicTag
+		result *topicanalysis.TagExtractionResult
+	}
+	var needsJudgment []topicanalysis.BatchTagJudgmentItem
+	precomputed := make(map[string]*topicanalysis.TagExtractionResult)
+
+	for _, tag := range dedupedTags {
+		slug := topictypes.Slugify(tag.Label)
+		category := NormalizeDisplayCategory(tag.Kind, tag.Category)
+
+		if cached, ok := GetTagCache().Get(slug, category); ok {
+			logging.Infof("tagArticle batch: label=%q category=%s cache=hit", tag.Label, category)
+			precomputed[tag.Label] = &topicanalysis.TagExtractionResult{
+				Merge: &topicanalysis.MergeResult{Target: cached, Label: tag.Label},
+			}
+			continue
+		}
+
+		if es == nil {
+			continue
+		}
+
+		aliases := tag.Aliases
+		if len(aliases) == 0 {
+			aliases = []string{}
+		}
+		aliasesJSON, _ := json.Marshal(aliases)
+
+		matchResult, err := es.TagMatch(context.Background(), tag.Label, category, string(aliasesJSON))
+		if err != nil {
+			logging.Warnf("tagArticle batch: TagMatch failed for %q: %v", tag.Label, err)
+			continue
+		}
+
+		switch matchResult.MatchType {
+		case "exact":
+			if matchResult.ExistingTag != nil {
+				precomputed[tag.Label] = &topicanalysis.TagExtractionResult{
+					Merge: &topicanalysis.MergeResult{Target: matchResult.ExistingTag, Label: tag.Label},
+				}
+			}
+		case "candidates":
+			candidates := matchResult.Candidates
+			if category == "event" && article.ID > 0 {
+				existingIDs := make([]uint, 0, len(candidates))
+				for _, c := range candidates {
+					if c.Tag != nil {
+						existingIDs = append(existingIDs, c.Tag.ID)
+					}
+				}
+				coTagCandidates, coTagErr := topicanalysis.ExpandEventCandidatesByArticleCoTags(context.Background(), article.ID, 0, existingIDs)
+				if coTagErr != nil {
+					logging.Warnf("tagArticle batch: co-tag expansion failed for %q: %v", tag.Label, coTagErr)
+				} else if len(coTagCandidates) > 0 {
+					candidates = topicanalysis.MergeCandidateLists(candidates, coTagCandidates)
+				}
+			}
+			needsJudgment = append(needsJudgment, topicanalysis.BatchTagJudgmentItem{
+				Label:      tag.Label,
+				Category:   category,
+				Candidates: candidates,
+			})
+		case "no_match":
+			continue
+		}
+	}
+
+	if len(needsJudgment) > 0 {
+		logging.Infof("tagArticle batch: judging %d tags in single LLM call", len(needsJudgment))
+		batchResult, err := topicanalysis.BatchCallLLMForTagJudgment(context.Background(), needsJudgment, "")
+		if err != nil {
+			logging.Warnf("tagArticle batch: batch judgment failed: %v, falling back to individual", err)
+		} else {
+			for label, result := range batchResult.Results {
+				precomputed[label] = result
+			}
+		}
+	}
+
+	ctx := WithBatchJudgments(context.Background(), precomputed)
 	seenTagIDs := make(map[uint]struct{})
-	for _, tag := range dedupeTagsWithCategory(tags) {
-		dbTag, err := findOrCreateTag(context.Background(), tag, source, articleContext, article.ID)
+	for _, tag := range dedupedTags {
+		dbTag, err := findOrCreateTag(ctx, tag, source, articleContext, article.ID)
 		if err != nil {
 			logging.Warnf("findOrCreateTag failed for tag %q (category=%s, slug=%s, source=%s, article=%d): %v", tag.Label, tag.Category, topictypes.Slugify(tag.Label), source, article.ID, err)
 			continue
 		}
 
-		// Skip if we already added this tag ID (prevents duplicate key violations)
 		if _, alreadyAdded := seenTagIDs[dbTag.ID]; alreadyAdded {
 			continue
 		}
 		seenTagIDs[dbTag.ID] = struct{}{}
 
-		// Create the association
 		link := models.ArticleTopicTag{
 			ArticleID:  article.ID,
 			TopicTagID: dbTag.ID,
