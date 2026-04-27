@@ -45,6 +45,9 @@ type TagHierarchyCleanupRunSummary struct {
 	GroupsCreated          int    `json:"tree_groups_created"`
 	GroupsReused           int    `json:"tree_groups_reused"`
 	DescriptionBackfilled  int    `json:"description_backfilled"`
+	LLMCallsTotal          int    `json:"llm_calls_total"`
+	LLMBudgetTotal         int    `json:"llm_budget_total"`
+	TimedOut               bool   `json:"timed_out"`
 	Errors                 int    `json:"errors"`
 	Reason                 string `json:"reason"`
 }
@@ -230,6 +233,9 @@ func (s *TagHierarchyCleanupScheduler) runCleanupCycle(triggerSource string) {
 	}
 	s.updateSchedulerStatus("running", "", nil, nil)
 
+	budget := NewCleanupBudget(60, 30*time.Minute)
+	budget.SetPhaseQuota("phase6", 10)
+
 	logging.Infoln("Starting tag cleanup cycle (7-phase)")
 
 	// Phase 1: Zombie tag cleanup (no LLM)
@@ -248,6 +254,10 @@ func (s *TagHierarchyCleanupScheduler) runCleanupCycle(triggerSource string) {
 	// Phase 2: Flat merge (LLM-assisted)
 	phaseStart := time.Now()
 	for _, category := range []string{"event", "keyword"} {
+		if budget.IsTimedOut() {
+			logging.Infoln("Phase 2: budget timed out, skipping remaining categories")
+			break
+		}
 		merged, mergeErrors, err := topicanalysis.ExecuteFlatMerge(category, 50)
 		if err != nil {
 			logging.Errorf("Phase 2 flat merge failed for %s: %v", category, err)
@@ -294,32 +304,46 @@ func (s *TagHierarchyCleanupScheduler) runCleanupCycle(triggerSource string) {
 
 	// Phase 4: Adopt narrower queue processing (before tree review)
 	phaseStart = time.Now()
-	adopted, err := topicanalysis.ProcessPendingAdoptNarrowerTasks()
-	if err != nil {
-		logging.Errorf("Phase 4 adopt narrower failed: %v", err)
-		summary.Errors++
+	var adopted int
+	if budget.IsTimedOut() {
+		logging.Infoln("Phase 4: budget timed out, skipping adopt-narrower")
 	} else {
-		summary.AdoptNarrowerProcessed = adopted
-		logging.Infof("Phase 4: processed %d adopt-narrower tasks", adopted)
+		adopted, err = topicanalysis.ProcessPendingAdoptNarrowerTasks()
+		if err != nil {
+			logging.Errorf("Phase 4 adopt narrower failed: %v", err)
+			summary.Errors++
+		} else {
+			summary.AdoptNarrowerProcessed = adopted
+			logging.Infof("Phase 4: processed %d adopt-narrower tasks", adopted)
+		}
 	}
 	logging.Infof("Phase 4 completed in %v (processed %d)", time.Since(phaseStart), adopted)
 
 	// Phase 5: Abstract tag update queue processing (label/description refresh)
 	phaseStart = time.Now()
-	updated, err := topicanalysis.ProcessPendingAbstractTagUpdateTasks()
-	if err != nil {
-		logging.Errorf("Phase 5 abstract tag update failed: %v", err)
-		summary.Errors++
+	var updated int
+	if budget.IsTimedOut() {
+		logging.Infoln("Phase 5: budget timed out, skipping abstract-tag-update")
 	} else {
-		summary.AbstractUpdateProcessed = updated
-		logging.Infof("Phase 5: processed %d abstract-tag-update tasks", updated)
+		updated, err = topicanalysis.ProcessPendingAbstractTagUpdateTasks()
+		if err != nil {
+			logging.Errorf("Phase 5 abstract tag update failed: %v", err)
+			summary.Errors++
+		} else {
+			summary.AbstractUpdateProcessed = updated
+			logging.Infof("Phase 5: processed %d abstract-tag-update tasks", updated)
+		}
 	}
 	logging.Infof("Phase 5 completed in %v (processed %d)", time.Since(phaseStart), updated)
 
 	// Phase 6: Tree review
 	phaseStart = time.Now()
 	for _, category := range []string{"event", "keyword", "person"} {
-		reviewResult, reviewErr := topicanalysis.ReviewHierarchyTrees(category, 14, nil)
+		if budget.IsTimedOut() {
+			logging.Infoln("Phase 6: budget timed out, skipping remaining categories")
+			break
+		}
+		reviewResult, reviewErr := topicanalysis.ReviewHierarchyTrees(category, 14, budget)
 		if reviewErr != nil {
 			logging.Errorf("Phase 6 tree review failed for %s: %v", category, reviewErr)
 			summary.Errors++
@@ -340,17 +364,26 @@ func (s *TagHierarchyCleanupScheduler) runCleanupCycle(triggerSource string) {
 
 	// Phase 7: Description backfill for tags missing descriptions
 	phaseStart = time.Now()
-	backfilled, err := topicextraction.BackfillMissingDescriptions()
-	if err != nil {
-		logging.Errorf("Phase 7 description backfill failed: %v", err)
-		summary.Errors++
+	var backfilled int
+	if budget.IsTimedOut() {
+		logging.Infoln("Phase 7: budget timed out, skipping description backfill")
 	} else {
-		summary.DescriptionBackfilled = backfilled
-		logging.Infof("Phase 7: triggered description backfill for %d tags", backfilled)
+		backfilled, err = topicextraction.BackfillMissingDescriptions()
+		if err != nil {
+			logging.Errorf("Phase 7 description backfill failed: %v", err)
+			summary.Errors++
+		} else {
+			summary.DescriptionBackfilled = backfilled
+			logging.Infof("Phase 7: triggered description backfill for %d tags", backfilled)
+		}
 	}
 	logging.Infof("Phase 7 completed in %v (processed %d)", time.Since(phaseStart), backfilled)
 
 	summary.FinishedAt = time.Now().Format(time.RFC3339)
+	budgetStats := budget.Stats()
+	summary.LLMCallsTotal = budgetStats.TotalConsumed
+	summary.LLMBudgetTotal = budgetStats.TotalBudget
+	summary.TimedOut = budgetStats.TimedOut
 	summary.Reason = fmt.Sprintf("zombie=%d, flat_merges=%d, orphaned_rels=%d, multi_parent=%d, empty_abstracts=%d, adopt_narrower=%d, abstract_update=%d, trees_reviewed=%d, merges=%d, moves=%d, groups_created=%d, groups_reused=%d, desc_backfilled=%d",
 		summary.ZombieDeactivated, summary.FlatMergesApplied, summary.OrphanedRelations, summary.MultiParentFixed, summary.EmptyAbstracts, summary.AdoptNarrowerProcessed, summary.AbstractUpdateProcessed, summary.TreesReviewed, summary.MergesApplied, summary.MovesApplied, summary.GroupsCreated, summary.GroupsReused, summary.DescriptionBackfilled)
 
