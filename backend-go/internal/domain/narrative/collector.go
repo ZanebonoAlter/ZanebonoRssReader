@@ -674,3 +674,99 @@ func buildTree(id uint, tagMap map[uint]models.TopicTag, countMap map[uint]int, 
 
 	return node
 }
+
+func CollectUnclassifiedEventTagsByCategory(date time.Time, categoryID uint) ([]TagInput, error) {
+	startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
+	endOfDay := startOfDay.Add(24 * time.Hour)
+
+	var feedIDs []uint
+	if err := database.DB.Model(&models.Feed{}).
+		Where("category_id = ?", categoryID).
+		Pluck("id", &feedIDs).Error; err != nil || len(feedIDs) == 0 {
+		return nil, nil
+	}
+
+	var tagIDs []uint
+	database.DB.Model(&models.ArticleTopicTag{}).
+		Select("DISTINCT article_topic_tags.topic_tag_id").
+		Joins("JOIN articles ON articles.id = article_topic_tags.article_id").
+		Where("articles.feed_id IN ? AND articles.pub_date >= ? AND articles.pub_date < ?", feedIDs, startOfDay, endOfDay).
+		Pluck("article_topic_tags.topic_tag_id", &tagIDs)
+
+	if len(tagIDs) == 0 {
+		return nil, nil
+	}
+
+	var relatedIDs []uint
+	database.DB.Model(&models.TopicTagRelation{}).
+		Where("relation_type = ? AND (parent_id IN ? OR child_id IN ?)", "abstract", tagIDs, tagIDs).
+		Pluck("parent_id", &relatedIDs)
+	var childIDs []uint
+	database.DB.Model(&models.TopicTagRelation{}).
+		Where("relation_type = ? AND (parent_id IN ? OR child_id IN ?)", "abstract", tagIDs, tagIDs).
+		Pluck("child_id", &childIDs)
+	relatedIDs = append(relatedIDs, childIDs...)
+	relatedSet := make(map[uint]bool, len(relatedIDs))
+	for _, id := range relatedIDs {
+		relatedSet[id] = true
+	}
+
+	var tags []models.TopicTag
+	database.DB.Where("id IN ? AND status = ? AND category = ? AND source != ?",
+		tagIDs, "active", "event", "abstract").
+		Order("quality_score DESC, feed_count DESC").
+		Limit(50).
+		Find(&tags)
+
+	if len(tags) == 0 {
+		return nil, nil
+	}
+
+	var filtered []models.TopicTag
+	for _, t := range tags {
+		if !relatedSet[t.ID] {
+			filtered = append(filtered, t)
+		}
+	}
+	tags = filtered
+
+	if len(tags) == 0 {
+		return nil, nil
+	}
+
+	tagIDs = make([]uint, len(tags))
+	for i, t := range tags {
+		tagIDs[i] = t.ID
+	}
+
+	type countRow struct {
+		TopicTagID uint `json:"topic_tag_id"`
+		Cnt        int  `json:"cnt"`
+	}
+	var counts []countRow
+	database.DB.Model(&models.ArticleTopicTag{}).
+		Select("article_topic_tags.topic_tag_id, COUNT(DISTINCT article_topic_tags.article_id) as cnt").
+		Joins("JOIN articles ON articles.id = article_topic_tags.article_id").
+		Where("article_topic_tags.topic_tag_id IN ? AND articles.feed_id IN ? AND articles.pub_date >= ? AND articles.pub_date < ?",
+			tagIDs, feedIDs, startOfDay, endOfDay).
+		Group("article_topic_tags.topic_tag_id").
+		Scan(&counts)
+
+	countMap := make(map[uint]int, len(counts))
+	for _, c := range counts {
+		countMap[c.TopicTagID] = c.Cnt
+	}
+
+	var inputs []TagInput
+	for _, tag := range tags {
+		inputs = append(inputs, TagInput{
+			ID:           tag.ID,
+			Label:        tag.Label,
+			Category:     tag.Category,
+			Description:  tag.Description,
+			ArticleCount: countMap[tag.ID],
+			Source:       tag.Source,
+		})
+	}
+	return inputs, nil
+}
