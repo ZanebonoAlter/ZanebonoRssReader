@@ -319,7 +319,7 @@ func (s *TagHierarchyCleanupScheduler) runCleanupCycle(triggerSource string) {
 	// Phase 6: Tree review
 	phaseStart = time.Now()
 	for _, category := range []string{"event", "keyword", "person"} {
-		reviewResult, reviewErr := topicanalysis.ReviewHierarchyTrees(category, 14)
+		reviewResult, reviewErr := topicanalysis.ReviewHierarchyTrees(category, 14, nil)
 		if reviewErr != nil {
 			logging.Errorf("Phase 6 tree review failed for %s: %v", category, reviewErr)
 			summary.Errors++

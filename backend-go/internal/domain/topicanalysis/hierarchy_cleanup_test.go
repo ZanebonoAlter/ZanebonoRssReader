@@ -176,7 +176,7 @@ func TestReviewHierarchyTreesAppliesLLMMove(t *testing.T) {
 	}
 	t.Cleanup(func() { callTreeReviewLLMFn = originalLLM })
 
-	result, err := ReviewHierarchyTrees("event", 14)
+	result, err := ReviewHierarchyTrees("event", 14, nil)
 	if err != nil {
 		t.Fatalf("ReviewHierarchyTrees: %v", err)
 	}
@@ -828,7 +828,7 @@ func TestReviewHierarchyTreesAppliesLLMMerge(t *testing.T) {
 	}
 	t.Cleanup(func() { callTreeReviewLLMFn = originalLLM })
 
-	result, err := ReviewHierarchyTrees("event", 14)
+	result, err := ReviewHierarchyTrees("event", 14, nil)
 	if err != nil {
 		t.Fatalf("ReviewHierarchyTrees: %v", err)
 	}
@@ -869,7 +869,7 @@ func TestReviewHierarchyTreesRejectsRootMergeSource(t *testing.T) {
 	}
 	t.Cleanup(func() { callTreeReviewLLMFn = originalLLM })
 
-	result, err := ReviewHierarchyTrees("event", 14)
+	result, err := ReviewHierarchyTrees("event", 14, nil)
 	if err != nil {
 		t.Fatalf("ReviewHierarchyTrees: %v", err)
 	}
@@ -910,7 +910,7 @@ func TestReviewHierarchyTreesRejectsRootDemotion(t *testing.T) {
 	}
 	t.Cleanup(func() { callTreeReviewLLMFn = originalLLM })
 
-	result, err := ReviewHierarchyTrees("event", 14)
+	result, err := ReviewHierarchyTrees("event", 14, nil)
 	if err != nil {
 		t.Fatalf("ReviewHierarchyTrees: %v", err)
 	}

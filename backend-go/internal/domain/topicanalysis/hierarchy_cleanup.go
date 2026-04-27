@@ -63,18 +63,42 @@ type treeReviewJudgment struct {
 	Notes        string               `json:"notes"`
 }
 
+type LLMBudget interface {
+	ConsumeForPhase(phase string) bool
+	IsTimedOut() bool
+}
+
 const smallTreeThreshold = 20 // 节点数 ≤ 此值的小树可合并审查
 
 // reviewForestBatched merges small trees into batched LLM reviews.
 // Trees with nodeCount > smallTreeThreshold are reviewed individually.
-func reviewForestBatched(forest []*TreeNode, category string, result *TreeReviewResult) {
+func reviewForestBatched(forest []*TreeNode, category string, result *TreeReviewResult, budget LLMBudget) {
+	canConsume := func() bool {
+		if budget == nil {
+			return true
+		}
+		return budget.ConsumeForPhase("phase6")
+	}
+	isTimedOut := func() bool {
+		if budget == nil {
+			return false
+		}
+		return budget.IsTimedOut()
+	}
+
 	var smallTrees []*TreeNode
 	for _, root := range forest {
+		if isTimedOut() {
+			return
+		}
 		if countNodes(root) <= smallTreeThreshold {
 			smallTrees = append(smallTrees, root)
 		} else {
-			// 大树仍然逐棵审查（可能拆分）
 			for _, tree := range splitReviewTrees(root, 50) {
+				if !canConsume() {
+					logging.Warnf("Phase 6: LLM budget exhausted, stopping tree review")
+					return
+				}
 				reviewOneTree(tree, category, result)
 			}
 		}
@@ -84,9 +108,15 @@ func reviewForestBatched(forest []*TreeNode, category string, result *TreeReview
 		return
 	}
 
-	// 合并小树为一次审查（最多 5 棵树或 100 个节点）
 	batch := mergeSmallTreesForReview(smallTrees, 5, 100)
 	for _, group := range batch {
+		if isTimedOut() {
+			return
+		}
+		if !canConsume() {
+			logging.Warnf("Phase 6: LLM budget exhausted, stopping small tree batch review")
+			return
+		}
 		reviewOneTree(group, category, result)
 	}
 }
@@ -279,7 +309,7 @@ type TreeReviewResult struct {
 	Errors        []string
 }
 
-func ReviewHierarchyTrees(category string, windowDays int) (*TreeReviewResult, error) {
+func ReviewHierarchyTrees(category string, windowDays int, budget LLMBudget) (*TreeReviewResult, error) {
 	forest, err := BuildTagForest(category, 2)
 	if err != nil {
 		return nil, fmt.Errorf("build forest: %w", err)
@@ -294,7 +324,7 @@ func ReviewHierarchyTrees(category string, windowDays int) (*TreeReviewResult, e
 	}
 
 	result := &TreeReviewResult{}
-	reviewForestBatched(forest, category, result)
+	reviewForestBatched(forest, category, result, budget)
 	return result, nil
 }
 
