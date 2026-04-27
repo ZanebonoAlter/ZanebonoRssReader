@@ -25,6 +25,16 @@ type TagInput struct {
 	IsWatched    bool   `json:"is_watched,omitempty"`
 }
 
+type AbstractTreeNode struct {
+	ID           uint               `json:"id"`
+	Label        string             `json:"label"`
+	Category     string             `json:"category"`
+	Description  string             `json:"description"`
+	ArticleCount int                `json:"article_count"`
+	IsAbstract   bool               `json:"is_abstract"`
+	Children     []AbstractTreeNode `json:"children,omitempty"`
+}
+
 type PreviousNarrative struct {
 	ID         uint64 `json:"id"`
 	Title      string `json:"title"`
@@ -541,4 +551,126 @@ func CollectCategoryNarrativeSummaries(date time.Time) ([]CategoryInput, error) 
 		len(result), total, date.Format("2006-01-02"))
 
 	return result, nil
+}
+
+func CollectAbstractTreeInputsByCategory(date time.Time, categoryID uint) ([]AbstractTreeNode, error) {
+	startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
+	endOfDay := startOfDay.Add(24 * time.Hour)
+
+	var feedIDs []uint
+	if err := database.DB.Model(&models.Feed{}).
+		Where("category_id = ?", categoryID).
+		Pluck("id", &feedIDs).Error; err != nil || len(feedIDs) == 0 {
+		return nil, nil
+	}
+
+	var tagIDs []uint
+	database.DB.Model(&models.ArticleTopicTag{}).
+		Select("DISTINCT article_topic_tags.topic_tag_id").
+		Joins("JOIN articles ON articles.id = article_topic_tags.article_id").
+		Where("articles.feed_id IN ? AND articles.pub_date >= ? AND articles.pub_date < ?", feedIDs, startOfDay, endOfDay).
+		Pluck("article_topic_tags.topic_tag_id", &tagIDs)
+
+	if len(tagIDs) == 0 {
+		return nil, nil
+	}
+
+	var relations []models.TopicTagRelation
+	database.DB.Where("relation_type = ? AND (parent_id IN ? OR child_id IN ?)",
+		"abstract", tagIDs, tagIDs).Find(&relations)
+
+	if len(relations) == 0 {
+		return nil, nil
+	}
+
+	allIDs := make(map[uint]bool)
+	parentOf := make(map[uint]uint)
+	childrenOf := make(map[uint][]uint)
+	for _, r := range relations {
+		allIDs[r.ParentID] = true
+		allIDs[r.ChildID] = true
+		parentOf[r.ChildID] = r.ParentID
+		childrenOf[r.ParentID] = append(childrenOf[r.ParentID], r.ChildID)
+	}
+
+	var allTagIDs []uint
+	for id := range allIDs {
+		allTagIDs = append(allTagIDs, id)
+	}
+
+	var tags []models.TopicTag
+	database.DB.Where("id IN ? AND status = ?", allTagIDs, "active").Find(&tags)
+	tagMap := make(map[uint]models.TopicTag, len(tags))
+	for _, t := range tags {
+		tagMap[t.ID] = t
+	}
+
+	type countRow struct {
+		TopicTagID uint `json:"topic_tag_id"`
+		Cnt        int  `json:"cnt"`
+	}
+	var counts []countRow
+	database.DB.Model(&models.ArticleTopicTag{}).
+		Select("article_topic_tags.topic_tag_id, COUNT(DISTINCT article_topic_tags.article_id) as cnt").
+		Joins("JOIN articles ON articles.id = article_topic_tags.article_id").
+		Where("article_topic_tags.topic_tag_id IN ? AND articles.feed_id IN ? AND articles.pub_date >= ? AND articles.pub_date < ?",
+			allTagIDs, feedIDs, startOfDay, endOfDay).
+		Group("article_topic_tags.topic_tag_id").
+		Scan(&counts)
+
+	countMap := make(map[uint]int, len(counts))
+	for _, c := range counts {
+		countMap[c.TopicTagID] = c.Cnt
+	}
+
+	visited := make(map[uint]bool)
+	var roots []uint
+	for id := range allIDs {
+		if _, hasParent := parentOf[id]; !hasParent {
+			roots = append(roots, id)
+		}
+	}
+
+	var result []AbstractTreeNode
+	for _, rootID := range roots {
+		if visited[rootID] {
+			continue
+		}
+		tree := buildTree(rootID, tagMap, countMap, childrenOf, visited)
+		if tree != nil {
+			result = append(result, *tree)
+		}
+	}
+
+	return result, nil
+}
+
+func buildTree(id uint, tagMap map[uint]models.TopicTag, countMap map[uint]int, childrenOf map[uint][]uint, visited map[uint]bool) *AbstractTreeNode {
+	if visited[id] {
+		return nil
+	}
+	visited[id] = true
+
+	tag, ok := tagMap[id]
+	if !ok {
+		return nil
+	}
+
+	node := &AbstractTreeNode{
+		ID:           tag.ID,
+		Label:        tag.Label,
+		Category:     tag.Category,
+		Description:  tag.Description,
+		ArticleCount: countMap[tag.ID],
+		IsAbstract:   tag.Source == "abstract",
+	}
+
+	for _, childID := range childrenOf[id] {
+		child := buildTree(childID, tagMap, countMap, childrenOf, visited)
+		if child != nil {
+			node.Children = append(node.Children, *child)
+		}
+	}
+
+	return node
 }
