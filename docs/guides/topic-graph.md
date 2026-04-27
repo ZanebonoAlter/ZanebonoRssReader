@@ -800,8 +800,8 @@ TopicTag 模型新增 `metadata` JSONB 字段（类型 `MetadataMap = map[string
 | 文件 | 职责 |
 |------|------|
 | `backend-go/internal/domain/models/narrative.go` | 数据模型 `NarrativeSummary`，状态常量 |
-| `backend-go/internal/domain/narrative/collector.go` | 数据采集：标签输入、前日叙事 |
-| `backend-go/internal/domain/narrative/generator.go` | AI 生成叙事 |
+| `backend-go/internal/domain/narrative/collector.go` | 数据采集：抽象树、未分类 event 标签、前日叙事、活跃分类 |
+| `backend-go/internal/domain/narrative/generator.go` | AI 生成叙事（抽象树叙事 / 未分类 event 叙事 / 跨分类叙事） |
 | `backend-go/internal/domain/narrative/service.go` | 服务编排：生成、保存、查询、历史追溯 |
 | `backend-go/internal/domain/narrative/handler.go` | REST API 路由注册 |
 | `backend-go/internal/jobs/narrative_summary.go` | 定时调度器，支持手动触发 |
@@ -818,11 +818,16 @@ TopicTag 模型新增 `metadata` JSONB 字段（类型 `MetadataMap = map[string
 
 ### 生成流程
 
-1. `CollectTagInputs` 采集当日活跃标签（整棵抽象树的全部节点 + 关注的未分类标签 + top10 高质量未分类标签）
-2. `CollectPreviousNarratives` 采集前一天的叙事作为上下文
-3. `GenerateNarratives` 调用 LLM 生成新叙事（含状态判断和父子关系）
-4. `saveNarratives` 批量保存到数据库
-5. `markEndedNarratives` 将未被引用的前日叙事标记为 `ending`
+1. `CollectActiveCategories` 采集当日活跃分类
+2. 对每个活跃分类执行两遍生成：
+   - Pass 1: `CollectAbstractTreeInputsByCategory` 采集该分类下的抽象标签树（保留层级+description）
+     → `GenerateNarrativesFromAbstractTrees` 生成叙事
+   - Pass 2: `CollectUnclassifiedEventTagsByCategory` 采集该分类下未归入抽象树的 event 标签（带 description）
+     → `GenerateNarrativesFromUnclassifiedEvents` 生成叙事
+   - 两遍结果合并保存为 `feed_category` 叙事集
+3. `CollectCategoryNarrativeSummaries` 收集各分类叙事卡片
+4. `GenerateCrossCategoryNarratives` 从各分类叙事中总结跨分类叙事
+5. `markEndedNarratives` / `markEndedGlobalNarratives` 标记终结叙事
 
 ### 调度与手动触发
 
