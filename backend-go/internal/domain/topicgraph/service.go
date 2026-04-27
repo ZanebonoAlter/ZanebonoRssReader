@@ -827,6 +827,7 @@ func buildGraphPayloadFromArticles(db *gorm.DB, data []ArticleTagData) ([]topict
 				Score:        item.Score,
 				QualityScore: item.TopicTag.QualityScore,
 				IsLowQuality: item.TopicTag.Source != "abstract" && item.TopicTag.QualityScore < 0.3,
+				Description:  item.TopicTag.Description,
 			}
 		}
 

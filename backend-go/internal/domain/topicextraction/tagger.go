@@ -510,6 +510,8 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 	if articleContext != "" {
 		if category == "person" {
 			go generateTagDescription(newTag.ID, tag.Label, category, articleContext)
+		} else if es != nil {
+			go ensureTagEmbedding(es, newTag.ID)
 		}
 	} else if es != nil {
 		go generateAndSaveEmbedding(es, &newTag)
@@ -564,6 +566,8 @@ func createChildOfAbstract(ctx context.Context, es *topicanalysis.EmbeddingServi
 	if articleContext != "" {
 		if category == "person" {
 			go generateTagDescription(newTag.ID, tag.Label, category, articleContext)
+		} else if es != nil {
+			go ensureTagEmbedding(es, newTag.ID)
 		}
 	} else if es != nil {
 		go generateAndSaveEmbedding(es, &newTag)

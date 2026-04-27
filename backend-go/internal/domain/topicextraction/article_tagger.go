@@ -325,12 +325,13 @@ func GetArticleTags(articleID uint) ([]topictypes.TopicTag, error) {
 			continue
 		}
 		result = append(result, topictypes.TopicTag{
-			Label:    link.TopicTag.Label,
-			Slug:     link.TopicTag.Slug,
-			Category: link.TopicTag.Category,
-			Icon:     link.TopicTag.Icon,
-			Aliases:  parseAliasesFromJSON(link.TopicTag.Aliases),
-			Score:    link.Score,
+			Label:       link.TopicTag.Label,
+			Slug:        link.TopicTag.Slug,
+			Category:    link.TopicTag.Category,
+			Icon:        link.TopicTag.Icon,
+			Aliases:     parseAliasesFromJSON(link.TopicTag.Aliases),
+			Score:       link.Score,
+			Description: link.TopicTag.Description,
 		})
 	}
 
