@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"my-robot-backend/internal/domain/models"
+	"my-robot-backend/internal/domain/topictypes"
 	"my-robot-backend/internal/platform/airouter"
 	"my-robot-backend/internal/platform/database"
 	"my-robot-backend/internal/platform/jsonutil"
@@ -118,9 +119,6 @@ func ProcessPendingAdoptNarrowerTasks() (int, error) {
 	return processed, nil
 }
 
-// ProcessPendingAbstractTagUpdateTasks processes all pending abstract-tag-update queue tasks.
-// Intended to be called from a scheduled task before tree review.
-// Returns the number of tasks processed.
 func ProcessPendingAbstractTagUpdateTasks() (int, error) {
 	var tasks []models.AbstractTagUpdateQueue
 	if err := database.DB.
@@ -138,25 +136,118 @@ func ProcessPendingAbstractTagUpdateTasks() (int, error) {
 	logging.Infof("abstract tag update batch: found %d pending tasks", len(tasks))
 
 	svc := NewAbstractTagUpdateQueueService(nil)
-	processed := 0
+
+	var entries []abstractTagWithChildren
 	for _, task := range tasks {
-		if err := svc.refreshAbstractTag(task.AbstractTagID); err != nil {
-			logging.Warnf("abstract tag update batch: failed for tag %d: %v", task.AbstractTagID, err)
+		var tag models.TopicTag
+		if err := database.DB.First(&tag, task.AbstractTagID).Error; err != nil {
 			markAbstractTagUpdateFailed(task.ID, err.Error())
 			continue
 		}
 
-		now := time.Now()
-		if err := database.DB.Model(&models.AbstractTagUpdateQueue{}).
-			Where("id = ?", task.ID).
-			Updates(map[string]interface{}{
-				"status":       models.AbstractTagUpdateQueueStatusCompleted,
-				"completed_at": now,
-			}).Error; err != nil {
-			logging.Warnf("abstract tag update batch: failed to mark task %d completed: %v", task.ID, err)
+		children, err := svc.loadChildren(task.AbstractTagID)
+		if err != nil {
+			markAbstractTagUpdateFailed(task.ID, err.Error())
+			continue
+		}
+		if len(children) == 0 {
+			now := time.Now()
+			database.DB.Model(&models.AbstractTagUpdateQueue{}).
+				Where("id = ?", task.ID).
+				Updates(map[string]interface{}{
+					"status":       models.AbstractTagUpdateQueueStatusCompleted,
+					"completed_at": now,
+				})
+			continue
 		}
 
-		processed++
+		entries = append(entries, abstractTagWithChildren{
+			Tag:      tag,
+			Children: children,
+			TaskID:   task.ID,
+		})
+	}
+
+	batchSize := 5
+	processed := 0
+	for i := 0; i < len(entries); i += batchSize {
+		end := i + batchSize
+		if end > len(entries) {
+			end = len(entries)
+		}
+		batch := entries[i:end]
+
+		judgment, err := batchRegenerateLabelsAndDescriptions(context.Background(), batch)
+		if err != nil {
+			logging.Warnf("abstract tag update batch LLM failed: %v", err)
+			for _, e := range batch {
+				markAbstractTagUpdateFailed(e.TaskID, err.Error())
+			}
+			continue
+		}
+
+		resultMap := make(map[uint]struct {
+			Label       string
+			Description string
+		})
+		if judgment != nil {
+			for _, r := range judgment.Results {
+				resultMap[r.AbstractTagID] = struct {
+					Label       string
+					Description string
+				}{Label: r.Label, Description: r.Description}
+			}
+		}
+
+		for _, e := range batch {
+			r, ok := resultMap[e.Tag.ID]
+			if !ok {
+				markAbstractTagUpdateFailed(e.TaskID, "no result in batch response")
+				continue
+			}
+
+			updates := map[string]interface{}{}
+			if r.Description != "" && r.Description != e.Tag.Description {
+				updates["description"] = r.Description
+			}
+
+			if r.Label != "" && r.Label != e.Tag.Label {
+				newSlug := topictypes.Slugify(r.Label)
+				if newSlug != "" && newSlug != e.Tag.Slug && !isAbstractRoot(database.DB, e.Tag.ID) {
+					var conflictCount int64
+					database.DB.Model(&models.TopicTag{}).
+						Where("slug = ? AND id != ? AND status = ?", newSlug, e.Tag.ID, "active").
+						Count(&conflictCount)
+					if conflictCount == 0 {
+						updates["label"] = r.Label
+						updates["slug"] = newSlug
+					}
+				}
+			}
+
+			if len(updates) > 0 {
+				if err := database.DB.Model(&models.TopicTag{}).Where("id = ?", e.Tag.ID).Updates(updates).Error; err != nil {
+					markAbstractTagUpdateFailed(e.TaskID, err.Error())
+					continue
+				}
+			}
+
+			embSvc := NewEmbeddingService()
+			emb, err := embSvc.GenerateEmbedding(context.Background(), &e.Tag, EmbeddingTypeIdentity)
+			if err == nil {
+				emb.TopicTagID = e.Tag.ID
+				embSvc.SaveEmbedding(emb)
+			}
+
+			now := time.Now()
+			database.DB.Model(&models.AbstractTagUpdateQueue{}).
+				Where("id = ?", e.TaskID).
+				Updates(map[string]interface{}{
+					"status":       models.AbstractTagUpdateQueueStatusCompleted,
+					"completed_at": now,
+				})
+			processed++
+		}
 	}
 
 	logging.Infof("abstract tag update batch: processed %d/%d tasks", processed, len(tasks))
@@ -294,6 +385,100 @@ func batchJudgeAdoptNarrower(ctx context.Context, batch []adoptTaskWithCandidate
 	var judgment batchAdoptJudgment
 	if err := json.Unmarshal([]byte(content), &judgment); err != nil {
 		return nil, fmt.Errorf("parse batch adopt response: %w", err)
+	}
+	return &judgment, nil
+}
+
+type abstractTagWithChildren struct {
+	Tag      models.TopicTag
+	Children []models.TopicTag
+	TaskID   uint
+}
+
+type batchLabelDescResult struct {
+	Results []struct {
+		AbstractTagID uint   `json:"abstract_tag_id"`
+		Label         string `json:"label"`
+		Description   string `json:"description"`
+	} `json:"results"`
+}
+
+func batchRegenerateLabelsAndDescriptions(ctx context.Context, entries []abstractTagWithChildren) (*batchLabelDescResult, error) {
+	if len(entries) == 0 {
+		return nil, nil
+	}
+
+	var parts []string
+	for i, e := range entries {
+		var childParts []string
+		for _, c := range e.Children {
+			childParts = append(childParts, fmt.Sprintf("- %q", c.Label))
+		}
+		parts = append(parts, fmt.Sprintf(`%d. 抽象标签 %q (ID:%d, 类别:%s, 当前描述:%s)
+子标签:
+%s`,
+			i+1, e.Tag.Label, e.Tag.ID, e.Tag.Category,
+			truncateStr(e.Tag.Description, 100),
+			strings.Join(childParts, "\n")))
+	}
+
+	prompt := fmt.Sprintf(`为以下多个抽象标签重新生成 label 和 description。
+
+抽象标签列表:
+%s
+
+规则:
+- label: 概括所有子标签（1-160字）。保持当前 label 如果仍然准确
+- description: 中文，1-2 句话，客观说明，500 字以内
+- person 类标签说明人物身份
+- event 类标签说明事件经过
+- keyword 类标签说明概念领域
+
+返回 JSON: {"results": [{"abstract_tag_id": ID, "label": "标签", "description": "描述"}, ...]}`,
+		strings.Join(parts, "\n\n"))
+
+	router := airouter.NewRouter()
+	req := airouter.ChatRequest{
+		Capability: airouter.CapabilityTopicTagging,
+		Messages: []airouter.Message{
+			{Role: "system", Content: "You are a tag taxonomy assistant. Respond only with valid JSON."},
+			{Role: "user", Content: prompt},
+		},
+		JSONMode: true,
+		JSONSchema: &airouter.JSONSchema{
+			Type: "object",
+			Properties: map[string]airouter.SchemaProperty{
+				"results": {
+					Type: "array",
+					Items: &airouter.SchemaProperty{
+						Type: "object",
+						Properties: map[string]airouter.SchemaProperty{
+							"abstract_tag_id": {Type: "integer"},
+							"label":           {Type: "string"},
+							"description":     {Type: "string"},
+						},
+						Required: []string{"abstract_tag_id", "label", "description"},
+					},
+				},
+			},
+			Required: []string{"results"},
+		},
+		Temperature: func() *float64 { f := 0.2; return &f }(),
+		Metadata: map[string]any{
+			"operation":  "abstract_label_desc_batch",
+			"batch_size": len(entries),
+		},
+	}
+
+	result, err := router.Chat(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("batch label/desc LLM: %w", err)
+	}
+
+	content := jsonutil.SanitizeLLMJSON(result.Content)
+	var judgment batchLabelDescResult
+	if err := json.Unmarshal([]byte(content), &judgment); err != nil {
+		return nil, fmt.Errorf("parse batch label/desc response: %w", err)
 	}
 	return &judgment, nil
 }
