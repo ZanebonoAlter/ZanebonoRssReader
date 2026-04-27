@@ -236,69 +236,6 @@ func collectUnclassifiedTags(since, until time.Time) ([]TagInput, error) {
 	return inputs, nil
 }
 
-func CollectTagInputsByCategory(date time.Time, categoryID uint) ([]TagInput, error) {
-	startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
-	endOfDay := startOfDay.Add(24 * time.Hour)
-
-	var feedIDs []uint
-	if err := database.DB.Model(&models.Feed{}).
-		Where("category_id = ?", categoryID).
-		Pluck("id", &feedIDs).Error; err != nil || len(feedIDs) == 0 {
-		return nil, nil
-	}
-
-	var tagIDs []uint
-	database.DB.Model(&models.ArticleTopicTag{}).
-		Select("DISTINCT article_topic_tags.topic_tag_id").
-		Joins("JOIN articles ON articles.id = article_topic_tags.article_id").
-		Where("articles.feed_id IN ? AND articles.pub_date >= ? AND articles.pub_date < ?", feedIDs, startOfDay, endOfDay).
-		Pluck("article_topic_tags.topic_tag_id", &tagIDs)
-
-	if len(tagIDs) == 0 {
-		return nil, nil
-	}
-
-	var tags []models.TopicTag
-	database.DB.Where("id IN ? AND status = ?", tagIDs, "active").
-		Order("quality_score DESC, feed_count DESC").
-		Limit(100).
-		Find(&tags)
-
-	if len(tags) == 0 {
-		return nil, nil
-	}
-
-	type countRow struct {
-		TopicTagID uint `json:"topic_tag_id"`
-		Cnt        int  `json:"cnt"`
-	}
-	var counts []countRow
-	database.DB.Model(&models.ArticleTopicTag{}).
-		Select("article_topic_tags.topic_tag_id, COUNT(DISTINCT article_topic_tags.article_id) as cnt").
-		Joins("JOIN articles ON articles.id = article_topic_tags.article_id").
-		Where("article_topic_tags.topic_tag_id IN ? AND articles.feed_id IN ? AND articles.pub_date >= ? AND articles.pub_date < ?", tagIDs, feedIDs, startOfDay, endOfDay).
-		Group("article_topic_tags.topic_tag_id").
-		Scan(&counts)
-
-	countMap := make(map[uint]int, len(counts))
-	for _, c := range counts {
-		countMap[c.TopicTagID] = c.Cnt
-	}
-
-	inputs := make([]TagInput, 0, len(tags))
-	for _, tag := range tags {
-		inputs = append(inputs, TagInput{
-			ID:           tag.ID,
-			Label:        tag.Label,
-			Category:     tag.Category,
-			Description:  tag.Description,
-			ArticleCount: countMap[tag.ID],
-			Source:       tag.Source,
-		})
-	}
-	return inputs, nil
-}
-
 type CategoryNarrativeBrief struct {
 	ID          uint      `json:"id"`
 	Title       string    `json:"title"`

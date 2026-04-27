@@ -116,53 +116,49 @@ func (s *NarrativeService) GenerateAndSave(date time.Time) (int, error) {
 }
 
 func (s *NarrativeService) GenerateAndSaveForCategory(date time.Time, categoryID uint, categoryLabel string) (int, error) {
-	tagInputs, err := CollectTagInputsByCategory(date, categoryID)
-	if err != nil {
-		return 0, fmt.Errorf("collect tag inputs for category %d: %w", categoryID, err)
-	}
-	if len(tagInputs) == 0 {
-		logging.Infof("narrative: no tag inputs for category %d on %s, skipping", categoryID, date.Format("2006-01-02"))
-		return 0, nil
-	}
-
-	articleCount := 0
-	for _, t := range tagInputs {
-		articleCount += t.ArticleCount
-	}
-	if articleCount < 5 {
-		logging.Infof("narrative: category %d has only %d articles on %s, below threshold", categoryID, articleCount, date.Format("2006-01-02"))
-		return 0, nil
-	}
-
-	validTagCount := 0
-	for _, t := range tagInputs {
-		if t.ArticleCount > 0 {
-			validTagCount++
-		}
-	}
-	if validTagCount < 3 {
-		logging.Infof("narrative: category %d has only %d valid tags on %s, below threshold", categoryID, validTagCount, date.Format("2006-01-02"))
-		return 0, nil
-	}
-
 	prevNarratives, err := CollectPreviousNarratives(date, models.NarrativeScopeTypeFeedCategory, &categoryID)
 	if err != nil {
-		return 0, fmt.Errorf("collect previous narratives for category %d: %w", categoryID, err)
+		logging.Warnf("narrative: failed to collect previous narratives for category %d: %v", categoryID, err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()
-	outputs, err := GenerateNarratives(ctx, tagInputs, prevNarratives)
+
+	var allOutputs []NarrativeOutput
+
+	trees, err := CollectAbstractTreeInputsByCategory(date, categoryID)
 	if err != nil {
-		return 0, fmt.Errorf("generate narratives for category %d: %w", categoryID, err)
+		return 0, fmt.Errorf("collect abstract tree inputs for category %d: %w", categoryID, err)
+	}
+	if len(trees) > 0 {
+		treeOutputs, err := GenerateNarrativesFromAbstractTrees(ctx, trees, prevNarratives)
+		if err != nil {
+			logging.Warnf("narrative: Pass 1 (abstract trees) failed for category %d: %v", categoryID, err)
+		} else {
+			allOutputs = append(allOutputs, treeOutputs...)
+		}
 	}
 
-	if len(outputs) > 5 {
-		outputs = outputs[:5]
+	events, err := CollectUnclassifiedEventTagsByCategory(date, categoryID)
+	if err != nil {
+		return 0, fmt.Errorf("collect unclassified event tags for category %d: %w", categoryID, err)
 	}
-	if len(outputs) == 0 {
+	if len(events) > 0 {
+		eventOutputs, err := GenerateNarrativesFromUnclassifiedEvents(ctx, events, prevNarratives)
+		if err != nil {
+			logging.Warnf("narrative: Pass 2 (unclassified events) failed for category %d: %v", categoryID, err)
+		} else {
+			allOutputs = append(allOutputs, eventOutputs...)
+		}
+	}
+
+	if len(allOutputs) == 0 {
 		logging.Infof("narrative: no narratives generated for category %d on %s", categoryID, date.Format("2006-01-02"))
 		return 0, nil
+	}
+
+	if len(allOutputs) > 8 {
+		allOutputs = allOutputs[:8]
 	}
 
 	catID := categoryID
@@ -172,14 +168,15 @@ func (s *NarrativeService) GenerateAndSaveForCategory(date time.Time, categoryID
 		Label:      categoryLabel,
 	}
 
-	saved, err := saveNarratives(outputs, date, opts)
+	saved, err := saveNarratives(allOutputs, date, opts)
 	if err != nil {
 		return 0, fmt.Errorf("save category narratives: %w", err)
 	}
 
-	go feedbackNarrativesToTags(outputs)
+	go feedbackNarrativesToTags(allOutputs)
 
-	logging.Infof("narrative: saved %d narratives for category %d (%s) on %s", saved, categoryID, categoryLabel, date.Format("2006-01-02"))
+	logging.Infof("narrative: saved %d narratives (pass1_trees=%d, pass2_events=%d) for category %d (%s) on %s",
+		saved, len(trees), len(events), categoryID, categoryLabel, date.Format("2006-01-02"))
 	return saved, nil
 }
 
