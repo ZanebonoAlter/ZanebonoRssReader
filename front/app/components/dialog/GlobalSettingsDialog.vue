@@ -1266,6 +1266,48 @@ function formatNextRun(nextRun: string | null | undefined): string {
                 </div>
 
                 <div
+                  v-if="scheduler.name === 'tag_hierarchy_cleanup' && scheduler.last_run_summary"
+                  class="mt-4 rounded-2xl border border-violet-200 bg-gradient-to-br from-violet-50 via-purple-50 to-white p-4"
+                >
+                  <div class="flex items-start justify-between gap-4">
+                    <div>
+                      <div class="text-sm font-semibold text-gray-900">标签清理状态</div>
+                      <p class="mt-1 text-xs text-gray-600">
+                        僵尸清理 · 平级合并 · 树审查 · LLM 预算
+                      </p>
+                    </div>
+                    <div class="rounded-full border border-violet-200 bg-white px-3 py-1 text-xs font-medium text-violet-700">
+                      {{ formatDuration(scheduler.database_state.last_execution_duration) }}
+                    </div>
+                  </div>
+
+                  <div class="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+                    <div class="rounded-xl bg-white p-3 shadow-sm ring-1 ring-violet-100">
+                      <div class="text-xs text-gray-500">僵尸清理</div>
+                      <div class="mt-1 text-2xl font-bold text-gray-900">{{ scheduler.last_run_summary.zombie_deactivated ?? 0 }}</div>
+                    </div>
+                    <div class="rounded-xl bg-white p-3 shadow-sm ring-1 ring-violet-100">
+                      <div class="text-xs text-gray-500">平级合并</div>
+                      <div class="mt-1 text-2xl font-bold text-sky-700">{{ scheduler.last_run_summary.flat_merges_applied ?? 0 }}</div>
+                    </div>
+                    <div class="rounded-xl bg-white p-3 shadow-sm ring-1 ring-violet-100">
+                      <div class="text-xs text-gray-500">树审查</div>
+                      <div class="mt-1 text-2xl font-bold text-emerald-600">{{ scheduler.last_run_summary.trees_reviewed ?? 0 }}</div>
+                    </div>
+                    <div class="rounded-xl bg-white p-3 shadow-sm ring-1 ring-violet-100">
+                      <div class="text-xs text-gray-500">LLM 调用</div>
+                      <div class="mt-1 text-2xl font-bold" :class="scheduler.last_run_summary.timed_out ? 'text-rose-600' : 'text-violet-600'">
+                        {{ scheduler.last_run_summary.llm_calls_total ?? '-' }}
+                        <span class="text-xs text-gray-400">/ {{ scheduler.last_run_summary.llm_budget_total ?? '-' }}</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div v-if="scheduler.last_run_summary.timed_out" class="mt-2 text-xs text-rose-600">
+                    ⚠ 执行超时，部分阶段未完成
+                  </div>
+                </div>
+
+                <div
                   v-if="shouldShowContentCompletionPanel(scheduler)"
                   class="mt-4 rounded-2xl border border-amber-200 bg-gradient-to-br from-amber-50 via-orange-50 to-white p-4"
                 >
