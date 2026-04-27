@@ -129,11 +129,12 @@ func (te *TagExtractor) resolveCandidate(ctx context.Context, candidate topictyp
 		return nil, true, nil
 	}
 	return &topictypes.TopicTag{
-		Label:    strings.TrimSpace(candidate.Label),
-		Slug:     slug,
-		Category: category,
-		Aliases:  candidate.Aliases,
-		Score:    candidate.Confidence,
+		Label:       strings.TrimSpace(candidate.Label),
+		Slug:        slug,
+		Category:    category,
+		Aliases:     candidate.Aliases,
+		Score:       candidate.Confidence,
+		Description: strings.TrimSpace(candidate.Description),
 	}, false, nil
 }
 
@@ -257,7 +258,14 @@ func buildExtractionSystemPrompt() string {
 	- 标签应该简洁、准确
 
 每个标签输出格式：
-{"label": "标签名称", "category": "event|person|keyword", "confidence": 0.0-1.0, "aliases": ["别名1"], "evidence": "提取依据"}`
+{"label": "标签名称", "category": "event|person|keyword", "confidence": 0.0-1.0, "aliases": ["别名1"], "evidence": "提取依据", "description": "标签的简短描述（中文，1-2句，客观事实，仅event和keyword需要，person可不填）"}
+
+描述要求（仅 event 和 keyword）：
+- 中文，1-2句话，客观事实
+- 解释标签指代什么，不重复标签名
+- 例如 "ChatGPT" → "OpenAI开发的大型语言模型聊天机器人"
+- 例如 "苹果WWDC 2024" → "苹果公司于2024年6月举办的全球开发者大会"
+- person 标签的 description 可留空，系统会后续单独生成`
 }
 
 func buildExtractionUserPrompt(input topictypes.ExtractionInput) string {
@@ -320,6 +328,7 @@ func parseExtractedTags(content string) ([]topictypes.ExtractedTag, error) {
 		Confidence float64  `json:"confidence"`
 		Aliases    []string `json:"aliases"`
 		Evidence   string   `json:"evidence"`
+		Description string  `json:"description"`
 	}
 
 	if err := json.Unmarshal([]byte(content), &raw); err != nil {
@@ -345,11 +354,12 @@ func parseExtractedTags(content string) ([]topictypes.ExtractedTag, error) {
 			conf = 0.7
 		}
 		result = append(result, topictypes.ExtractedTag{
-			Label:      strings.TrimSpace(t.Label),
-			Category:   cat,
-			Confidence: conf,
-			Aliases:    t.Aliases,
-			Evidence:   t.Evidence,
+			Label:       strings.TrimSpace(t.Label),
+			Category:    cat,
+			Confidence:  conf,
+			Aliases:     t.Aliases,
+			Evidence:    t.Evidence,
+			Description: strings.TrimSpace(t.Description),
 		})
 	}
 
@@ -468,6 +478,7 @@ func tagExtractionSchema() *airouter.JSONSchema {
 						"confidence": {Type: "number", Description: "置信度 0.0-1.0，仅提取有信息量的标签，宁缺毋滥"},
 						"aliases":    {Type: "array", Items: &airouter.SchemaProperty{Type: "string"}},
 						"evidence":   {Type: "string", Description: "提取依据"},
+						"description": {Type: "string", Description: "标签的简短描述（中文，1-2句，客观事实。仅event和keyword需要，person可留空）"},
 					},
 					Required: []string{"label", "category"},
 				},
