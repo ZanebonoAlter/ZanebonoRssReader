@@ -40,7 +40,9 @@ flowchart TD
     RESULT -->|none| CREATE
     MERGE --> END1
     ABSTRACT --> END1
-```
+    ```
+
+> **注意**：对于 event/keyword 标签，description 在提取阶段（ExtractTagsFromArticle）已由 LLM 一并生成，创建时直接写入，无需额外调用 generateTagDescription。person 标签仍需要单独生成结构化属性。
 
 ---
 
