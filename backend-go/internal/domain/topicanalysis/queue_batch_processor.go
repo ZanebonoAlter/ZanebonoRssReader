@@ -69,6 +69,21 @@ func ProcessPendingAdoptNarrowerTasks() (int, error) {
 	batchSize := 5
 	batches := groupAdoptTasksByCategory(enriched, batchSize)
 
+	for _, e := range enriched {
+		if len(e.Candidates) == 0 {
+			now := time.Now()
+			err := database.DB.Model(&models.AdoptNarrowerQueue{}).
+				Where("id = ?", e.TaskModel.ID).
+				Updates(map[string]interface{}{
+					"status":       models.AdoptNarrowerQueueStatusCompleted,
+					"completed_at": now,
+				}).Error
+			if err != nil {
+				logging.Warnf("adopt narrower: failed to mark zero-candidate task %d completed: %v", e.TaskModel.ID, err)
+			}
+		}
+	}
+
 	processed := 0
 	for _, batch := range batches {
 		judgment, err := batchJudgeAdoptNarrower(context.Background(), batch)
@@ -81,8 +96,10 @@ func ProcessPendingAdoptNarrowerTasks() (int, error) {
 		}
 
 		judgmentMap := make(map[uint][]uint)
-		for _, r := range judgment.Results {
-			judgmentMap[r.AbstractTagID] = r.NarrowerIDs
+		if judgment != nil {
+			for _, r := range judgment.Results {
+				judgmentMap[r.AbstractTagID] = r.NarrowerIDs
+			}
 		}
 
 		for _, t := range batch {
@@ -105,12 +122,15 @@ func ProcessPendingAdoptNarrowerTasks() (int, error) {
 			}
 
 			now := time.Now()
-			database.DB.Model(&models.AdoptNarrowerQueue{}).
+			err := database.DB.Model(&models.AdoptNarrowerQueue{}).
 				Where("id = ?", t.TaskModel.ID).
 				Updates(map[string]interface{}{
 					"status":       models.AdoptNarrowerQueueStatusCompleted,
 					"completed_at": now,
-				})
+				}).Error
+			if err != nil {
+				logging.Warnf("adopt narrower: failed to mark task %d completed: %v", t.TaskModel.ID, err)
+			}
 			processed++
 		}
 	}
@@ -152,12 +172,15 @@ func ProcessPendingAbstractTagUpdateTasks() (int, error) {
 		}
 		if len(children) == 0 {
 			now := time.Now()
-			database.DB.Model(&models.AbstractTagUpdateQueue{}).
+			err := database.DB.Model(&models.AbstractTagUpdateQueue{}).
 				Where("id = ?", task.ID).
 				Updates(map[string]interface{}{
 					"status":       models.AbstractTagUpdateQueueStatusCompleted,
 					"completed_at": now,
-				})
+				}).Error
+			if err != nil {
+				logging.Warnf("abstract tag update: failed to mark zero-children task %d completed: %v", task.ID, err)
+			}
 			continue
 		}
 
@@ -170,6 +193,7 @@ func ProcessPendingAbstractTagUpdateTasks() (int, error) {
 
 	batchSize := 5
 	processed := 0
+	embSvc := NewEmbeddingService()
 	for i := 0; i < len(entries); i += batchSize {
 		end := i + batchSize
 		if end > len(entries) {
@@ -232,7 +256,6 @@ func ProcessPendingAbstractTagUpdateTasks() (int, error) {
 				}
 			}
 
-			embSvc := NewEmbeddingService()
 			emb, err := embSvc.GenerateEmbedding(context.Background(), &e.Tag, EmbeddingTypeIdentity)
 			if err == nil {
 				emb.TopicTagID = e.Tag.ID
@@ -240,12 +263,15 @@ func ProcessPendingAbstractTagUpdateTasks() (int, error) {
 			}
 
 			now := time.Now()
-			database.DB.Model(&models.AbstractTagUpdateQueue{}).
+			err = database.DB.Model(&models.AbstractTagUpdateQueue{}).
 				Where("id = ?", e.TaskID).
 				Updates(map[string]interface{}{
 					"status":       models.AbstractTagUpdateQueueStatusCompleted,
 					"completed_at": now,
-				})
+				}).Error
+			if err != nil {
+				logging.Warnf("abstract tag update: failed to mark task %d completed: %v", e.TaskID, err)
+			}
 			processed++
 		}
 	}
@@ -324,6 +350,9 @@ func batchJudgeAdoptNarrower(ctx context.Context, batch []adoptTaskWithCandidate
 	for i, t := range batch {
 		var candParts []string
 		for _, c := range t.Candidates {
+			if c.Tag == nil {
+				continue
+			}
 			candParts = append(candParts, fmt.Sprintf("%q (相似度: %.4f)", c.Tag.Label, c.Similarity))
 		}
 		entries = append(entries, fmt.Sprintf("%d. 抽象标签 %q (ID:%d): 候选 [%s]",
