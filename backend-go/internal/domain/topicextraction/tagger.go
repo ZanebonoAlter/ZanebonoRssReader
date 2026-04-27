@@ -501,13 +501,16 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 		Aliases:     string(aliasesJSON),
 		IsCanonical: true,
 		Source:      source,
+		Description: tagDescriptionForCategory(tag.Description, category),
 	}
 	if err := database.DB.Create(&newTag).Error; err != nil {
 		return nil, err
 	}
 
 	if articleContext != "" {
-		go generateTagDescription(newTag.ID, tag.Label, category, articleContext)
+		if category == "person" {
+			go generateTagDescription(newTag.ID, tag.Label, category, articleContext)
+		}
 	} else if es != nil {
 		go generateAndSaveEmbedding(es, &newTag)
 	}
@@ -529,6 +532,7 @@ func createChildOfAbstract(ctx context.Context, es *topicanalysis.EmbeddingServi
 		Aliases:     aliasesJSON,
 		IsCanonical: true,
 		Source:      source,
+		Description: tagDescriptionForCategory(tag.Description, category),
 	}
 	if err := database.DB.Create(&newTag).Error; err != nil {
 		return nil, fmt.Errorf("create child tag of abstract %d: %w", abstractParent.ID, err)
@@ -558,7 +562,9 @@ func createChildOfAbstract(ctx context.Context, es *topicanalysis.EmbeddingServi
 	}
 
 	if articleContext != "" {
-		go generateTagDescription(newTag.ID, tag.Label, category, articleContext)
+		if category == "person" {
+			go generateTagDescription(newTag.ID, tag.Label, category, articleContext)
+		}
 	} else if es != nil {
 		go generateAndSaveEmbedding(es, &newTag)
 	}
@@ -1045,6 +1051,13 @@ func sortTagsByScore(tags []topictypes.TopicTag) {
 		}
 		return tags[i].Score > tags[j].Score
 	})
+}
+
+func tagDescriptionForCategory(desc, category string) string {
+	if category == "person" {
+		return ""
+	}
+	return desc
 }
 
 // topictypes.Slugify creates a URL-safe slug from a string (uses extractor.go implementation)
