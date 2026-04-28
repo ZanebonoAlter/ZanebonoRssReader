@@ -32,7 +32,6 @@ func setupTagCleanupTestDB(t *testing.T) *gorm.DB {
 		&models.TopicTag{},
 		&models.TopicTagRelation{},
 		&models.ArticleTopicTag{},
-		&models.AISummaryTopic{},
 	); err != nil {
 		t.Fatalf("migrate test tables: %v", err)
 	}

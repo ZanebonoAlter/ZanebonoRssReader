@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Icon } from '@iconify/vue'
-import { useAIAdminApi, useSummariesApi } from '~/api'
+import { useAIAdminApi } from '~/api'
 import type { AIProvider, AIRoute, AIProviderUpsertRequest } from '~/types'
 
 const routeLabels: Record<string, string> = {
@@ -312,19 +312,6 @@ async function savePrimaryProvider() {
         if (!response.success) {
           throw new Error(response.error || `同步 ${routeLabels[capability]} 主路由失败`)
         }
-      }
-    }
-
-    if (providerId) {
-      const summariesApi = useSummariesApi()
-      const autoSummaryResponse = await summariesApi.updateAutoSummaryConfig({
-        base_url: primaryProviderForm.base_url,
-        api_key: primaryProviderForm.api_key || undefined,
-        model: primaryProviderForm.model,
-        time_range: primaryProviderForm.time_range,
-      })
-      if (!autoSummaryResponse.success) {
-        throw new Error(autoSummaryResponse.error || '保存自动总结配置失败')
       }
     }
 

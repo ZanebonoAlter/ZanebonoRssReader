@@ -22,7 +22,6 @@ type CreateFeedRequest struct {
 	Color                 string `json:"color"`
 	MaxArticles           int    `json:"max_articles"`
 	RefreshInterval       int    `json:"refresh_interval"`
-	AISummaryEnabled      bool   `json:"ai_summary_enabled"`
 	ArticleSummaryEnabled bool   `json:"article_summary_enabled"`
 	CompletionOnRefresh   bool   `json:"completion_on_refresh"`
 	MaxCompletionRetries  int    `json:"max_completion_retries"`
@@ -38,7 +37,6 @@ type UpdateFeedRequest struct {
 	Color                 string `json:"color"`
 	MaxArticles           int    `json:"max_articles"`
 	RefreshInterval       int    `json:"refresh_interval"`
-	AISummaryEnabled      bool   `json:"ai_summary_enabled"`
 	ArticleSummaryEnabled *bool  `json:"article_summary_enabled"`
 	CompletionOnRefresh   *bool  `json:"completion_on_refresh"`
 	MaxCompletionRetries  *int   `json:"max_completion_retries"`
@@ -219,7 +217,6 @@ func CreateFeed(c *gin.Context) {
 		Color:                 req.Color,
 		MaxArticles:           req.MaxArticles,
 		RefreshInterval:       req.RefreshInterval,
-		AISummaryEnabled:      req.AISummaryEnabled,
 		ArticleSummaryEnabled: req.ArticleSummaryEnabled,
 		CompletionOnRefresh:   req.CompletionOnRefresh,
 		MaxCompletionRetries:  req.MaxCompletionRetries,
@@ -337,10 +334,6 @@ func UpdateFeed(c *gin.Context) {
 	}
 	if req.RefreshInterval >= 0 {
 		updates["refresh_interval"] = req.RefreshInterval
-	}
-	// Only update ai_summary_enabled if explicitly provided in request
-	if _, exists := bodyMap["ai_summary_enabled"]; exists {
-		updates["ai_summary_enabled"] = req.AISummaryEnabled
 	}
 	if _, exists := bodyMap["article_summary_enabled"]; exists && req.ArticleSummaryEnabled != nil {
 		updates["article_summary_enabled"] = *req.ArticleSummaryEnabled

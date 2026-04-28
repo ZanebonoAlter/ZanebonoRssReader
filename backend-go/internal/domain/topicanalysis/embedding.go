@@ -45,6 +45,25 @@ var DefaultThresholds = EmbeddingMatchThresholds{
 	LowSimilarity:  0.78, // Auto-create if similarity < 0.78
 }
 
+// CategoryThresholdOverrides defines per-category threshold adjustments.
+// Keys are category names; the corresponding HighSimilarity overrides the default
+// when TagMatch processes a tag of that category.
+var CategoryThresholdOverrides = map[string]EmbeddingMatchThresholds{
+	"keyword": {
+		HighSimilarity: 0.90,
+		LowSimilarity:  0.78,
+	},
+}
+
+// ThresholdsForCategory returns the effective thresholds for a given category,
+// falling back to DefaultThresholds when no override is configured.
+func ThresholdsForCategory(category string) EmbeddingMatchThresholds {
+	if override, ok := CategoryThresholdOverrides[category]; ok {
+		return override
+	}
+	return DefaultThresholds
+}
+
 // TagMatchResult represents a tag match result
 type TagMatchResult struct {
 	MatchType   string // "exact", "candidates", "no_match"
@@ -210,7 +229,8 @@ func (s *EmbeddingService) FindSimilarTags(ctx context.Context, tag *models.Topi
 // TagMatch decides how to handle a candidate tag
 func (s *EmbeddingService) TagMatch(ctx context.Context, label, category string, aliases string) (*TagMatchResult, error) {
 	slug := topictypes.Slugify(label)
-	logging.Infof("TagMatch: start label=%q slug=%q category=%s low=%.2f high=%.2f", label, slug, category, s.thresholds.LowSimilarity, s.thresholds.HighSimilarity)
+	thresholds := ThresholdsForCategory(category)
+	logging.Infof("TagMatch: start label=%q slug=%q category=%s low=%.2f high=%.2f", label, slug, category, thresholds.LowSimilarity, thresholds.HighSimilarity)
 	var existingTag models.TopicTag
 	err := database.DB.Scopes(activeTagFilter).Where("slug = ? AND category = ?", slug, category).First(&existingTag).Error
 	if err == nil {
@@ -279,7 +299,7 @@ func (s *EmbeddingService) TagMatch(ctx context.Context, label, category string,
 
 	var validCandidates []TagCandidate
 	for _, c := range candidates {
-		if c.Similarity >= s.thresholds.LowSimilarity {
+		if c.Similarity >= thresholds.LowSimilarity {
 			validCandidates = append(validCandidates, c)
 		}
 	}
@@ -292,6 +312,16 @@ func (s *EmbeddingService) TagMatch(ctx context.Context, label, category string,
 		}, nil
 	}
 
+	if validCandidates[0].Similarity >= thresholds.HighSimilarity {
+		top := validCandidates[0]
+		logging.Infof("TagMatch: label=%q category=%s result=exact reason=high_similarity existingID=%d existingLabel=%q similarity=%.4f", label, category, top.Tag.ID, top.Tag.Label, top.Similarity)
+		return &TagMatchResult{
+			MatchType:   "exact",
+			ExistingTag: top.Tag,
+			Similarity:  top.Similarity,
+		}, nil
+	}
+
 	logging.Infof("TagMatch: label=%q category=%s result=candidates validCandidates=%d topSimilarity=%.4f topLabels=%s", label, category, len(validCandidates), validCandidates[0].Similarity, matchCandidateLabels(validCandidates))
 
 	return &TagMatchResult{
@@ -299,6 +329,49 @@ func (s *EmbeddingService) TagMatch(ctx context.Context, label, category string,
 		Similarity: validCandidates[0].Similarity,
 		Candidates: validCandidates,
 	}, nil
+}
+
+// FindSimilarTagsAmongSet finds pairs of tags within a set whose embedding
+// cosine similarity meets the given threshold. Uses pgvector pairwise distance.
+func (s *EmbeddingService) FindSimilarTagsAmongSet(ctx context.Context, tagIDs []uint, threshold float64) ([]SimilarityEdge, error) {
+	if len(tagIDs) < 2 {
+		return nil, nil
+	}
+
+	type pairRow struct {
+		TagAID   uint    `gorm:"column:tag_a_id"`
+		TagBID   uint    `gorm:"column:tag_b_id"`
+		Distance float64 `gorm:"column:distance"`
+	}
+	var rows []pairRow
+	query := `
+		SELECT a.topic_tag_id AS tag_a_id,
+		       b.topic_tag_id AS tag_b_id,
+		       a.embedding <=> b.embedding AS distance
+		FROM topic_tag_embeddings a
+		JOIN topic_tag_embeddings b
+		  ON a.topic_tag_id < b.topic_tag_id
+		  AND a.embedding_type = b.embedding_type
+		WHERE a.embedding_type = 'semantic'
+		  AND a.topic_tag_id IN ?
+		  AND b.topic_tag_id IN ?
+		  AND a.embedding IS NOT NULL
+		  AND b.embedding IS NOT NULL
+		  AND a.embedding <=> b.embedding < ?
+	`
+	if err := database.DB.Raw(query, tagIDs, tagIDs, 1.0-threshold).Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("pairwise similarity query: %w", err)
+	}
+
+	edges := make([]SimilarityEdge, 0, len(rows))
+	for _, r := range rows {
+		edges = append(edges, SimilarityEdge{
+			TagAID:     r.TagAID,
+			TagBID:     r.TagBID,
+			Similarity: 1.0 - r.Distance,
+		})
+	}
+	return edges, nil
 }
 
 func bestSimilarity(candidates []TagCandidate) float64 {
@@ -420,10 +493,9 @@ var mergeReembeddingQueueFactory = defaultMergeReembeddingQueueFactory
 
 // MergeTags merges sourceTag into targetTag within a database transaction.
 // 1. Update all article_topic_tags from source to target (dedup conflicts)
-// 2. Update all ai_summary_topics from source to target (dedup conflicts)
-// 3. Set source tag status='merged', merged_into_id=target.ID
-// 4. Delete source tag's embedding (stale after merge)
-// 5. Recalculate target tag's feed_count
+// 2. Set source tag status='merged', merged_into_id=target.ID
+// 3. Delete source tag's embedding (stale after merge)
+// 4. Recalculate target tag's feed_count
 func MergeTags(sourceTagID, targetTagID uint) error {
 	if sourceTagID == targetTagID {
 		return fmt.Errorf("cannot merge tag into itself (id=%d)", sourceTagID)
@@ -459,31 +531,6 @@ func MergeTags(sourceTagID, targetTagID uint) error {
 			}
 		}
 
-		// Step 2: Migrate ai_summary_topics references (same dedup logic)
-		var sourceSummaryLinks []models.AISummaryTopic
-		if err := tx.Where("topic_tag_id = ?", sourceTagID).Find(&sourceSummaryLinks).Error; err != nil {
-			return fmt.Errorf("find source ai_summary_topics: %w", err)
-		}
-
-		for _, link := range sourceSummaryLinks {
-			var existingCount int64
-			if err := tx.Model(&models.AISummaryTopic{}).
-				Where("summary_id = ? AND topic_tag_id = ?", link.SummaryID, targetTagID).
-				Count(&existingCount).Error; err != nil {
-				return fmt.Errorf("check existing ai_summary_topic for summary %d: %w", link.SummaryID, err)
-			}
-
-			if existingCount > 0 {
-				if err := tx.Delete(&link).Error; err != nil {
-					return fmt.Errorf("delete duplicate ai_summary_topic %d: %w", link.ID, err)
-				}
-			} else {
-				if err := tx.Model(&link).Update("topic_tag_id", targetTagID).Error; err != nil {
-					return fmt.Errorf("update ai_summary_topic %d to target: %w", link.ID, err)
-				}
-			}
-		}
-
 		// Step 3: Mark source tag as merged
 		if err := tx.Model(&models.TopicTag{}).
 			Where("id = ?", sourceTagID).
@@ -504,7 +551,7 @@ func MergeTags(sourceTagID, targetTagID uint) error {
 			return fmt.Errorf("delete source tag embedding: %w", err)
 		}
 
-		// Step 5: Recalculate target tag's feed_count
+		// Step 6: Recalculate target tag's feed_count
 		if err := tx.Model(&models.TopicTag{}).
 			Where("id = ?", targetTagID).
 			Update("feed_count", tx.Model(&models.ArticleTopicTag{}).
@@ -735,27 +782,6 @@ func GetTagContextTitles(tagID uint, limit int) []string {
 		LIMIT ?
 	`
 	database.DB.Raw(query, tagID, limit).Scan(&titles)
-
-	if len(titles) >= limit {
-		return titles
-	}
-
-	remaining := limit - len(titles)
-	var summaryTitles []string
-	query2 := `
-		SELECT title FROM (
-			SELECT DISTINCT s.title, MAX(ast.created_at) AS created_at
-			FROM ai_summary_topics ast
-			JOIN ai_summaries s ON s.id = ast.summary_id
-			WHERE ast.topic_tag_id = ?
-			  AND s.title NOT IN (SELECT DISTINCT a.title FROM article_topic_tags att JOIN articles a ON a.id = att.article_id WHERE att.topic_tag_id = ?)
-			GROUP BY s.title
-		) sub
-		ORDER BY sub.created_at DESC
-		LIMIT ?
-	`
-	database.DB.Raw(query2, tagID, tagID, remaining).Scan(&summaryTitles)
-	titles = append(titles, summaryTitles...)
 	return titles
 }
 

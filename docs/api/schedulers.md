@@ -15,12 +15,10 @@
 | 名称 | 别名 | 说明 |
 |------|------|------|
 | `auto_refresh` | - | 自动刷新 RSS |
-| `auto_summary` | - | 自动生成 AI 总结 |
 | `preference_update` | - | 更新阅读偏好 |
 | `content_completion` | `ai_summary` | 文章内容补全 |
 | `firecrawl` | - | Firecrawl 全文抓取 |
 | `digest` | - | Digest 日报/周报 |
-| `auto_tag_merge` | - | 自动合并相似标签 |
 | `tag_quality_score` | - | 重算标签质量分数 |
 | `narrative_summary` | - | 生成每日叙事摘要 |
 | `tag_hierarchy_cleanup` | - | 按三阶段策略清理 tag 体系 |

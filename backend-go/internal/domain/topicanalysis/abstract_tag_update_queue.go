@@ -64,6 +64,20 @@ func (s *AbstractTagUpdateQueueService) Enqueue(abstractTagID uint, triggerReaso
 		return nil
 	}
 
+	var recentCompleted int64
+	err = s.db.Model(&models.AbstractTagUpdateQueue{}).
+		Where("abstract_tag_id = ? AND status = ? AND completed_at > ?",
+			abstractTagID,
+			models.AbstractTagUpdateQueueStatusCompleted,
+			time.Now().Add(-5*time.Minute),
+		).Count(&recentCompleted).Error
+	if err != nil {
+		return err
+	}
+	if recentCompleted > 0 {
+		return nil
+	}
+
 	task := models.AbstractTagUpdateQueue{
 		AbstractTagID: abstractTagID,
 		TriggerReason: triggerReason,
@@ -175,7 +189,7 @@ func (s *AbstractTagUpdateQueueService) processNext() {
 
 	task := tasks[0]
 
-	if err := s.refreshAbstractTag(task.AbstractTagID); err != nil {
+	if err := s.refreshAbstractTag(task.AbstractTagID, task.TriggerReason); err != nil {
 		s.markFailed(task.ID, err.Error())
 		return
 	}
@@ -195,7 +209,7 @@ func (s *AbstractTagUpdateQueueService) processNext() {
 		zap.String("trigger", task.TriggerReason))
 }
 
-func (s *AbstractTagUpdateQueueService) refreshAbstractTag(abstractTagID uint) error {
+func (s *AbstractTagUpdateQueueService) refreshAbstractTag(abstractTagID uint, triggerReason string) error {
 	var tag models.TopicTag
 	if err := s.db.First(&tag, abstractTagID).Error; err != nil {
 		return fmt.Errorf("load abstract tag %d: %w", abstractTagID, err)
@@ -283,11 +297,13 @@ func (s *AbstractTagUpdateQueueService) refreshAbstractTag(abstractTagID uint) e
 		return fmt.Errorf("save semantic embedding for abstract tag %d: %w", abstractTagID, err)
 	}
 
-	s.hierarchySem <- struct{}{}
-	go func() {
-		defer func() { <-s.hierarchySem }()
-		MatchAbstractTagHierarchy(context.Background(), abstractTagID)
-	}()
+	if triggerReason != "multi_parent_resolved" {
+		s.hierarchySem <- struct{}{}
+		go func() {
+			defer func() { <-s.hierarchySem }()
+			MatchAbstractTagHierarchy(context.Background(), abstractTagID)
+		}()
+	}
 
 	return nil
 }

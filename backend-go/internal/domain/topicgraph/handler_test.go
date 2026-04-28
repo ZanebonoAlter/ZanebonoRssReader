@@ -21,8 +21,8 @@ func setupTopicGraphTestDB(t *testing.T) {
 
 	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:topic_graph_%d?mode=memory&cache=shared", time.Now().UnixNano())), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&models.AISettings{}, &models.Category{}, &models.Feed{}, &models.AISummary{}))
-	require.NoError(t, db.AutoMigrate(&models.Article{}, &models.TopicTag{}, &models.AISummaryTopic{}, &models.ArticleTopicTag{}))
+	require.NoError(t, db.AutoMigrate(&models.Category{}, &models.Feed{}))
+	require.NoError(t, db.AutoMigrate(&models.Article{}, &models.TopicTag{}, &models.ArticleTopicTag{}, &models.TopicTagRelation{}))
 	database.DB = db
 }
 
@@ -45,36 +45,7 @@ func seedTopicGraphData(t *testing.T) {
 	for i := range articles {
 		require.NoError(t, database.DB.Create(&articles[i]).Error)
 	}
-	articleIDsJSON, err := json.Marshal([]uint{articles[0].ID, articles[1].ID})
-	require.NoError(t, err)
 
-	summaries := []models.AISummary{
-		{
-			FeedID:       &feedA.ID,
-			CategoryID:   &category.ID,
-			Title:        "OpenAI ships GPT-5 agent stack",
-			Summary:      "OpenAI shipped a GPT-5 AI agent stack with multimodal planning and coding automation.",
-			Articles:     string(articleIDsJSON),
-			ArticleCount: 5,
-			CreatedAt:    createdAt,
-			UpdatedAt:    createdAt,
-		},
-		{
-			FeedID:       &feedB.ID,
-			CategoryID:   &category.ID,
-			Title:        "Anthropic and OpenAI race on agents",
-			Summary:      "Anthropic and OpenAI are both pushing AI agent tooling for enterprise coding workflows.",
-			ArticleCount: 4,
-			CreatedAt:    createdAt.Add(2 * time.Hour),
-			UpdatedAt:    createdAt.Add(2 * time.Hour),
-		},
-	}
-
-	for _, summary := range summaries {
-		require.NoError(t, database.DB.Create(&summary).Error)
-	}
-
-	// Create topic tags for articles
 	topicTags := []models.TopicTag{
 		{Label: "AI Agent", Slug: "ai-agent", Category: models.TagCategoryKeyword, Kind: "keyword"},
 		{Label: "OpenAI", Slug: "openai", Category: models.TagCategoryKeyword, Kind: "keyword"},
@@ -83,7 +54,6 @@ func seedTopicGraphData(t *testing.T) {
 		require.NoError(t, database.DB.Create(&topicTags[i]).Error)
 	}
 
-	// Link articles to topic tags (source='llm' to match the query filter)
 	articleTopicTags := []models.ArticleTopicTag{
 		{ArticleID: articles[0].ID, TopicTagID: topicTags[0].ID, Score: 1.0, Source: "llm"},
 		{ArticleID: articles[0].ID, TopicTagID: topicTags[1].ID, Score: 0.8, Source: "llm"},
@@ -97,7 +67,6 @@ func seedTopicGraphData(t *testing.T) {
 func seedTopicArticlesData(t *testing.T) {
 	t.Helper()
 
-	// Create topic tags
 	topicTags := []models.TopicTag{
 		{Label: "AI Agent", Slug: "ai-agent", Category: models.TagCategoryKeyword, Kind: "topic"},
 		{Label: "OpenAI", Slug: "openai", Category: models.TagCategoryKeyword, Kind: "topic"},
@@ -107,7 +76,6 @@ func seedTopicArticlesData(t *testing.T) {
 		require.NoError(t, database.DB.Create(&topicTags[i]).Error)
 	}
 
-	// Create articles with topic tags
 	createdAt := time.Date(2026, 3, 11, 9, 30, 0, 0, time.FixedZone("CST", 8*3600))
 	articles := []models.Article{
 		{Title: "AI Agent Article 1", Link: "https://example.com/ai-agent-1", CreatedAt: createdAt},
@@ -120,7 +88,6 @@ func seedTopicArticlesData(t *testing.T) {
 		require.NoError(t, database.DB.Create(&articles[i]).Error)
 	}
 
-	// Link articles to topic tags
 	articleTopicTags := []models.ArticleTopicTag{
 		{ArticleID: articles[0].ID, TopicTagID: topicTags[0].ID, Score: 1.0},
 		{ArticleID: articles[1].ID, TopicTagID: topicTags[0].ID, Score: 0.9},
@@ -163,11 +130,10 @@ func TestGetTopicGraphReturnsNodesAndEdges(t *testing.T) {
 
 	var persistedCount int64
 	require.NoError(t, database.DB.Model(&models.TopicTag{}).Count(&persistedCount).Error)
-	// TopicTags are pre-created in seedTopicGraphData for article-topic associations
 	require.Equal(t, int64(2), persistedCount)
 }
 
-func TestGetTopicDetailReturnsHistoryAndSummaries(t *testing.T) {
+func TestGetTopicDetailReturnsHistoryAndArticles(t *testing.T) {
 	setupTopicGraphTestDB(t)
 	seedTopicGraphData(t)
 	gin.SetMode(gin.TestMode)
@@ -188,7 +154,7 @@ func TestGetTopicDetailReturnsHistoryAndSummaries(t *testing.T) {
 				Slug  string `json:"slug"`
 				Label string `json:"label"`
 			} `json:"topic"`
-			Summaries   []map[string]any  `json:"summaries"`
+			Articles    []map[string]any  `json:"articles"`
 			History     []map[string]any  `json:"history"`
 			SearchLinks map[string]string `json:"search_links"`
 		} `json:"data"`
@@ -197,35 +163,16 @@ func TestGetTopicDetailReturnsHistoryAndSummaries(t *testing.T) {
 	require.True(t, body.Success)
 	require.Equal(t, "ai-agent", body.Data.Topic.Slug)
 	require.Equal(t, "AI Agent", body.Data.Topic.Label)
-	require.NotEmpty(t, body.Data.Summaries)
+	require.NotEmpty(t, body.Data.Articles)
 	require.NotEmpty(t, body.Data.History)
-	firstSummary := body.Data.Summaries[0]
-	require.NotEmpty(t, firstSummary["feed_name"])
-	require.NotEmpty(t, firstSummary["summary"])
-	hasAggregatedTags := false
-	for _, summary := range body.Data.Summaries {
-		aggregatedTags, ok := summary["aggregated_tags"].([]any)
-		if ok && len(aggregatedTags) > 0 {
-			hasAggregatedTags = true
-			break
-		}
-	}
-	require.True(t, hasAggregatedTags)
-	hasArticles := false
-	for _, summary := range body.Data.Summaries {
-		articles, ok := summary["articles"].([]any)
-		if ok && len(articles) > 0 {
-			hasArticles = true
-			break
-		}
-	}
-	require.True(t, hasArticles)
+	firstArticle := body.Data.Articles[0]
+	require.NotEmpty(t, firstArticle["title"])
 	searchLinks, ok := body.Data.SearchLinks["youtube_live"]
 	require.True(t, ok)
 	require.NotEmpty(t, searchLinks)
 }
 
-func TestGetDigestsByArticleTagReturnsAggregatedTags(t *testing.T) {
+func TestGetDigestsByArticleTagReturnsArticles(t *testing.T) {
 	setupTopicGraphTestDB(t)
 	seedTopicGraphData(t)
 	gin.SetMode(gin.TestMode)
@@ -250,13 +197,8 @@ func TestGetDigestsByArticleTagReturnsAggregatedTags(t *testing.T) {
 	require.NotEmpty(t, body.Data.Digests)
 
 	firstDigest := body.Data.Digests[0]
-	aggregatedTags, ok := firstDigest["aggregated_tags"].([]any)
-	require.True(t, ok)
-	require.NotEmpty(t, aggregatedTags)
-	firstTag, ok := aggregatedTags[0].(map[string]any)
-	require.True(t, ok)
-	require.NotEmpty(t, firstTag["slug"])
-	require.NotEmpty(t, firstTag["article_count"])
+	require.NotEmpty(t, firstDigest["title"])
+	require.NotEmpty(t, firstDigest["feed_name"])
 }
 
 func TestGetTopicArticlesSuccess(t *testing.T) {
@@ -289,7 +231,6 @@ func TestGetTopicArticlesSuccess(t *testing.T) {
 	require.Equal(t, 1, body.Data.Page)
 	require.Equal(t, 10, body.Data.PageSize)
 
-	// Verify articles have expected fields
 	firstArticle := body.Data.Articles[0]
 	require.NotEmpty(t, firstArticle["id"])
 	require.NotEmpty(t, firstArticle["title"])
@@ -300,7 +241,6 @@ func TestGetTopicArticlesPagination(t *testing.T) {
 	seedTopicArticlesData(t)
 	gin.SetMode(gin.TestMode)
 
-	// Test page 1 with page_size 2
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Params = gin.Params{{Key: "slug", Value: "ai-agent"}}
@@ -354,7 +294,6 @@ func TestGetTopicArticlesInvalidPage(t *testing.T) {
 	seedTopicArticlesData(t)
 	gin.SetMode(gin.TestMode)
 
-	// Test with negative page - should use default value
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Params = gin.Params{{Key: "slug", Value: "ai-agent"}}
@@ -372,7 +311,6 @@ func TestGetTopicArticlesInvalidPage(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
 	require.True(t, body.Success)
-	// Should use default page value (1)
 	require.Equal(t, 1, body.Data.Page)
 }
 
@@ -381,7 +319,6 @@ func TestGetTopicArticlesInvalidPageSize(t *testing.T) {
 	seedTopicArticlesData(t)
 	gin.SetMode(gin.TestMode)
 
-	// Test with page_size exceeding max - should use max value
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Params = gin.Params{{Key: "slug", Value: "ai-agent"}}
@@ -399,7 +336,6 @@ func TestGetTopicArticlesInvalidPageSize(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
 	require.True(t, body.Success)
-	// Should use max page_size value (100)
 	require.Equal(t, 100, body.Data.PageSize)
 }
 
@@ -427,7 +363,6 @@ func TestGetTopicArticlesTopicNotFound(t *testing.T) {
 
 func TestGetTopicArticlesEmptyResult(t *testing.T) {
 	setupTopicGraphTestDB(t)
-	// Don't seed article data - topic exists but no articles
 	topicTag := models.TopicTag{Label: "Empty Topic", Slug: "empty-topic", Category: models.TagCategoryKeyword, Kind: "topic"}
 	require.NoError(t, database.DB.Create(&topicTag).Error)
 	gin.SetMode(gin.TestMode)

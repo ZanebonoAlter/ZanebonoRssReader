@@ -798,7 +798,7 @@ func TestExecuteTreeReviewMove_MovesChildAtomically(t *testing.T) {
 
 func TestReviewHierarchyTreesAppliesLLMMerge(t *testing.T) {
 	db := setupAbstractTagServiceTestDB(t)
-	if err := db.AutoMigrate(&models.AISummaryTopic{}, &models.MergeReembeddingQueue{}); err != nil {
+	if err := db.AutoMigrate(&models.MergeReembeddingQueue{}); err != nil {
 		t.Fatalf("migrate merge dependencies: %v", err)
 	}
 	root := models.TopicTag{Label: "根", Slug: "root", Category: "event", Kind: "event", Source: "abstract", Status: "active"}

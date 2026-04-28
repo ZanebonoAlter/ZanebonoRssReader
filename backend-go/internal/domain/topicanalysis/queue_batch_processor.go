@@ -15,15 +15,41 @@ import (
 	"my-robot-backend/internal/platform/logging"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 func ProcessPendingAdoptNarrowerTasks() (int, error) {
 	var tasks []models.AdoptNarrowerQueue
-	if err := database.DB.
-		Where("status = ?", models.AdoptNarrowerQueueStatusPending).
-		Order("created_at ASC").
-		Limit(50).
-		Find(&tasks).Error; err != nil {
+	err := database.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("status = ?", models.AdoptNarrowerQueueStatusPending).
+			Order("created_at ASC").
+			Limit(50).
+			Find(&tasks).Error; err != nil {
+			return err
+		}
+
+		if len(tasks) == 0 {
+			return nil
+		}
+
+		now := time.Now()
+		var taskIDs []uint
+		for _, t := range tasks {
+			taskIDs = append(taskIDs, t.ID)
+		}
+
+		if err := tx.Model(&models.AdoptNarrowerQueue{}).
+			Where("id IN ? AND status = ?", taskIDs, models.AdoptNarrowerQueueStatusPending).
+			Updates(map[string]interface{}{
+				"status":     models.AdoptNarrowerQueueStatusProcessing,
+				"started_at": now,
+			}).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
 		return 0, err
 	}
 

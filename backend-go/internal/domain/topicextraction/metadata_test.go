@@ -27,9 +27,7 @@ func setupTopicExtractionTestDB(t *testing.T) {
 	database.DB = db
 	if err := database.DB.AutoMigrate(
 		&models.Feed{},
-		&models.AISummary{},
 		&models.TopicTag{},
-		&models.AISummaryTopic{},
 		&models.Article{},
 		&models.ArticleTopicTag{},
 		&models.AIProvider{},
@@ -38,53 +36,6 @@ func setupTopicExtractionTestDB(t *testing.T) {
 		&models.AICallLog{},
 	); err != nil {
 		t.Fatalf("migrate test db: %v", err)
-	}
-}
-
-func TestTagSummaryLogsSummaryMetadata(t *testing.T) {
-	setupTopicExtractionTestDB(t)
-
-	aiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"[{\"label\":\"OpenAI\",\"category\":\"person\",\"confidence\":0.9}]"}}]}`))
-	}))
-	defer aiServer.Close()
-
-	provider := models.AIProvider{Name: "tag-primary", ProviderType: airouter.ProviderTypeOpenAICompatible, BaseURL: aiServer.URL, APIKey: "token", Model: "test-model", Enabled: true}
-	if err := database.DB.Create(&provider).Error; err != nil {
-		t.Fatalf("create provider: %v", err)
-	}
-	route := models.AIRoute{Name: airouter.DefaultRouteName, Capability: string(airouter.CapabilityTopicTagging), Enabled: true, Strategy: "ordered_failover"}
-	if err := database.DB.Create(&route).Error; err != nil {
-		t.Fatalf("create route: %v", err)
-	}
-	if err := database.DB.Create(&models.AIRouteProvider{RouteID: route.ID, ProviderID: provider.ID, Priority: 1, Enabled: true}).Error; err != nil {
-		t.Fatalf("create route provider: %v", err)
-	}
-
-	feed := models.Feed{Title: "Feed", URL: "https://example.com/feed"}
-	if err := database.DB.Create(&feed).Error; err != nil {
-		t.Fatalf("create feed: %v", err)
-	}
-	summary := models.AISummary{FeedID: &feed.ID, Title: "Summary title", Summary: "Summary body", Articles: "[1,2]", ArticleCount: 2}
-	if err := database.DB.Create(&summary).Error; err != nil {
-		t.Fatalf("create summary: %v", err)
-	}
-	summary.Feed = &feed
-
-	if err := TagSummary(&summary, "Feed", ""); err != nil {
-		t.Fatalf("tag summary: %v", err)
-	}
-
-	var callLog models.AICallLog
-	if err := database.DB.First(&callLog).Error; err != nil {
-		t.Fatalf("load call log: %v", err)
-	}
-	if callLog.Capability != string(airouter.CapabilityTopicTagging) {
-		t.Fatalf("capability = %q, want %q", callLog.Capability, airouter.CapabilityTopicTagging)
-	}
-	if callLog.RequestMeta != `{"feed_name":"Feed","summary_id":1,"title":"Summary title"}` && callLog.RequestMeta != fmt.Sprintf(`{"feed_name":"Feed","summary_id":%d,"title":"Summary title"}`, summary.ID) {
-		t.Fatalf("request_meta = %s", callLog.RequestMeta)
 	}
 }
 
@@ -135,7 +86,7 @@ func TestBackfillArticleTagsOnlyTagsUntaggedArticles(t *testing.T) {
 	}
 }
 
-func TestLimitArticleTagsKeepsTopEightInOrder(t *testing.T) {
+func TestLimitArticleTagsKeepsTopFiveInOrder(t *testing.T) {
 	tags := make([]topictypes.TopicTag, 0, 10)
 	for i := 0; i < 10; i++ {
 		tags = append(tags, topictypes.TopicTag{
@@ -148,8 +99,8 @@ func TestLimitArticleTagsKeepsTopEightInOrder(t *testing.T) {
 
 	limited := limitArticleTags(tags)
 
-	if len(limited) != 8 {
-		t.Fatalf("limited tag count = %d, want 8", len(limited))
+	if len(limited) != 5 {
+		t.Fatalf("limited tag count = %d, want 5", len(limited))
 	}
 	for i, tag := range limited {
 		want := fmt.Sprintf("Tag %d", i)
@@ -159,7 +110,7 @@ func TestLimitArticleTagsKeepsTopEightInOrder(t *testing.T) {
 	}
 }
 
-func TestTagArticleStoresOnlyTopEightTags(t *testing.T) {
+func TestTagArticleStoresOnlyTopFiveTags(t *testing.T) {
 	setupTopicExtractionTestDB(t)
 
 	aiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -203,8 +154,8 @@ func TestTagArticleStoresOnlyTopEightTags(t *testing.T) {
 	if err := database.DB.Where("article_id = ?", article.ID).Find(&links).Error; err != nil {
 		t.Fatalf("load article tags: %v", err)
 	}
-	if len(links) != 8 {
-		t.Fatalf("article tag count = %d, want 8", len(links))
+	if len(links) != 5 {
+		t.Fatalf("article tag count = %d, want 5", len(links))
 	}
 
 	var savedTags []models.TopicTag
@@ -215,10 +166,10 @@ func TestTagArticleStoresOnlyTopEightTags(t *testing.T) {
 		Find(&savedTags).Error; err != nil {
 		t.Fatalf("load saved tags: %v", err)
 	}
-	if len(savedTags) != 8 {
-		t.Fatalf("saved tag count = %d, want 8", len(savedTags))
+	if len(savedTags) != 5 {
+		t.Fatalf("saved tag count = %d, want 5", len(savedTags))
 	}
-	if savedTags[0].Label != "Tag 0" || savedTags[7].Label != "Tag 7" {
-		t.Fatalf("saved tag order = %q ... %q, want Tag 0 ... Tag 7", savedTags[0].Label, savedTags[7].Label)
+	if savedTags[0].Label != "Tag 0" || savedTags[4].Label != "Tag 4" {
+		t.Fatalf("saved tag order = %q ... %q, want Tag 0 ... Tag 4", savedTags[0].Label, savedTags[4].Label)
 	}
 }

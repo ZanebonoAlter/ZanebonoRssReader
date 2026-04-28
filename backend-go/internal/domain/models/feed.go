@@ -19,7 +19,7 @@ type Feed struct {
 	RefreshStatus         string     `gorm:"size:20;default:idle" json:"refresh_status"`
 	RefreshError          string     `gorm:"type:text" json:"refresh_error"`
 	LastRefreshAt         *time.Time `json:"last_refresh_at"`
-	AISummaryEnabled      bool       `gorm:"default:true" json:"ai_summary_enabled"`
+
 	ArticleSummaryEnabled bool       `gorm:"default:false" json:"article_summary_enabled"`
 	CompletionOnRefresh   bool       `gorm:"default:true" json:"completion_on_refresh"`
 	MaxCompletionRetries  int        `gorm:"default:3" json:"max_completion_retries"`
@@ -53,7 +53,7 @@ func (f *Feed) ToDict(stats *FeedStats) map[string]interface{} {
 		"refresh_status":          f.RefreshStatus,
 		"refresh_error":           f.RefreshError,
 		"last_refresh_at":         FormatDatetimeCSTPtr(f.LastRefreshAt),
-		"ai_summary_enabled":      f.AISummaryEnabled,
+
 		"article_summary_enabled": f.ArticleSummaryEnabled,
 		"completion_on_refresh":   f.CompletionOnRefresh,
 		"max_completion_retries":  f.MaxCompletionRetries,

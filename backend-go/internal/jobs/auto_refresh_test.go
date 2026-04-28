@@ -9,23 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"my-robot-backend/internal/app/runtimeinfo"
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/platform/database"
 	"my-robot-backend/internal/platform/ws"
 )
-
-type stubAutoSummaryTrigger struct {
-	triggered chan struct{}
-}
-
-func (s stubAutoSummaryTrigger) TriggerNow() map[string]interface{} {
-	select {
-	case s.triggered <- struct{}{}:
-	default:
-	}
-	return map[string]interface{}{"accepted": true, "started": true}
-}
 
 func TestAutoRefreshCompleteMessageJSON(t *testing.T) {
 	msg := ws.AutoRefreshCompleteMessage{
@@ -72,14 +59,14 @@ func TestAutoRefreshCompleteBroadcastSource(t *testing.T) {
 
 	source := string(content)
 
-	if !strings.Contains(source, `func (s *AutoRefreshScheduler) triggerAutoSummaryAfterRefreshes(wg *sync.WaitGroup, startTime time.Time, summary *AutoRefreshRunSummary)`) {
-		t.Fatalf("triggerAutoSummaryAfterRefreshes should accept startTime and summary")
+	if !strings.Contains(source, `func (s *AutoRefreshScheduler) broadcastRefreshCompletion(startTime time.Time, summary *AutoRefreshRunSummary)`) {
+		t.Fatalf("broadcastRefreshCompletion should exist with startTime and summary params")
 	}
-	if !strings.Contains(source, `go s.triggerAutoSummaryAfterRefreshes(&refreshWG, startTime, summary)`) {
-		t.Fatalf("runRefreshCycle should pass startTime and summary into triggerAutoSummaryAfterRefreshes")
+	if !strings.Contains(source, `go s.broadcastRefreshCompletion(startTime, summary)`) {
+		t.Fatalf("runRefreshCycle should call broadcastRefreshCompletion in goroutine")
 	}
 	if !strings.Contains(source, `msg := ws.AutoRefreshCompleteMessage{`) {
-		t.Fatalf("triggerAutoSummaryAfterRefreshes should build ws.AutoRefreshCompleteMessage")
+		t.Fatalf("broadcastRefreshCompletion should build ws.AutoRefreshCompleteMessage")
 	}
 	if !strings.Contains(source, `Type:            "auto_refresh_complete"`) {
 		t.Fatalf("completion broadcast should use auto_refresh_complete type")
@@ -97,13 +84,7 @@ func TestAutoRefreshCompleteBroadcastSource(t *testing.T) {
 		t.Fatalf("completion broadcast should include RFC3339 timestamp")
 	}
 	if !strings.Contains(source, `ws.GetHub().BroadcastRaw(data)`) {
-		t.Fatalf("triggerAutoSummaryAfterRefreshes should broadcast raw websocket payload")
-	}
-
-	broadcastIndex := strings.Index(source, `ws.GetHub().BroadcastRaw(data)`)
-	triggerIndex := strings.Index(source, `triggerable.TriggerNow()`)
-	if broadcastIndex == -1 || triggerIndex == -1 || broadcastIndex > triggerIndex {
-		t.Fatalf("completion broadcast should happen before auto summary trigger")
+		t.Fatalf("broadcastRefreshCompletion should broadcast raw websocket payload")
 	}
 }
 
@@ -168,47 +149,4 @@ func TestAutoRefreshTriggerNowUpdatesSchedulerTaskAndFeedState(t *testing.T) {
 	}
 }
 
-func TestAutoRefreshTriggerNowRunsAutoSummaryAfterTriggeredRefreshesFinish(t *testing.T) {
-	setupSchedulersTestDB(t)
 
-	triggered := make(chan struct{}, 1)
-	runtimeinfo.AutoSummarySchedulerInterface = stubAutoSummaryTrigger{triggered: triggered}
-	defer func() {
-		runtimeinfo.AutoSummarySchedulerInterface = nil
-	}()
-
-	feed := models.Feed{
-		Title:           "Due feed",
-		URL:             "https://example.com/rss",
-		RefreshInterval: 15,
-	}
-	if err := database.DB.Create(&feed).Error; err != nil {
-		t.Fatalf("create feed: %v", err)
-	}
-
-	refreshDone := make(chan struct{})
-	scheduler := &AutoRefreshScheduler{
-		checkInterval: time.Minute,
-		refreshFeed: func(ctx context.Context, feedID uint) error {
-			defer close(refreshDone)
-			return nil
-		},
-	}
-
-	result := scheduler.TriggerNow()
-	if result["accepted"] != true {
-		t.Fatalf("accepted = %v, want true", result["accepted"])
-	}
-
-	select {
-	case <-refreshDone:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for refresh to finish")
-	}
-
-	select {
-	case <-triggered:
-	case <-time.After(time.Second):
-		t.Fatal("expected auto summary trigger after refresh completion")
-	}
-}

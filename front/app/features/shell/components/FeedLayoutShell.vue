@@ -8,13 +8,10 @@ import ArticleContent from '~/features/articles/components/ArticleContentView.vu
 import { normalizeArticle } from '../../articles/utils/normalizeArticle'
 import { useGlobalAutoRefresh } from '~/features/feeds/composables/useAutoRefresh'
 import { useArticlePagination } from '~/features/articles/composables/useArticlePagination'
-import AISummariesList from '~/features/summaries/components/AISummariesListView.vue'
-import AISummaryDetail from '~/features/summaries/components/AISummaryDetailView.vue'
 import { SIDEBAR_DEFAULT_WIDTH, MAX_POLLING_TIME, REFRESH_POLLING_INTERVAL } from '~/utils/constants'
 import type { WatchedTag } from '~/api/watchedTags'
 import type { Article } from '~/types/article'
 import type { ArticleFilters } from '~/types/article'
-import type { AISummary } from '~/types/ai'
 
 const apiStore = useApiStore()
 const feedsStore = useFeedsStore()
@@ -42,8 +39,6 @@ const sidebarWidth = ref(SIDEBAR_DEFAULT_WIDTH)
 const selectedCategory = ref<string | null>(null)
 const selectedFeed = ref<string | null>(null)
 const selectedArticle = ref<Article | null>(null)
-const showAISummaries = ref(false)
-const selectedSummary = ref<AISummary | null>(null)
 
 const showAddFeedDialog = ref(false)
 const showAddCategoryDialog = ref(false)
@@ -88,7 +83,7 @@ async function loadWatchedTags() {
 async function fetchFeeds() {
   if (selectedCategory.value === 'uncategorized') {
     await apiStore.fetchFeeds({ uncategorized: true, per_page: 10000 })
-  } else if (selectedCategory.value && selectedCategory.value !== 'favorites' && selectedCategory.value !== 'ai-summaries') {
+  } else if (selectedCategory.value && selectedCategory.value !== 'favorites') {
     await apiStore.fetchFeeds({ category_id: parseInt(selectedCategory.value), per_page: 10000 })
   } else {
     await apiStore.fetchFeeds({ per_page: 10000 })
@@ -111,7 +106,7 @@ function buildArticleFilters() {
     filters.uncategorized = true
   } else if (selectedCategory.value === 'favorites') {
     filters.favorite = true
-  } else if (selectedCategory.value && selectedCategory.value !== 'ai-summaries') {
+  } else if (selectedCategory.value && selectedCategory.value !== 'favorites') {
     filters.category_id = parseInt(selectedCategory.value)
   }
   if (startDate.value) {
@@ -197,8 +192,6 @@ function handleDateFilterClear() {
 const handleCategoryClick = async (categoryId: string) => {
   selectedCategory.value = categoryId
   selectedFeed.value = null
-  showAISummaries.value = false
-  selectedSummary.value = null
   selectedWatchedTagId.value = null
   startDate.value = ''
   endDate.value = ''
@@ -210,8 +203,6 @@ const handleCategoryClick = async (categoryId: string) => {
 
 async function handleFeedClick(feedId: string) {
   selectedFeed.value = feedId
-  showAISummaries.value = false
-  selectedSummary.value = null
   selectedWatchedTagId.value = null
   startDate.value = ''
   endDate.value = ''
@@ -241,8 +232,6 @@ async function handleFeedClick(feedId: string) {
 async function handleFavoritesClick() {
   selectedCategory.value = 'favorites'
   selectedFeed.value = null
-  showAISummaries.value = false
-  selectedSummary.value = null
   selectedWatchedTagId.value = null
   startDate.value = ''
   endDate.value = ''
@@ -253,8 +242,6 @@ async function handleFavoritesClick() {
 async function handleAllArticlesClick() {
   selectedCategory.value = null
   selectedFeed.value = null
-  showAISummaries.value = false
-  selectedSummary.value = null
   selectedWatchedTagId.value = null
   startDate.value = ''
   endDate.value = ''
@@ -263,26 +250,9 @@ async function handleAllArticlesClick() {
   await loadArticles()
 }
 
-function handleAISummariesClick() {
-  selectedCategory.value = 'ai-summaries'
-  selectedFeed.value = null
-  showAISummaries.value = true
-  selectedSummary.value = null
-}
-
-function handleDigestClick() {
-  selectedCategory.value = 'digest'
-  selectedFeed.value = null
-  showAISummaries.value = false
-  selectedSummary.value = null
-  navigateTo('/digest')
-}
-
 function handleTopicGraphClick() {
   selectedCategory.value = 'topic-graph'
   selectedFeed.value = null
-  showAISummaries.value = false
-  selectedSummary.value = null
   selectedWatchedTagId.value = null
   navigateTo('/topics')
 }
@@ -290,8 +260,6 @@ function handleTopicGraphClick() {
 async function handleWatchedTagsClick() {
   selectedCategory.value = 'watched-tags'
   selectedFeed.value = null
-  showAISummaries.value = false
-  selectedSummary.value = null
   selectedWatchedTagId.value = null
   startDate.value = ''
   endDate.value = ''
@@ -302,17 +270,11 @@ async function handleWatchedTagsClick() {
 async function handleWatchedTagClick(tagId: string) {
   selectedCategory.value = 'watched-tags'
   selectedFeed.value = null
-  showAISummaries.value = false
-  selectedSummary.value = null
   selectedWatchedTagId.value = tagId
   startDate.value = ''
   endDate.value = ''
   await loadWatchedTags()
   await loadArticles()
-}
-
-function handleSummarySelect(summary: any) {
-  selectedSummary.value = summary
 }
 
 const refreshPollingInterval = ref<ReturnType<typeof setTimeout> | null>(null)
@@ -506,8 +468,6 @@ import '~/components/FeedLayout.css'
         @category-click="handleCategoryClick"
         @feed-click="handleFeedClick"
         @favorites-click="handleFavoritesClick"
-        @ai-summaries-click="handleAISummariesClick"
-        @digest-click="handleDigestClick"
         @topic-graph-click="handleTopicGraphClick"
         @all-articles-click="handleAllArticlesClick"
         @edit-category="handleEditCategory"
@@ -519,7 +479,6 @@ import '~/components/FeedLayout.css'
 
 <!-- 文章列表 -->
       <LayoutArticleListPanel
-        v-if="!showAISummaries"
         :articles="articles"
         :selected-category="selectedCategory"
         :selected-feed="selectedFeed"
@@ -536,30 +495,14 @@ import '~/components/FeedLayout.css'
         @date-filter-clear="handleDateFilterClear"
       />
 
-      <!-- AI 总结列表 -->
-      <AISummariesList
-        v-else
-        :category-id="null"
-        @select="handleSummarySelect"
-      />
-
-<!-- 文章内容 / AI 总结详情 -->
-      <div v-if="!showAISummaries && !selectedSummary" class="content-panel">
+<!-- 文章内容 -->
+      <div class="content-panel">
         <ArticleContent
           :article="selectedArticle"
           :articles="articles"
           @favorite="handleArticleFavorite"
           @navigate="handleArticleClick"
           @article-update="handleArticleUpdate"
-        />
-      </div>
-
-      <!-- AI 总结详情 -->
-      <div v-else class="content-panel">
-        <AISummaryDetail
-          :key="selectedSummary?.id || 'empty'"
-          :summary="selectedSummary"
-          @close="selectedSummary = null"
         />
       </div>
     </div>

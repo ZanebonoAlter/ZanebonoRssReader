@@ -15,10 +15,8 @@ import (
 type Capability string
 
 const (
-	CapabilitySummary            Capability = "summary"
 	CapabilityArticleCompletion  Capability = "article_completion"
 	CapabilityTopicTagging       Capability = "topic_tagging"
-	CapabilityDigestPolish       Capability = "digest_polish"
 	CapabilityOpenNotebook       Capability = "open_notebook"
 	CapabilityEmbedding          Capability = "embedding"
 	DefaultRouteName             string     = "default"
@@ -28,10 +26,8 @@ const (
 )
 
 var defaultCapabilities = []Capability{
-	CapabilitySummary,
 	CapabilityArticleCompletion,
 	CapabilityTopicTagging,
-	CapabilityDigestPolish,
 	CapabilityEmbedding,
 }
 

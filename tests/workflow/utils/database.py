@@ -74,7 +74,6 @@ class DatabaseHelper:
 
             if table == 'feeds' and where == 'id = ?':
                 feed_id = where_params[0]
-                cursor.execute("DELETE FROM ai_summaries WHERE feed_id = ?", (feed_id,))
                 cursor.execute("DELETE FROM articles WHERE feed_id = ?", (feed_id,))
 
             sql = f"DELETE FROM {table} WHERE {where}"
@@ -148,7 +147,6 @@ class DatabaseHelper:
         from datetime import datetime
 
         url = kwargs.get('url', f"https://example.com/feed-{datetime.now().timestamp()}")
-        self.execute("DELETE FROM ai_summaries WHERE feed_id IN (SELECT id FROM feeds WHERE url = ?)", (url,))
         self.execute("DELETE FROM articles WHERE feed_id IN (SELECT id FROM feeds WHERE url = ?)", (url,))
         self.execute("DELETE FROM feeds WHERE url = ?", (url,))
 
@@ -169,12 +167,6 @@ class DatabaseHelper:
             cursor = conn.cursor()
             conn.execute("PRAGMA foreign_keys = OFF")
             try:
-                cursor.execute(
-                    "DELETE FROM ai_summaries WHERE feed_id IN (SELECT id FROM feeds WHERE url LIKE 'https://example.com/%' OR url LIKE 'https://sspai.com/%')"
-                )
-                cursor.execute(
-                    "DELETE FROM ai_summaries WHERE category_id IN (SELECT id FROM categories WHERE slug = 'test-category' OR slug LIKE 'test-%')"
-                )
                 cursor.execute(
                     "DELETE FROM articles WHERE link LIKE 'https://example.com/%' OR link LIKE 'https://sspai.com/%' OR feed_id IN (SELECT id FROM feeds WHERE url LIKE 'https://example.com/%' OR url LIKE 'https://sspai.com/%')"
                 )

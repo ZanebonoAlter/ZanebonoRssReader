@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 	"sync"
 
 	"my-robot-backend/internal/domain/models"
@@ -55,133 +54,7 @@ func getBatchJudgment(ctx context.Context, label string) *topicanalysis.TagExtra
 	return results[label]
 }
 
-// TagSummary extracts and stores tags for an AI summary
-// This is the main entry point called from the automatic summary scheduler
-// Skips if the summary already has tags (dedup)
-func TagSummary(summary *models.AISummary, feedName, categoryName string) error {
-	if summary == nil || summary.ID == 0 {
-		return nil
-	}
 
-	var existingCount int64
-	database.DB.Model(&models.AISummaryTopic{}).Where("summary_id = ?", summary.ID).Count(&existingCount)
-	if existingCount > 0 {
-		return nil
-	}
-
-	input := topictypes.ExtractionInput{
-		Title:        summary.Title,
-		Summary:      summary.Summary,
-		FeedName:     feedName,
-		CategoryName: categoryName,
-		SummaryID:    &summary.ID,
-	}
-
-	// Use the new extraction system
-	extractor := NewTagExtractor()
-	result, err := extractor.ExtractTags(context.Background(), input)
-
-	var tags []topictypes.TopicTag
-	var source string
-
-	if err != nil || len(result.Tags) == 0 {
-		// Fall back to legacy heuristic extraction
-		tags = legacyExtractTopics(input)
-		source = "heuristic"
-	} else {
-		tags = result.Tags
-		source = result.Source
-	}
-
-	if len(tags) == 0 {
-		return nil
-	}
-
-	// Build article context for description generation
-	articleContext := ""
-	if summary.Title != "" {
-		articleContext = summary.Title
-	}
-	if summary.Summary != "" {
-		if articleContext != "" {
-			articleContext += ". "
-		}
-		runes := []rune(summary.Summary)
-		if len(runes) > 800 {
-			articleContext += string(runes[:800])
-		} else {
-			articleContext += summary.Summary
-		}
-	}
-
-	articleID := primaryArticleIDForSummary(summary)
-
-	// Process each tag
-	for _, tag := range dedupeTagsWithCategory(tags) {
-		dbTag, err := findOrCreateTag(context.Background(), tag, source, articleContext, articleID)
-		if err != nil {
-			logging.Warnf("findOrCreateTag failed for tag %q (category=%s, slug=%s, source=%s, summary=%d): %v", tag.Label, tag.Category, topictypes.Slugify(tag.Label), source, summary.ID, err)
-			continue
-		}
-
-		// Create the association
-		link := models.AISummaryTopic{
-			SummaryID:  summary.ID,
-			TopicTagID: dbTag.ID,
-			Score:      tag.Score,
-			Source:     source,
-		}
-		if err := database.DB.Create(&link).Error; err != nil {
-			return err
-		}
-
-		if dbTag.Category == "event" {
-			qs := getEmbeddingQueueService()
-			if qs != nil {
-				if err := qs.Enqueue(dbTag.ID); err != nil {
-					logging.Warnf("Failed to enqueue re-embedding for event tag %d: %v", dbTag.ID, err)
-				}
-			}
-		}
-	}
-
-	return nil
-}
-
-func primaryArticleIDForSummary(summary *models.AISummary) uint {
-	if summary == nil || strings.TrimSpace(summary.Articles) == "" {
-		return 0
-	}
-
-	var uintIDs []uint
-	if err := json.Unmarshal([]byte(summary.Articles), &uintIDs); err == nil {
-		for _, id := range uintIDs {
-			if id > 0 {
-				return id
-			}
-		}
-	}
-
-	var intIDs []int
-	if err := json.Unmarshal([]byte(summary.Articles), &intIDs); err == nil {
-		for _, id := range intIDs {
-			if id > 0 {
-				return uint(id)
-			}
-		}
-	}
-
-	var floatIDs []float64
-	if err := json.Unmarshal([]byte(summary.Articles), &floatIDs); err == nil {
-		for _, id := range floatIDs {
-			if id > 0 {
-				return uint(id)
-			}
-		}
-	}
-
-	return 0
-}
 
 // legacyExtractTopics is the old heuristic-based extraction (for fallback)
 func legacyExtractTopics(input topictypes.ExtractionInput) []topictypes.TopicTag {
@@ -294,7 +167,7 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 
 					if category == "event" && len(candidates) > 0 && candidates[0].Tag != nil && result != nil && !result.LLMExplicitNone {
 						topSim := candidates[0].Similarity
-						thresholds := es.GetThresholds()
+						thresholds := topicanalysis.ThresholdsForCategory(category)
 						if topSim >= thresholds.LowSimilarity {
 							logging.Infof("findOrCreateTag: label=%q category=%s event_fallback: reusing top candidate (sim=%.4f)", tag.Label, category, topSim)
 							existing := candidates[0].Tag
@@ -507,14 +380,8 @@ func findOrCreateTag(ctx context.Context, tag topictypes.TopicTag, source string
 		return nil, err
 	}
 
-	if articleContext != "" {
-		if category == "person" {
-			go generateTagDescription(newTag.ID, tag.Label, category, articleContext)
-		} else if es != nil {
-			go ensureTagEmbedding(es, newTag.ID)
-		}
-	} else if es != nil {
-		go generateAndSaveEmbedding(es, &newTag)
+	if es != nil {
+		go ensureTagEmbedding(es, newTag.ID)
 	}
 
 	GetTagCache().Set(slug, category, &newTag)
@@ -563,14 +430,8 @@ func createChildOfAbstract(ctx context.Context, es *topicanalysis.EmbeddingServi
 		}
 	}
 
-	if articleContext != "" {
-		if category == "person" {
-			go generateTagDescription(newTag.ID, tag.Label, category, articleContext)
-		} else if es != nil {
-			go ensureTagEmbedding(es, newTag.ID)
-		}
-	} else if es != nil {
-		go generateAndSaveEmbedding(es, &newTag)
+	if es != nil {
+		go ensureTagEmbedding(es, newTag.ID)
 	}
 
 	return &newTag, nil
@@ -612,11 +473,6 @@ func generateTagDescription(tagID uint, label, category, articleContext string) 
 			logging.Warnf("generateTagDescription panic for tag %d: %v", tagID, r)
 		}
 	}()
-
-	if category == "person" {
-		generatePersonTagDescription(tagID, label, articleContext)
-		return
-	}
 
 	router := airouter.NewRouter()
 	prompt := fmt.Sprintf(`Generate a concise description (1-2 sentences) for this tag.

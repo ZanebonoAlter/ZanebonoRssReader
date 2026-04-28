@@ -1,61 +1,47 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { Icon } from '@iconify/vue'
-import ArticleTagList from '../../articles/components/ArticleTagList.vue'
-import FeedIcon from '~/components/feed/FeedIcon.vue'
-import type { TimelineDigest } from '~/types/timeline'
+import type { TimelineAggregationGroup, TimelineAggregationArticle } from '~/types/timeline'
 
 interface Props {
-  item: TimelineDigest
+  group: TimelineAggregationGroup
   isFirst: boolean
   isLast: boolean
   isActive?: boolean
-  highlightedTagSlugs?: string[]
+  aggregationMode: 'day' | 'hour'
 }
 
 const props = defineProps<Props>()
 
 const emit = defineEmits<{
+  select: [groupKey: string]
   openArticle: [articleId: number]
-  select: [itemId: string]
-  previewDigest: [itemId: string]
 }>()
 
 const isExpanded = ref(false)
 
-const dateValue = computed(() => parseDateValue(props.item.createdAt))
-const formattedDate = computed(() => {
-  if (!dateValue.value) return '日期待补'
+const formattedLabel = computed(() => {
+  if (props.aggregationMode === 'hour') {
+    const start = props.group.startDate
+    const end = props.group.endDate
+    const fmt = (d: Date) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+    return `${fmt(start)} - ${fmt(end)}`
+  }
   return new Intl.DateTimeFormat('zh-CN', {
     month: 'short',
     day: 'numeric',
     weekday: 'short',
-  }).format(dateValue.value)
-})
-const formattedTime = computed(() => {
-  if (!dateValue.value) return '时间待补'
-  return new Intl.DateTimeFormat('zh-CN', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).format(dateValue.value)
+  }).format(props.group.startDate)
 })
 
-function parseDateValue(value: string | null | undefined) {
-  if (!value) return null
-  const parsed = new Date(value)
-  if (Number.isNaN(parsed.getTime())) {
-    return null
-  }
-  return parsed
-}
+const articleCount = computed(() => props.group.articles.length)
 
 function toggleExpand() {
   isExpanded.value = !isExpanded.value
 }
 
 function handleSelect() {
-  emit('select', props.item.id)
+  emit('select', props.group.key)
 }
 
 function handleKeydown(event: KeyboardEvent) {
@@ -63,6 +49,10 @@ function handleKeydown(event: KeyboardEvent) {
     event.preventDefault()
     handleSelect()
   }
+}
+
+function openArticle(article: TimelineAggregationArticle) {
+  emit('openArticle', Number(article.id))
 }
 </script>
 
@@ -75,12 +65,8 @@ function handleKeydown(event: KeyboardEvent) {
 
     <div class="timeline-item__content">
       <div class="timeline-item__header">
-        <time class="timeline-item__time">{{ formattedTime }}</time>
-        <span class="timeline-item__date">{{ formattedDate }}</span>
-        <span class="timeline-item__source">
-          <FeedIcon :icon="item.feedIcon" :size="14" />
-          {{ item.feedName }}
-        </span>
+        <span class="timeline-item__label">{{ formattedLabel }}</span>
+        <span class="timeline-item__count-badge">{{ articleCount }} 篇</span>
       </div>
 
       <div
@@ -91,34 +77,21 @@ function handleKeydown(event: KeyboardEvent) {
         @click="handleSelect"
         @keydown="handleKeydown"
       >
-        <div class="timeline-item__eyebrow-row">
-          <span class="timeline-item__eyebrow">{{ item.categoryName || '未分类日报' }}</span>
-          <span class="timeline-item__count">{{ item.articleCount }} 篇来源文章</span>
+        <div class="timeline-item__info-row">
+          <span class="timeline-item__info-text">{{ articleCount }} 篇文章</span>
+          <span class="timeline-item__info-range">{{ formattedLabel }}</span>
         </div>
 
-        <h3 class="timeline-item__title">{{ item.title }}</h3>
-        <p class="timeline-item__summary" :class="{ 'timeline-item__summary--expanded': isExpanded }">
-          {{ item.summary }}
-        </p>
-
-        <ArticleTagList
-          v-if="item.tags.length"
-          class="timeline-item__tags"
-          :tags="item.tags"
-          :highlighted-slugs="highlightedTagSlugs || []"
-          compact
-          :max-visible="5"
-        />
-
-        <div v-if="item.articles.length" class="timeline-item__sources">
+        <div v-if="isExpanded" class="timeline-item__articles">
           <button
-            v-for="article in item.articles"
+            v-for="article in group.articles"
             :key="article.id"
             type="button"
-            class="timeline-item__source-link"
-            @click.stop="emit('openArticle', article.id)"
+            class="timeline-item__article-btn"
+            @click.stop="openArticle(article)"
           >
-            {{ article.title }}
+            <span class="timeline-item__article-title">{{ article.title }}</span>
+            <span class="timeline-item__article-feed">{{ article.feedName }}</span>
           </button>
         </div>
       </div>
@@ -130,15 +103,7 @@ function handleKeydown(event: KeyboardEvent) {
           @click="toggleExpand"
         >
           <Icon :icon="isExpanded ? 'mdi:chevron-up' : 'mdi:chevron-down'" width="16" />
-          <span>{{ isExpanded ? '收起日报' : '展开日报' }}</span>
-        </button>
-        <button
-          type="button"
-          class="timeline-item__expand"
-          @click="emit('previewDigest', item.id)"
-        >
-          <Icon icon="mdi:text-box-search-outline" width="16" />
-          <span>查看日报</span>
+          <span>{{ isExpanded ? '收起' : '展开文章' }}</span>
         </button>
       </div>
     </div>
@@ -199,29 +164,22 @@ function handleKeydown(event: KeyboardEvent) {
   flex-wrap: wrap;
 }
 
-.timeline-item__time {
+.timeline-item__label {
   font-size: 0.75rem;
   font-weight: 600;
   color: rgba(240, 138, 75, 0.92);
   letter-spacing: 0.04em;
 }
 
-.timeline-item__date {
-  font-size: 0.72rem;
-  color: rgba(214, 225, 235, 0.56);
-}
-
-.timeline-item__source {
+.timeline-item__count-badge {
   margin-left: auto;
   padding: 0.22rem 0.58rem;
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(240, 138, 75, 0.2);
+  background: rgba(240, 138, 75, 0.08);
   font-size: 0.72rem;
-  color: rgba(220, 230, 239, 0.62);
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
+  font-weight: 600;
+  color: rgba(240, 138, 75, 0.88);
 }
 
 .timeline-item__body {
@@ -241,7 +199,7 @@ function handleKeydown(event: KeyboardEvent) {
   box-shadow: 0 20px 44px rgba(0, 0, 0, 0.24);
 }
 
-.timeline-item__eyebrow-row {
+.timeline-item__info-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -249,66 +207,52 @@ function handleKeydown(event: KeyboardEvent) {
   flex-wrap: wrap;
 }
 
-.timeline-item__eyebrow,
-.timeline-item__count {
+.timeline-item__info-text {
   font-size: 0.72rem;
   letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
-.timeline-item__eyebrow {
-  color: rgba(171, 194, 217, 0.74);
-}
-
-.timeline-item__count {
   color: rgba(241, 223, 208, 0.76);
 }
 
-.timeline-item__title {
-  font-size: 1.02rem;
-  font-weight: 700;
-  line-height: 1.45;
-  color: rgba(248, 252, 255, 0.96);
+.timeline-item__info-range {
+  font-size: 0.72rem;
+  color: rgba(171, 194, 217, 0.74);
 }
 
-.timeline-item__summary {
-  font-size: 0.9rem;
-  line-height: 1.68;
-  color: rgba(212, 225, 236, 0.8);
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-.timeline-item__summary--expanded {
-  display: block;
-}
-
-.timeline-item__tags,
-.timeline-item__sources {
+.timeline-item__articles {
   display: flex;
   flex-wrap: wrap;
   gap: 0.45rem;
 }
 
-.timeline-item__source-link {
+.timeline-item__article-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
   border-radius: 999px;
-  font-size: 0.73rem;
-}
-
-.timeline-item__source-link {
   border: 1px solid rgba(240, 138, 75, 0.2);
   background: rgba(255, 255, 255, 0.04);
   padding: 0.34rem 0.68rem;
   color: rgba(255, 231, 213, 0.88);
+  font-size: 0.73rem;
   transition: all 0.18s ease;
 }
 
-.timeline-item__source-link:hover,
-.timeline-item__source-link:focus-visible {
+.timeline-item__article-btn:hover,
+.timeline-item__article-btn:focus-visible {
   border-color: rgba(240, 138, 75, 0.4);
   background: rgba(240, 138, 75, 0.1);
+}
+
+.timeline-item__article-title {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timeline-item__article-feed {
+  color: rgba(214, 225, 235, 0.5);
+  font-size: 0.68rem;
 }
 
 .timeline-item__footer {
@@ -346,8 +290,12 @@ function handleKeydown(event: KeyboardEvent) {
     padding: 0.85rem;
   }
 
-  .timeline-item__source {
+  .timeline-item__count-badge {
     margin-left: 0;
+  }
+
+  .timeline-item__article-title {
+    max-width: 140px;
   }
 }
 </style>

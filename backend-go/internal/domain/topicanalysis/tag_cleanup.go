@@ -54,8 +54,7 @@ func buildZombieTagQuery(db *gorm.DB, criteria ZombieTagCriteria) *gorm.DB {
 
 	return query.
 		Where("NOT EXISTS (SELECT 1 FROM topic_tag_relations r WHERE (r.parent_id = topic_tags.id OR r.child_id = topic_tags.id) AND r.relation_type = ?)", "abstract").
-		Where("NOT EXISTS (SELECT 1 FROM article_topic_tags att WHERE att.topic_tag_id = topic_tags.id)").
-		Where("NOT EXISTS (SELECT 1 FROM ai_summary_topics ast WHERE ast.topic_tag_id = topic_tags.id)")
+		Where("NOT EXISTS (SELECT 1 FROM article_topic_tags att WHERE att.topic_tag_id = topic_tags.id)")
 }
 
 func BuildZombieTagSubQuery(criteria ZombieTagCriteria) string {
@@ -72,11 +71,7 @@ func BuildZombieTagSubQuery(criteria ZombieTagCriteria) string {
 		    SELECT 1 FROM article_topic_tags att
 		    WHERE att.topic_tag_id = t.id
 		  )
-		  AND NOT EXISTS (
-		    SELECT 1 FROM ai_summary_topics ast
-		    WHERE ast.topic_tag_id = t.id
-		  )
-	`, quoteCategories(criteria.Categories), criteria.MinAgeDays)
+		`, quoteCategories(criteria.Categories), criteria.MinAgeDays)
 }
 
 func quoteCategories(categories []string) string {
@@ -337,7 +332,7 @@ func CleanupMultiParentConflicts() (int, []string, error) {
 		var childTag models.TopicTag
 		for _, r := range relations {
 			if r.Parent != nil {
-				parents = append(parents, parentWithInfo{RelationID: r.ID, Parent: r.Parent})
+				parents = append(parents, parentWithInfo{RelationID: r.ID, Parent: r.Parent, SimilarityScore: r.SimilarityScore})
 			}
 		}
 		if len(parents) <= 1 {
@@ -370,6 +365,85 @@ func CleanupMultiParentConflicts() (int, []string, error) {
 
 	logging.Infof("CleanupMultiParentConflicts: resolved %d conflicts", totalResolved)
 	return totalResolved, allErrors, nil
+}
+
+func deactivateTagsWithCleanup(tagIDs []uint) error {
+	if len(tagIDs) == 0 {
+		return nil
+	}
+	database.DB.Where("topic_tag_id IN ?", tagIDs).Delete(&models.TopicTagEmbedding{})
+	database.DB.Where("parent_id IN ? OR child_id IN ?", tagIDs, tagIDs).
+		Where("relation_type = ?", "abstract").Delete(&models.TopicTagRelation{})
+	return database.DB.Model(&models.TopicTag{}).Where("id IN ?", tagIDs).
+		Updates(map[string]interface{}{"status": "inactive"}).Error
+}
+
+func CleanupZeroArticleTags(categories []string) (int, error) {
+	query := database.DB.Model(&models.TopicTag{}).
+		Where("status = ? AND kind != ? AND source != ?", "active", "abstract", "abstract").
+		Where("category IN ?", categories).
+		Where("NOT EXISTS (SELECT 1 FROM article_topic_tags att WHERE att.topic_tag_id = topic_tags.id)")
+
+	var ids []uint
+	if err := query.Pluck("topic_tags.id", &ids).Error; err != nil {
+		return 0, fmt.Errorf("pluck zero-article tag ids: %w", err)
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	if err := deactivateTagsWithCleanup(ids); err != nil {
+		return 0, fmt.Errorf("cleanup zero-article tags: %w", err)
+	}
+
+	logging.Infof("CleanupZeroArticleTags: deactivated %d zero-article tags in categories %v", len(ids), categories)
+	return len(ids), nil
+}
+
+func CleanupLowQualitySingleArticleTags(category string, maxScore float64) (int, error) {
+	query := database.DB.Model(&models.TopicTag{}).
+		Where("status = ? AND kind != ? AND source != ?", "active", "abstract", "abstract").
+		Where("category = ?", category).
+		Where("quality_score < ?", maxScore).
+		Where("(SELECT COUNT(*) FROM article_topic_tags att WHERE att.topic_tag_id = topic_tags.id) = 1")
+
+	var ids []uint
+	if err := query.Pluck("topic_tags.id", &ids).Error; err != nil {
+		return 0, fmt.Errorf("pluck low-quality single-article tag ids: %w", err)
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	if err := deactivateTagsWithCleanup(ids); err != nil {
+		return 0, fmt.Errorf("cleanup low-quality single-article tags: %w", err)
+	}
+
+	logging.Infof("CleanupLowQualitySingleArticleTags: deactivated %d low-quality single-article tags in category %s (maxScore=%.2f)", len(ids), category, maxScore)
+	return len(ids), nil
+}
+
+func CleanupStaleZeroScoreTags(ageDays int) (int, error) {
+	cutoff := time.Now().AddDate(0, 0, -ageDays)
+	query := database.DB.Model(&models.TopicTag{}).
+		Where("status = ? AND kind != ? AND source != ?", "active", "abstract", "abstract").
+		Where("quality_score < ?", 0.05).
+		Where("created_at < ?", cutoff)
+
+	var ids []uint
+	if err := query.Pluck("topic_tags.id", &ids).Error; err != nil {
+		return 0, fmt.Errorf("pluck stale zero-score tag ids: %w", err)
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	if err := deactivateTagsWithCleanup(ids); err != nil {
+		return 0, fmt.Errorf("cleanup stale zero-score tags: %w", err)
+	}
+
+	logging.Infof("CleanupStaleZeroScoreTags: deactivated %d stale zero-score tags (age > %d days)", len(ids), ageDays)
+	return len(ids), nil
 }
 
 func CleanupEmptyAbstractNodes() (int, error) {

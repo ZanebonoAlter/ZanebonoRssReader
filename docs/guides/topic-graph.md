@@ -384,6 +384,18 @@ IsLowQuality = (Source != "abstract") && (QualityScore < 0.3)
 
 典型的低质量标签特征：文章关联少、feed 来源单一、很少和其他标签共现。
 
+### 自动清理阈值
+
+定时调度器 `TagHierarchyCleanupScheduler` 在 Phase 1.5–1.7 自动清理低质量标签，阈值如下：
+
+| 阶段 | 条件 | 说明 |
+|------|------|------|
+| Phase 1.5 | 无文章/摘要引用 | 零文章标签直接标记 inactive |
+| Phase 1.6 | keyword + 单文章 + quality_score < 0.15 | 低质量单文章 keyword 清理 |
+| Phase 1.7 | quality_score < 0.05 + 创建时间 > 7 天 | 过期零分标签清理 |
+
+此外，一次性清理工具 `cmd/cleanup-tags` 可独立于调度器运行，执行 Phase A（零文章清理）和 Phase B（低质量 keyword 清理，quality_score < 0.15 且文章数 ≤ 1）。
+
 ### 前端行为
 
 - **3D 拓扑图**：低质量节点默认不渲染，用户可通过节点旁的眼睛图标手动显示
@@ -432,6 +444,20 @@ IsLowQuality = (Source != "abstract") && (QualityScore < 0.3)
 | 阈值 | 默认值 | 含义 |
 |------|--------|------|
 | `LowSimilarity` | 0.78 | 候选搜索下限 |
+
+keyword 标签的 `HighSimilarity` 从 0.97 降至 0.90（降低自动复用门槛），以减少同义 keyword 因微小 embedding 差异而无法自动合并导致的碎片化。
+
+### 未分类标签离线聚类
+
+未分类标签聚类（`ClusterUnclassifiedTagsWithConfig`）将没有抽象父标签的同类标签做 embedding 相似度聚类，生成候选抽象标签。默认配置：
+
+| 参数 | 值 | 说明 |
+|------|-----|------|
+| `MaxTags` | 500 | 参与聚类的标签上限（原 200） |
+| `SimilarityThreshold` | 0.85 | 聚类相似度阈值 |
+| `MaxClusterSize` | 8 | 单个聚类最大标签数 |
+
+`cluster_max_tags` 默认值已从 200 提升到 500，`LoadClusterConfig` 从 `embedding_config` 表读取，也可通过数据库配置覆盖。
 
 ### Event 标签的 Co-tag 扩展
 

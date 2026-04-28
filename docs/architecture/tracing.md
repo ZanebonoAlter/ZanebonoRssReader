@@ -92,11 +92,9 @@ tracing.TraceSchedulerTick("auto_refresh", "cron", func(ctx context.Context) {
 当前已接入的 scheduler 入口共 7 个：
 
 - `auto_refresh`
-- `auto_summary`
 - `firecrawl`
 - `content_completion`
 - `preference_update`
-- `auto_tag_merge`
 - `narrative_summary`
 
 这类 span 的特点：

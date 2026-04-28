@@ -1,7 +1,6 @@
 package ws
 
 import (
-	"encoding/json"
 	"net/http"
 	"sync"
 	"time"
@@ -33,18 +32,6 @@ type Client struct {
 	hub  *Hub
 	conn *websocket.Conn
 	send chan []byte
-}
-
-// SummaryProgressMessage 总结进度消息
-type SummaryProgressMessage struct {
-	Type       string      `json:"type"` // "progress"
-	BatchID    string      `json:"batch_id"`
-	Status     string      `json:"status"` // pending/processing/completed
-	TotalJobs  int         `json:"total_jobs"`
-	Completed  int         `json:"completed_jobs"`
-	Failed     int         `json:"failed_jobs"`
-	CurrentJob *JobUpdate  `json:"current_job,omitempty"`
-	Jobs       []JobUpdate `json:"jobs,omitempty"` // 所有任务列表
 }
 
 // JobUpdate 单个任务更新
@@ -191,22 +178,6 @@ func (h *Hub) run() {
 				}
 			}
 		}
-	}
-}
-
-// BroadcastProgress 广播进度更新
-func (h *Hub) BroadcastProgress(msg *SummaryProgressMessage) {
-	data, err := json.Marshal(msg)
-	if err != nil {
-		logging.Errorf("序列化进度消息失败: %v", err)
-		return
-	}
-
-	select {
-	case h.broadcast <- data:
-	default:
-		// 广播通道满，丢弃消息
-		logging.Warnf("广播通道已满，丢弃消息")
 	}
 }
 

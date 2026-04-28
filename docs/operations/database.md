@@ -48,9 +48,6 @@
 | `categories` | 分类 | `models.Category` |
 | `feeds` | 订阅源 | `models.Feed` |
 | `articles` | 文章 | `models.Article` |
-| `ai_summaries` | AI 摘要 | `models.AISummary` |
-| `ai_summary_feeds` | 摘要关联的订阅源 | `models.AISummaryFeed` |
-| `ai_summary_topics` | 摘要-主题关联 | `models.AISummaryTopic` |
 | `article_topic_tags` | 文章-主题关联 | `models.ArticleTopicTag` |
 
 ### 调度与配置表
@@ -63,7 +60,6 @@
 | `ai_routes` | AI 路由 | `models.AIRoute` |
 | `ai_route_providers` | AI 路由-供应商绑定 | `models.AIRouteProvider` |
 | `ai_call_logs` | AI 调用日志 | `models.AICallLog` |
-| `digest_configs` | 摘要推送配置 | `digest.DigestConfig` |
 | `embedding_config` | 向量配置 | `models.EmbeddingConfig` |
 
 ### 用户行为表
@@ -120,7 +116,7 @@
   - `is_watched`：是否为用户关注标签
   - `quality_score`：质量评分
 - 主要职责：
-  - 为 `article_topic_tags`、`ai_summary_topics` 提供统一的标签字典
+  - 为 `article_topic_tags` 提供统一的标签字典
   - 作为 Topic Graph 节点和热点标签列表的数据来源
   - 作为 topic analysis、embedding 的主键锚点
 
@@ -183,11 +179,6 @@
 - 文章与 topic 的关联表，也是当前文章标签的事实来源
 - Topic Graph 的图节点、热点列表、digest 聚合标签、文章详情 tags，当前都直接或间接依赖这张表
 
-### `ai_summary_topics`
-
-- 摘要与 topic 的关联表
-- 主要给 `topic_tag_analyses` 提供分析输入
-
 ### `embedding_config`
 
 - 向量系统的配置键值对表，存储相似度阈值、模型参数等
@@ -203,10 +194,10 @@
 ## 数据链路
 
 1. 文章或摘要被打标签，先写入 `topic_tags`
-2. 文章标签关系写入 `article_topic_tags`，摘要标签关系写入 `ai_summary_topics`
+2. 文章标签关系写入 `article_topic_tags`
 3. 若启用 embedding，相似性结果写入或读取 `topic_tag_embeddings`
 4. Topic Graph 页面主要消费 `topic_tags + article_topic_tags`
-5. Topic Analysis 则基于 `ai_summary_topics` 生成结果，落到 `topic_tag_analyses`
+5. Topic Analysis 则基于 `article_topic_tags` 生成结果，落到 `topic_tag_analyses`
 6. 增量刷新状态记录在 `topic_analysis_cursors`
 7. 标签层级关系记录在 `topic_tag_relations`
 8. 叙事演进记录在 `narrative_summaries`
@@ -234,7 +225,7 @@
 ### 执行与构建
 
 1. Worker 取出优先级最高的 job
-2. 通过 `ai_summary_topics` 反查关联摘要
+2. 通过 `article_topic_tags` 反查关联文章
 3. 检查 `topic_analysis_cursors` 判断是否需要重算
 4. 需要重算时调用 AI 生成分析，否则复用旧快照
 5. 结果写入 `topic_tag_analyses`
@@ -264,8 +255,6 @@
 ```bash
 cd backend-go
 go run cmd/server/main.go            # 启动后端（自动执行迁移）
-go run cmd/migrate-digest/main.go     # Digest 数据迁移
-go run cmd/test-digest/main.go        # Digest 测试入口
 go run cmd/migrate-tags/main.go       # 标签数据迁移
 go run cmd/migrate-db/main.go         # SQLite → PostgreSQL 数据迁移
 ```

@@ -28,7 +28,6 @@ describe('schedulerMeta', () => {
   it('marks content completion as a hot scheduler for polling', () => {
     expect(isHotScheduler('content_completion')).toBe(true)
     expect(isHotScheduler('firecrawl')).toBe(true)
-    expect(isHotScheduler('digest')).toBe(false)
   })
 
   it('shows content completion panel while a current article is executing even without overview', () => {

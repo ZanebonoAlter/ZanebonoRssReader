@@ -1,5 +1,7 @@
 package topictypes
 
+import "time"
+
 type ExtractionInput struct {
 	Title        string
 	Summary      string
@@ -104,27 +106,25 @@ type GraphEdge struct {
 	Weight float64 `json:"weight"`
 }
 
-// TopicSummaryCard represents a summary card with tags
-type TopicSummaryCard struct {
-	ID             uint                 `json:"id"`
-	Title          string               `json:"title"`
-	Summary        string               `json:"summary"`
-	FeedName       string               `json:"feed_name"`
-	FeedIcon       string               `json:"feed_icon"`
-	FeedColor      string               `json:"feed_color"`
-	CategoryName   string               `json:"category_name"`
-	ArticleCount   int                  `json:"article_count"`
-	CreatedAt      string               `json:"created_at"`
-	Topics         []TopicTag           `json:"topics"`
-	AggregatedTags []AggregatedTopicTag `json:"aggregated_tags"`
-	Articles       []TopicArticleCard   `json:"articles"`
-}
-
 // TopicArticleCard represents an article in a topic context
 type TopicArticleCard struct {
-	ID    uint   `json:"id"`
-	Title string `json:"title"`
-	Link  string `json:"link"`
+	ID       uint              `json:"id"`
+	Title    string            `json:"title"`
+	Link     string            `json:"link"`
+	PubDate  *time.Time        `json:"pub_date,omitempty"`
+	FeedName string            `json:"feed_name,omitempty"`
+	FeedID   uint              `json:"feed_id"`
+	ImageURL string            `json:"image_url,omitempty"`
+	Summary  string            `json:"summary,omitempty"`
+	Content  string            `json:"content,omitempty"`
+	Tags     []TopicTagSummary `json:"tags"`
+}
+
+// TopicTagSummary represents a brief tag reference on an article card
+type TopicTagSummary struct {
+	Slug     string `json:"slug"`
+	Label    string `json:"label"`
+	Category string `json:"category"`
 }
 
 // TopicHistoryPoint represents a point in topic history
@@ -137,12 +137,11 @@ type TopicHistoryPoint struct {
 // TopicDetail represents detailed information about a topic
 type TopicDetail struct {
 	Topic         TopicTag            `json:"topic"`
-	Articles      []TopicArticleCard  `json:"articles"`       // Directly associated articles (new)
-	TotalArticles int64               `json:"total_articles"` // Total count for pagination (new)
-	RelatedTags   []RelatedTag        `json:"related_tags"`   // Related tags for keyword cloud (new)
-	Summaries     []TopicSummaryCard  `json:"summaries"`      // AI summaries (optional, kept for backward compat)
+	Articles      []TopicArticleCard  `json:"articles"`
+	TotalArticles int64               `json:"total_articles"`
+	RelatedTags   []RelatedTag        `json:"related_tags"`
 	History       []TopicHistoryPoint `json:"history"`
-	RelatedTopics []TopicTag          `json:"related_topics"` // Deprecated: use RelatedTags
+	RelatedTopics []TopicTag          `json:"related_topics"`
 	SearchLinks   map[string]string   `json:"search_links"`
 	AppLinks      map[string]string   `json:"app_links"`
 }

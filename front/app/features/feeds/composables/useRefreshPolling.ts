@@ -25,7 +25,6 @@ export function useRefreshPolling() {
       } else if (
         selectedCategory.value
         && selectedCategory.value !== 'favorites'
-        && selectedCategory.value !== 'ai-summaries'
       ) {
         await apiStore.fetchFeeds({
           category_id: parseInt(selectedCategory.value),

@@ -1,19 +1,6 @@
 import { useAIAdminApi } from '~/api'
 import { getApiBaseUrl } from '~/utils/api'
 
-interface AISummaryRequest {
-  title: string
-  content: string
-  language?: string
-}
-
-interface AISummaryData {
-  one_sentence: string
-  key_points: string[]
-  takeaways: string[]
-  tags: string[]
-}
-
 interface ApiResponse<T> {
   success: boolean
   data?: T
@@ -90,56 +77,6 @@ export const useAI = () => {
     })
   }
 
-  const summarizeArticle = async (
-    title: string,
-    content: string,
-    language: string = 'zh'
-  ): Promise<ApiResponse<AISummaryData>> => {
-    loading.value = true
-    error.value = null
-
-    try {
-      const settings = await loadSettings()
-      if (!settings.apiKeyConfigured) {
-        throw new Error('AI 配置未完成，请先在设置中配置可用模型')
-      }
-
-      const response = await fetch(`${getApiBaseUrl()}/ai/summarize`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          title,
-          content,
-          language,
-        } satisfies AISummaryRequest),
-      })
-
-      const data = await response.json()
-      if (!response.ok) {
-        return {
-          success: false,
-          error: data.error || '总结生成失败',
-        }
-      }
-
-      return {
-        success: true,
-        data: data.data,
-      }
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : '未知错误'
-      error.value = errorMessage
-      return {
-        success: false,
-        error: errorMessage,
-      }
-    } finally {
-      loading.value = false
-    }
-  }
-
   const testConnection = async (config?: {
     baseURL?: string
     apiKey?: string
@@ -196,7 +133,6 @@ export const useAI = () => {
     aiSettings,
     isAIEnabled,
     loadSettings,
-    summarizeArticle,
     testConnection,
   }
 }

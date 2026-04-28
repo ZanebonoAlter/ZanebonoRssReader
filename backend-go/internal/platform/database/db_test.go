@@ -95,9 +95,6 @@ func TestPostgresBootstrapExpandsLegacyShortIconColumns(t *testing.T) {
 	if !strings.Contains(joined, "ALTER TABLE feeds ALTER COLUMN icon TYPE VARCHAR(1000)") {
 		t.Fatalf("expected feeds.icon widening statement, got %q", joined)
 	}
-	if !strings.Contains(joined, "ALTER TABLE ai_summary_feeds ALTER COLUMN feed_icon TYPE VARCHAR(1000)") {
-		t.Fatalf("expected ai_summary_feeds.feed_icon widening statement, got %q", joined)
-	}
 }
 
 func mustFindMigration(t *testing.T, migrations []Migration, version string) Migration {

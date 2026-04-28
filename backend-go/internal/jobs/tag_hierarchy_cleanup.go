@@ -18,7 +18,7 @@ import (
 	"my-robot-backend/internal/platform/tracing"
 )
 
-// TagHierarchyCleanupScheduler runs a 4-phase tag cleanup cycle: zombie cleanup, flat merge, hierarchy pruning, and tree review
+// TagHierarchyCleanupScheduler runs a multi-phase tag cleanup cycle: zombie, zero-article, low-quality, stale-zero-score, flat merge, hierarchy pruning, clustering, queued multi-parent, adopt narrower, abstract update, tree review, description backfill
 type TagHierarchyCleanupScheduler struct {
 	cron           *cron.Cron
 	checkInterval  time.Duration
@@ -32,8 +32,11 @@ type TagHierarchyCleanupRunSummary struct {
 	TriggerSource          string `json:"trigger_source"`
 	StartedAt              string `json:"started_at"`
 	FinishedAt             string `json:"finished_at"`
-	ZombieDeactivated      int    `json:"zombie_deactivated"`
-	FlatMergesApplied      int    `json:"flat_merges_applied"`
+	ZombieDeactivated               int    `json:"zombie_deactivated"`
+	ZeroArticleTagsDeactivated      int    `json:"zero_article_tags_deactivated"`
+	LowQualitySingleArticleRemoved  int    `json:"low_quality_single_article_removed"`
+	StaleZeroScoreDeactivated       int    `json:"stale_zero_score_deactivated"`
+	FlatMergesApplied               int    `json:"flat_merges_applied"`
 	OrphanedRelations      int    `json:"orphaned_relations"`
 	MultiParentFixed       int    `json:"multi_parent_fixed"`
 	EmptyAbstracts         int    `json:"empty_abstracts"`
@@ -183,7 +186,7 @@ func (s *TagHierarchyCleanupScheduler) initSchedulerTask() {
 
 	if err := database.DB.Where("name = ?", "tag_hierarchy_cleanup").First(&task).Error; err == nil {
 		updates := map[string]interface{}{
-			"description":         "7-phase tag cleanup: zombie, flat merge, hierarchy pruning, adopt narrower, abstract update, tree review, description backfill",
+			"description":         "multi-phase tag cleanup: zombie, zero-article, low-quality, stale-zero-score, flat merge, hierarchy pruning, clustering, queued multi-parent, adopt narrower, abstract update, tree review, description backfill",
 			"check_interval":      int(s.checkInterval.Seconds()),
 			"next_execution_time": &nextRun,
 		}
@@ -196,7 +199,7 @@ func (s *TagHierarchyCleanupScheduler) initSchedulerTask() {
 
 	task = models.SchedulerTask{
 		Name:              "tag_hierarchy_cleanup",
-		Description:       "7-phase tag cleanup: zombie, flat merge, hierarchy pruning, adopt narrower, abstract update, tree review, description backfill",
+		Description:       "multi-phase tag cleanup: zombie, zero-article, low-quality, stale-zero-score, flat merge, hierarchy pruning, clustering, queued multi-parent, adopt narrower, abstract update, tree review, description backfill",
 		CheckInterval:     int(s.checkInterval.Seconds()),
 		Status:            "idle",
 		NextExecutionTime: &nextRun,
@@ -236,7 +239,7 @@ func (s *TagHierarchyCleanupScheduler) runCleanupCycle(triggerSource string) {
 	budget := NewCleanupBudget(60, 30*time.Minute)
 	budget.SetPhaseQuota("phase6", 10)
 
-	logging.Infoln("Starting tag cleanup cycle (7-phase)")
+	logging.Infoln("Starting tag cleanup cycle (multi-phase)")
 
 	// Phase 1: Zombie tag cleanup (no LLM)
 	zombieCount, err := topicanalysis.CleanupZombieTags(topicanalysis.ZombieTagCriteria{
@@ -249,6 +252,36 @@ func (s *TagHierarchyCleanupScheduler) runCleanupCycle(triggerSource string) {
 	} else {
 		summary.ZombieDeactivated = zombieCount
 		logging.Infof("Phase 1: deactivated %d zombie tags", zombieCount)
+	}
+
+	// Phase 1.5: Zero-article tag cleanup (no LLM)
+	zeroArticleCount, err := topicanalysis.CleanupZeroArticleTags([]string{"event", "keyword", "person"})
+	if err != nil {
+		logging.Errorf("Phase 1.5 zero-article cleanup failed: %v", err)
+		summary.Errors++
+	} else {
+		summary.ZeroArticleTagsDeactivated = zeroArticleCount
+		logging.Infof("Phase 1.5: deactivated %d zero-article tags", zeroArticleCount)
+	}
+
+	// Phase 1.6: Low-quality single-article keyword cleanup (no LLM)
+	lowQualityCount, err := topicanalysis.CleanupLowQualitySingleArticleTags("keyword", 0.15)
+	if err != nil {
+		logging.Errorf("Phase 1.6 low-quality keyword cleanup failed: %v", err)
+		summary.Errors++
+	} else {
+		summary.LowQualitySingleArticleRemoved = lowQualityCount
+		logging.Infof("Phase 1.6: deactivated %d low-quality single-article keyword tags", lowQualityCount)
+	}
+
+	// Phase 1.7: Stale zero-score tag cleanup (no LLM)
+	staleZeroCount, err := topicanalysis.CleanupStaleZeroScoreTags(7)
+	if err != nil {
+		logging.Errorf("Phase 1.7 stale zero-score cleanup failed: %v", err)
+		summary.Errors++
+	} else {
+		summary.StaleZeroScoreDeactivated = staleZeroCount
+		logging.Infof("Phase 1.7: deactivated %d stale zero-score tags", staleZeroCount)
 	}
 
 	// Phase 2: Flat merge (LLM-assisted)
@@ -384,8 +417,8 @@ func (s *TagHierarchyCleanupScheduler) runCleanupCycle(triggerSource string) {
 	summary.LLMCallsTotal = budgetStats.TotalConsumed
 	summary.LLMBudgetTotal = budgetStats.TotalBudget
 	summary.TimedOut = budgetStats.TimedOut
-	summary.Reason = fmt.Sprintf("zombie=%d, flat_merges=%d, orphaned_rels=%d, multi_parent=%d, empty_abstracts=%d, adopt_narrower=%d, abstract_update=%d, trees_reviewed=%d, merges=%d, moves=%d, groups_created=%d, groups_reused=%d, desc_backfilled=%d",
-		summary.ZombieDeactivated, summary.FlatMergesApplied, summary.OrphanedRelations, summary.MultiParentFixed, summary.EmptyAbstracts, summary.AdoptNarrowerProcessed, summary.AbstractUpdateProcessed, summary.TreesReviewed, summary.MergesApplied, summary.MovesApplied, summary.GroupsCreated, summary.GroupsReused, summary.DescriptionBackfilled)
+	summary.Reason = fmt.Sprintf("zombie=%d, zero_article=%d, low_quality_single=%d, stale_zero_score=%d, flat_merges=%d, orphaned_rels=%d, multi_parent=%d, empty_abstracts=%d, adopt_narrower=%d, abstract_update=%d, trees_reviewed=%d, merges=%d, moves=%d, groups_created=%d, groups_reused=%d, desc_backfilled=%d",
+		summary.ZombieDeactivated, summary.ZeroArticleTagsDeactivated, summary.LowQualitySingleArticleRemoved, summary.StaleZeroScoreDeactivated, summary.FlatMergesApplied, summary.OrphanedRelations, summary.MultiParentFixed, summary.EmptyAbstracts, summary.AdoptNarrowerProcessed, summary.AbstractUpdateProcessed, summary.TreesReviewed, summary.MergesApplied, summary.MovesApplied, summary.GroupsCreated, summary.GroupsReused, summary.DescriptionBackfilled)
 
 	logging.Infof("Tag cleanup cycle completed: %s", summary.Reason)
 
@@ -443,7 +476,7 @@ func (s *TagHierarchyCleanupScheduler) updateSchedulerStatus(status, lastError s
 
 	task = models.SchedulerTask{
 		Name:              "tag_hierarchy_cleanup",
-		Description:       "7-phase tag cleanup: zombie, flat merge, hierarchy pruning, adopt narrower, abstract update, tree review, description backfill",
+		Description:       "multi-phase tag cleanup: zombie, zero-article, low-quality, stale-zero-score, flat merge, hierarchy pruning, clustering, queued multi-parent, adopt narrower, abstract update, tree review, description backfill",
 		CheckInterval:     int(s.checkInterval.Seconds()),
 		Status:            status,
 		LastError:         lastError,

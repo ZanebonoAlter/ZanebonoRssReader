@@ -3,7 +3,6 @@ import { useCategoriesApi } from '~/api/categories'
 import { useFeedsApi } from '~/api/feeds'
 import { useArticlesApi } from '~/api/articles'
 import { useOpmlApi } from '~/api/opml'
-import { useSummariesApi } from '~/api/summaries'
 import { normalizeArticle } from '~/features/articles/utils/normalizeArticle'
 
 export const useApiStore = defineStore('api', () => {
@@ -398,63 +397,6 @@ export const useApiStore = defineStore('api', () => {
     return response
   }
 
-  // AI Summaries
-  async function getSummaries(params: { category_id?: number; page?: number; per_page?: number } = {}) {
-    loading.value = true
-    error.value = null
-    const summariesApi = useSummariesApi()
-    const response = await summariesApi.getSummaries(params)
-    loading.value = false
-    return response
-  }
-
-  async function generateSummary(data: {
-    category_id?: number | null
-    time_range?: number
-  }) {
-    loading.value = true
-    error.value = null
-    const summariesApi = useSummariesApi()
-    const response = await summariesApi.generateSummary(data)
-    loading.value = false
-    return response
-  }
-
-  async function deleteSummary(id: number) {
-    loading.value = true
-    error.value = null
-    const summariesApi = useSummariesApi()
-    const response = await summariesApi.deleteSummary(id)
-    loading.value = false
-    return response
-  }
-
-  // Queue Summary
-  async function submitQueueSummary(data: {
-    category_ids?: number[]
-    feed_ids?: number[]
-    time_range?: number
-  }) {
-    loading.value = true
-    error.value = null
-    const summariesApi = useSummariesApi()
-    const response = await summariesApi.submitQueueSummary(data)
-    loading.value = false
-    return response
-  }
-
-  async function getQueueStatus() {
-    const summariesApi = useSummariesApi()
-    const response = await summariesApi.getQueueStatus()
-    return response
-  }
-
-  async function getQueueJob(jobId: string) {
-    const summariesApi = useSummariesApi()
-    const response = await summariesApi.getQueueJob(jobId)
-    return response
-  }
-
   // Initialize
   async function initialize() {
     await Promise.all([
@@ -490,12 +432,6 @@ export const useApiStore = defineStore('api', () => {
     importOpml,
     exportOpml,
     fetchArticlesStats,
-    getSummaries,
-    generateSummary,
-    deleteSummary,
-    submitQueueSummary,
-    getQueueStatus,
-    getQueueJob,
     initialize,
   }
 })

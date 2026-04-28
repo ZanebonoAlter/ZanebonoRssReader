@@ -34,13 +34,6 @@ func EnsureLegacySummaryConfigMigrated() error {
 		}
 	}
 
-	autoSummaryConfig, _, autoErr := aisettings.LoadAutoSummaryConfig()
-	if autoErr == nil && len(autoSummaryConfig) == 0 {
-		if timeRange, ok := legacyConfig["time_range"]; ok {
-			_ = aisettings.SaveAutoSummaryConfig(map[string]any{"time_range": timeRange}, "Auto summary configuration")
-		}
-	}
-
 	return nil
 }
 

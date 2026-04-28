@@ -8,7 +8,6 @@ import (
 
 	"my-robot-backend/internal/app/runtimeinfo"
 	"my-robot-backend/internal/domain/contentprocessing"
-	"my-robot-backend/internal/domain/digest"
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/domain/topicanalysis"
 	"my-robot-backend/internal/domain/topicextraction"
@@ -19,13 +18,10 @@ import (
 
 type Runtime struct {
 	AutoRefresh            *jobs.AutoRefreshScheduler
-	AutoSummary            *jobs.AutoSummaryScheduler
 	PreferenceUpdate       *jobs.PreferenceUpdateScheduler
 	ContentCompletion      *jobs.ContentCompletionScheduler
 	Firecrawl              *jobs.FirecrawlScheduler
-	Digest                 *digest.DigestScheduler
 	BlockedArticleRecovery *jobs.BlockedArticleRecoveryScheduler
-	AutoTagMerge           *jobs.AutoTagMergeScheduler
 	TagQualityScore        *jobs.TagQualityScoreScheduler
 	NarrativeSummary       *jobs.NarrativeSummaryScheduler
 	TagHierarchyCleanup    *jobs.TagHierarchyCleanupScheduler
@@ -118,14 +114,6 @@ func StartRuntime() *Runtime {
 		logging.Infoln("Auto-refresh scheduler started successfully")
 	}
 
-	autoSummaryInterval := 3600
-	runtime.AutoSummary = jobs.NewAutoSummaryScheduler(autoSummaryInterval)
-	if err := runtime.AutoSummary.Start(); err != nil {
-		logging.Warnf("Failed to start auto-summary scheduler: %v", err)
-	} else {
-		logging.Infoln("Auto-summary scheduler started successfully")
-	}
-
 	preferenceUpdateInterval := 1800
 	runtime.PreferenceUpdate = jobs.NewPreferenceUpdateScheduler(preferenceUpdateInterval)
 	if err := runtime.PreferenceUpdate.Start(); err != nil {
@@ -157,27 +145,12 @@ func StartRuntime() *Runtime {
 		logging.Infoln("Content completion scheduler started successfully")
 	}
 
-	runtime.Digest = digest.NewDigestScheduler()
-	if err := runtime.Digest.Start(); err != nil {
-		logging.Warnf("Failed to start digest scheduler: %v", err)
-	} else {
-		logging.Infoln("Digest scheduler started successfully")
-	}
-
 	// STAT-04: Blocked article recovery scheduler (hourly)
 	runtime.BlockedArticleRecovery = jobs.NewBlockedArticleRecoveryScheduler(3600)
 	if err := runtime.BlockedArticleRecovery.Start(); err != nil {
 		logging.Warnf("Failed to start blocked article recovery scheduler: %v", err)
 	} else {
 		logging.Infoln("Blocked article recovery scheduler started successfully")
-	}
-
-	// Auto tag merge scheduler (hourly)
-	runtime.AutoTagMerge = jobs.NewAutoTagMergeScheduler(3600)
-	if err := runtime.AutoTagMerge.Start(); err != nil {
-		logging.Warnf("Failed to start auto tag merge scheduler: %v", err)
-	} else {
-		logging.Infoln("Auto tag merge scheduler started successfully")
 	}
 
 	runtime.TagQualityScore = jobs.NewTagQualityScoreScheduler(3600)
@@ -202,12 +175,9 @@ func StartRuntime() *Runtime {
 	}
 
 	runtimeinfo.AutoRefreshSchedulerInterface = runtime.AutoRefresh
-	runtimeinfo.AutoSummarySchedulerInterface = runtime.AutoSummary
 	runtimeinfo.PreferenceUpdateSchedulerInterface = runtime.PreferenceUpdate
-	runtimeinfo.AISummarySchedulerInterface = runtime.ContentCompletion
+	runtimeinfo.ContentCompletionSchedulerInterface = runtime.ContentCompletion
 	runtimeinfo.FirecrawlSchedulerInterface = runtime.Firecrawl
-	runtimeinfo.DigestSchedulerInterface = runtime.Digest
-	runtimeinfo.AutoTagMergeSchedulerInterface = runtime.AutoTagMerge
 	runtimeinfo.TagQualityScoreSchedulerInterface = runtime.TagQualityScore
 	runtimeinfo.NarrativeSummarySchedulerInterface = runtime.NarrativeSummary
 	runtimeinfo.TagHierarchyCleanupSchedulerInterface = runtime.TagHierarchyCleanup
@@ -245,11 +215,6 @@ func SetupGracefulShutdown(runtime *Runtime) {
 				runtime.AutoRefresh.Stop()
 			}
 
-			if runtime.AutoSummary != nil {
-				logging.Infoln("Stopping auto-summary scheduler...")
-				runtime.AutoSummary.Stop()
-			}
-
 			if runtime.PreferenceUpdate != nil {
 				logging.Infoln("Stopping preference update scheduler...")
 				runtime.PreferenceUpdate.Stop()
@@ -265,19 +230,9 @@ func SetupGracefulShutdown(runtime *Runtime) {
 				runtime.Firecrawl.Stop()
 			}
 
-			if runtime.Digest != nil {
-				logging.Infoln("Stopping digest scheduler...")
-				runtime.Digest.Stop()
-			}
-
 			if runtime.BlockedArticleRecovery != nil {
 				logging.Infoln("Stopping blocked article recovery scheduler...")
 				runtime.BlockedArticleRecovery.Stop()
-			}
-
-			if runtime.AutoTagMerge != nil {
-				logging.Infoln("Stopping auto tag merge scheduler...")
-				runtime.AutoTagMerge.Stop()
 			}
 
 			if runtime.TagQualityScore != nil {

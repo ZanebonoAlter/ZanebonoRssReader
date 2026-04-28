@@ -31,7 +31,6 @@ func setupTagHierarchyCleanupSchedulerTestDB(t *testing.T) *gorm.DB {
 		&models.TopicTag{},
 		&models.TopicTagRelation{},
 		&models.ArticleTopicTag{},
-		&models.AISummaryTopic{},
 	); err != nil {
 		t.Fatalf("migrate test db: %v", err)
 	}

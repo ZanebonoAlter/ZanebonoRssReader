@@ -35,7 +35,6 @@ func setupMergeReembeddingTestDB(t *testing.T) *gorm.DB {
 		&models.MergeReembeddingQueue{},
 		&models.Article{},
 		&models.ArticleTopicTag{},
-		&models.AISummaryTopic{},
 	); err != nil {
 		t.Fatalf("migrate test tables: %v", err)
 	}

@@ -4,7 +4,7 @@ import { Icon } from '@iconify/vue'
 import { useTopicGraphApi, type TopicCategory, type TopicGraphDetailPayload } from '~/api/topicGraph'
 import { useAbstractTagApi } from '~/api/abstractTags'
 import type { TagHierarchyNode } from '~/types/topicTag'
-import type { PendingArticle, TimelineDigestSelection } from '~/types/timeline'
+import type { PendingArticle, TimelineDigestSelection, TimelineAggregationArticle } from '~/types/timeline'
 import { normalizeTopicCategory } from '~/features/topic-graph/utils/normalizeTopicCategory'
 import KeywordCloud, { type Keyword } from './KeywordCloud.vue'
 
@@ -20,6 +20,8 @@ interface Props {
   selectedPendingNode?: boolean
   abstractNodeSlug?: string | null
   abstractNodeLabel?: string | null
+  timelineGroupArticles?: TimelineAggregationArticle[]
+  timelineGroupKey?: string | null
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -33,6 +35,8 @@ const props = withDefaults(defineProps<Props>(), {
   selectedPendingNode: false,
   abstractNodeSlug: null,
   abstractNodeLabel: null,
+  timelineGroupArticles: () => [],
+  timelineGroupKey: null,
 })
 
 const emit = defineEmits<{
@@ -316,11 +320,41 @@ async function doMerge(targetTagId: number, targetLabel: string) {
       <section v-if="!props.selectedPendingNode" class="topic-panel topic-panel--featured rounded-[28px] p-4 md:p-5">
         <div class="flex items-center justify-between gap-3">
           <div>
-            <p class="topic-sidebar__eyebrow">日报文章</p>
-            <p v-if="props.selectedDigest" class="topic-related-card__context mt-2">{{ props.selectedDigest.title }}</p>
+            <p class="topic-sidebar__eyebrow">{{ props.timelineGroupKey ? '时间线文章' : '日报文章' }}</p>
+            <p v-if="props.timelineGroupKey && props.timelineGroupArticles.length" class="topic-related-card__context mt-2">
+              该时间段共 {{ props.timelineGroupArticles.length }} 篇关联文章
+            </p>
+            <p v-else-if="props.selectedDigest" class="topic-related-card__context mt-2">{{ props.selectedDigest.title }}</p>
           </div>
-          <span class="topic-summary__count">{{ deduplicatedArticles.length }} 条</span>
+          <span class="topic-summary__count">{{ props.timelineGroupKey ? props.timelineGroupArticles.length : deduplicatedArticles.length }} 条</span>
         </div>
+
+        <!-- Timeline group articles -->
+        <template v-if="props.timelineGroupKey && props.timelineGroupArticles.length">
+          <div
+            class="topic-sidebar__news-scroll mt-4"
+            :class="{ 'topic-sidebar__news-scroll--bounded': props.timelineGroupArticles.length > 8 }"
+          >
+            <div class="grid gap-3">
+              <button
+                v-for="article in props.timelineGroupArticles"
+                :key="article.id"
+                class="topic-related-card"
+                type="button"
+                @click="emit('openArticle', Number(article.id))"
+              >
+                <p class="topic-related-card__meta">{{ article.feedName || '来源文章' }}</p>
+                <h3 class="topic-related-card__title">{{ article.title }}</h3>
+                <p class="topic-related-card__context">{{ article.pubDate ? new Date(article.pubDate).toLocaleString('zh-CN') : '日期待补' }}</p>
+              </button>
+            </div>
+          </div>
+          <div v-if="!props.timelineGroupArticles.length" class="topic-sidebar__empty topic-sidebar__empty--soft">
+            该时间段暂无关联文章
+          </div>
+        </template>
+        <!-- Deduplicated digest articles -->
+        <template v-else-if="!props.timelineGroupKey">
         <div
           v-if="deduplicatedArticles.length"
           class="topic-sidebar__news-scroll mt-4"
@@ -347,6 +381,7 @@ async function doMerge(targetTagId: number, targetLabel: string) {
           </div>
         </div>
         <div v-else class="topic-sidebar__empty topic-sidebar__empty--soft">点击下方日报后，这里只展示该日报里命中当前主题的文章。</div>
+        </template>
       </section>
 
       <!-- Keyword Cloud (Related Topics) -->

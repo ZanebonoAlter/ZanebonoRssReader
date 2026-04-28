@@ -633,7 +633,7 @@ func TestProcessAbstractJudgmentReusesExistingAbstract(t *testing.T) {
 	assertAbstractRelationExists(t, db, existing.ID, child.ID)
 }
 
-func TestReparentOrLinkAbstractChildKeepsNarrowerIntermediateParent(t *testing.T) {
+func TestReparentOrLinkAbstractChildSkipsWhenChildAlreadyHasParent(t *testing.T) {
 	db := setupAbstractTagServiceTestDB(t)
 
 	grandParent := models.TopicTag{Slug: "zhong-dong-chong-tu", Label: "中东冲突", Category: "event", Kind: "event", Source: "abstract", Status: "active"}
@@ -649,26 +649,12 @@ func TestReparentOrLinkAbstractChildKeepsNarrowerIntermediateParent(t *testing.T
 		t.Fatalf("create original relation: %v", err)
 	}
 
-	originalJudge := aiJudgeNarrowerConceptFn
-	aiJudgeNarrowerConceptFn = func(ctx context.Context, broader, narrower *models.TopicTag) (bool, error) {
-		if broader.ID != grandParent.ID {
-			t.Fatalf("expected broader tag %d, got %d", grandParent.ID, broader.ID)
-		}
-		if narrower.ID != midParent.ID {
-			t.Fatalf("expected narrower tag %d, got %d", midParent.ID, narrower.ID)
-		}
-		return true, nil
-	}
-	t.Cleanup(func() {
-		aiJudgeNarrowerConceptFn = originalJudge
-	})
-
 	if err := reparentOrLinkAbstractChild(context.Background(), child.ID, grandParent.ID); err != nil {
 		t.Fatalf("reparentOrLinkAbstractChild returned error: %v", err)
 	}
 
 	assertAbstractRelationExists(t, db, midParent.ID, child.ID)
-	assertAbstractRelationExists(t, db, grandParent.ID, midParent.ID)
+	assertAbstractRelationMissing(t, db, grandParent.ID, midParent.ID)
 	assertAbstractRelationMissing(t, db, grandParent.ID, child.ID)
 }
 

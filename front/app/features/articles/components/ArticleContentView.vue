@@ -56,7 +56,6 @@ const { onResult: onTagResult, onError: onTagError, watchArticle, clearWatch } =
 
 const viewMode = ref<'preview' | 'iframe'>('preview')
 const iframeLoading = ref(true)
-const showAISummary = ref(false)
 const isFullscreen = ref(false)
 const liveStatus = ref<ContentCompletionStatus | null>(null)
 const selectedContentSource = ref<ArticleContentSource>('firecrawl')
@@ -287,7 +286,6 @@ watch(() => props.article?.id, (newId, oldId) => {
   if (newId === oldId) return
   iframeLoading.value = true
   viewMode.value = 'preview'
-  showAISummary.value = false
   liveStatus.value = null
   manualActionError.value = null
   taggingError.value = null
@@ -315,10 +313,6 @@ watch(() => props.article, (newArticle) => {
     ],
   })
 })
-
-function toggleAISummary() {
-  showAISummary.value = !showAISummary.value
-}
 
 function handleFavorite() {
   if (!props.article) return
@@ -413,11 +407,6 @@ const displayContent = computed(() => {
   return resolvedContent
 })
 
-const aiSourceContent = computed(() => {
-  if (!mergedArticle.value) return ''
-  return mergedArticle.value.firecrawlContent || mergedArticle.value.content || mergedArticle.value.description || ''
-})
-
 const showDescription = computed(() => {
   if (!mergedArticle.value) return false
 
@@ -472,16 +461,6 @@ import '~/components/article/ArticleContent.css'
           </button>
           <div class="mx-1 h-5 w-px bg-ink-200" />
         </template>
-
-        <button
-          v-if="aiEnabled && !mergedArticle?.aiContentSummary"
-          class="action-btn"
-          :class="{ active: showAISummary }"
-          title="临时生成 AI 分析"
-          @click="toggleAISummary"
-        >
-          <Icon icon="mdi:brain" width="20" height="20" />
-        </button>
 
         <button class="action-btn" :title="viewMode === 'preview' ? '切换到内嵌网页' : '切换到内容预览'" @click="toggleViewMode">
           <Icon :icon="viewMode === 'preview' ? 'mdi:web' : 'mdi:file-document-outline'" width="20" height="20" />
@@ -580,14 +559,6 @@ import '~/components/article/ArticleContent.css'
           <div class="markdown-body markdown-summary" v-html="renderedStoredSummary" />
         </div>
       </div>
-
-      <AISummary
-        v-else-if="showAISummary"
-        :title="article.title"
-        :content="aiSourceContent"
-        class="mb-6"
-        @close="showAISummary = false"
-      />
 
       <div class="article-meta">
         <span>{{ $dayjs(article.pubDate).format('YYYY年MM月DD日 HH:mm') }}</span>
@@ -695,16 +666,6 @@ import '~/components/article/ArticleContent.css'
             <div class="mx-1 h-5 w-px bg-ink-200" />
           </template>
 
-          <button
-            v-if="aiEnabled && !mergedArticle?.aiContentSummary"
-            class="action-btn"
-            :class="{ active: showAISummary }"
-            title="临时生成 AI 分析"
-            @click="toggleAISummary"
-          >
-            <Icon icon="mdi:brain" width="20" height="20" />
-          </button>
-
           <button class="action-btn" :title="viewMode === 'preview' ? '切换到内嵌网页' : '切换到内容预览'" @click="toggleViewMode">
             <Icon :icon="viewMode === 'preview' ? 'mdi:web' : 'mdi:file-document-outline'" width="20" height="20" />
           </button>
@@ -802,8 +763,6 @@ import '~/components/article/ArticleContent.css'
           <div class="markdown-body markdown-summary" v-html="renderedStoredSummary" />
         </div>
         </div>
-
-        <AISummary v-else-if="showAISummary" :title="article.title" :content="aiSourceContent" class="mb-6" @close="showAISummary = false" />
 
         <div class="article-meta">
           <span>{{ $dayjs(article.pubDate).format('YYYY年MM月DD日 HH:mm') }}</span>

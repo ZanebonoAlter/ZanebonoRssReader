@@ -137,22 +137,6 @@ func (TopicTagEmbedding) TableName() string {
 	return "topic_tag_embeddings"
 }
 
-// AISummaryTopic represents the many-to-many relationship between summaries and tags
-type AISummaryTopic struct {
-	ID         uint       `gorm:"primaryKey" json:"id"`
-	SummaryID  uint       `gorm:"index;not null" json:"summary_id"`
-	TopicTagID uint       `gorm:"index;not null" json:"topic_tag_id"`
-	Score      float64    `gorm:"default:0" json:"score"`
-	Source     string     `gorm:"size:20;default:llm" json:"source"`
-	CreatedAt  time.Time  `json:"created_at"`
-	Summary    *AISummary `gorm:"foreignKey:SummaryID;constraint:OnDelete:CASCADE" json:"summary,omitempty"`
-	TopicTag   *TopicTag  `gorm:"foreignKey:TopicTagID;constraint:OnDelete:CASCADE" json:"topic_tag,omitempty"`
-}
-
-func (AISummaryTopic) TableName() string {
-	return "ai_summary_topics"
-}
-
 // ArticleTopicTag represents the many-to-many relationship between articles and tags
 // This allows individual articles to be tagged for more granular topic tracking
 type ArticleTopicTag struct {

@@ -59,16 +59,6 @@ func TestSchedulerStatusFormat(t *testing.T) {
 	}
 
 	if err := database.DB.Create(&models.SchedulerTask{
-		Name:              "auto_summary",
-		Description:       "Auto-generate AI summaries for feeds",
-		CheckInterval:     3600,
-		Status:            "idle",
-		NextExecutionTime: &nextRun,
-	}).Error; err != nil {
-		t.Fatalf("create auto_summary task: %v", err)
-	}
-
-	if err := database.DB.Create(&models.SchedulerTask{
 		Name:              "ai_summary",
 		Description:       "AI summarize Firecrawl content",
 		CheckInterval:     3600,
@@ -88,17 +78,6 @@ func TestSchedulerStatusFormat(t *testing.T) {
 		CheckInterval: 60,
 		NextRun:       nextRun.Unix(),
 		IsExecuting:   true,
-	})
-
-	autoSummary := NewAutoSummaryScheduler(3600)
-	autoSummary.isRunning = true
-	autoSummaryStatus := autoSummary.GetStatus()
-	assertSchedulerStatus(t, autoSummaryStatus, SchedulerStatusResponse{
-		Name:          "Auto Summary",
-		Status:        "idle",
-		CheckInterval: 3600,
-		NextRun:       nextRun.Unix(),
-		IsExecuting:   false,
 	})
 
 	preference := NewPreferenceUpdateScheduler(1800)

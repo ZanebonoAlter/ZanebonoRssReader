@@ -130,7 +130,7 @@ func TestParseExtractedTagsWithUnescapedQuotes(t *testing.T) {
 func TestBuildExtractionSystemPromptLimitsAndOrdersTags(t *testing.T) {
 	prompt := buildExtractionSystemPrompt()
 
-	require.True(t, strings.Contains(prompt, "最多返回 8 个标签") || strings.Contains(prompt, "最多返回8个标签"))
+	require.True(t, strings.Contains(prompt, "最多返回 5 个标签") || strings.Contains(prompt, "最多返回5个标签"))
 	require.True(t, strings.Contains(prompt, "按优先级从高到低排序") || strings.Contains(prompt, "按优先级排序"))
 }
 

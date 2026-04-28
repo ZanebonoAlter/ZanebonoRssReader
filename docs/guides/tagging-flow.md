@@ -1,7 +1,19 @@
 # 打标签流程全景说明
 
-> **版本**：基于 `backend-go/internal/domain/topicanalysis/` 与 `topicextraction/tagger.go` 实际代码整理（2026-04 更新：清理调度器扩展为 7 阶段）  
+> **版本**：基于 `backend-go/internal/domain/topicanalysis/` 与 `topicextraction/tagger.go` 实际代码整理（2026-04 更新：清理调度器扩展为 10 阶段、标签提取限额调整、keyword 自动复用门槛降低）  
 > **阅读建议**：先看主流程图，再按需深入各子章节
+
+---
+
+## 0. 标签提取配置
+
+| 参数 | 值 | 说明 |
+|------|-----|------|
+| `maxArticleTags` | 5 | 每篇文章最多提取 5 个标签 |
+| keyword 上限 | 3 | 其中 keyword 类型最多 3 个 |
+| `cluster_max_tags` | 500 | 未分类标签聚类上限 |
+
+keyword 提取 prompt 强调持久辨识度：只提取在多篇文章中反复出现的实体或术语，瞬态描述词不作为 keyword。原则是宁少勿多——如果文章只聚焦一个话题，2-3 个标签就够了。
 
 ---
 
@@ -52,8 +64,8 @@ flowchart TD
 |------|----------|------|------|
 | **L1** | slug 精确匹配 | — | 直接复用 |
 | **L1** | 别名(alias)匹配 | — | 直接复用 |
-| **L2** | embedding 相似搜索 | ≥0.97 | 自动复用(Exact) |
-| **L2** | embedding 相似搜索 | 0.78~0.97 | 送LLM判断(Candidates) |
+| **L2** | embedding 相似搜索 | ≥0.97（keyword ≥0.90）| 自动复用(Exact) |
+| **L2** | embedding 相似搜索 | 0.78~0.97（keyword 0.78~0.90）| 送LLM判断(Candidates) |
 | **L2** | embedding 相似搜索 | <0.78 | 新建标签(No Match) |
 
 ---
@@ -348,7 +360,7 @@ flowchart TD
 
 ### 实时清理：`cleanupOrphanedTags`
 
-文章重新打标签后，旧标签若不再被任何 `article_topic_tags` 或 `ai_summary_topics` 引用，直接删除（含 embedding）。`article_tagger.go:369`
+文章重新打标签后，旧标签若不再被任何 `article_topic_tags` 引用，直接删除（含 embedding）。
 
 ### 深度限制：`maxHierarchyDepth`
 
@@ -372,12 +384,30 @@ go run ./cmd/fix-hierarchy-depth --dry-run        # 预览
 go run ./cmd/fix-hierarchy-depth --dry-run=false   # 执行
 ```
 
-### 定时调度：`TagHierarchyCleanupScheduler`（7 阶段）
+### 一次性清理工具：`cmd/cleanup-tags`
+
+用于标签碎片化的一次性清理，独立于定时调度器运行：
+
+```bash
+cd backend-go
+# 默认 dry-run 模式
+go run ./cmd/cleanup-tags
+# 实际执行
+DRY_RUN=false go run ./cmd/cleanup-tags
+```
+
+Phase A：清理所有无文章关联的零文章标签（跨 event/keyword/person 三类）。
+Phase B：清理 `quality_score < 0.15` 且仅关联 1 篇文章的 keyword 标签。
+
+### 定时调度：`TagHierarchyCleanupScheduler`（10 阶段）
 
 ```mermaid
 flowchart TD
     START([定时/手动触发]) --> P1[Phase 1: Zombie清理]
-    P1 --> |无LLM 标记inactive| P2[Phase 2: Flat Merge]
+    P1 --> |无LLM 标记inactive| P1_5[Phase 1.5: 零文章标签清理]
+    P1_5 --> P1_6[Phase 1.6: 低质量单文章keyword清理<br/>quality_score < 0.15]
+    P1_6 --> P1_7[Phase 1.7: 过期零分标签清理<br/>quality_score < 0.05 & age > 7d]
+    P1_7 --> P2[Phase 2: Flat Merge]
     P2 --> |LLM判断 同类抽象标签合并 event/keyword各≤50| P3[Phase 3: 层级修剪]
     P3 --> P3A[删除孤儿关系]
     P3A --> P3B[解决多父冲突]
@@ -399,6 +429,9 @@ flowchart TD
     P7 --> |批量补全缺失description| END1([完成])
 
     style P1 fill:#fff3e0
+    style P1_5 fill:#fff3e0
+    style P1_6 fill:#fff3e0
+    style P1_7 fill:#fff3e0
     style P2 fill:#e3f2fd
     style P3 fill:#f3e5f5
     style P4 fill:#e8eaf6
@@ -410,6 +443,9 @@ flowchart TD
 | 阶段 | 文件 | LLM? | 条件 |
 |------|------|-------|------|
 | Phase 1 Zombie | `tag_cleanup.go` `CleanupZombieTags` | 否 | age>7d + 无关系 + 无文章/摘要引用 |
+| Phase 1.5 零文章清理 | `tag_cleanup.go` `CleanupZeroArticleTags` | 否 | 无 article_topic_tags 引用 |
+| Phase 1.6 低质量keyword清理 | `tag_cleanup.go` `CleanupLowQualitySingleArticleTags` | 否 | keyword 单文章 + quality_score < 0.15 |
+| Phase 1.7 过期零分清理 | `tag_cleanup.go` `CleanupStaleZeroScoreTags` | 否 | quality_score < 0.05 + age > 7 天 |
 | Phase 2 Flat Merge | `tag_cleanup.go` `ExecuteFlatMerge` | 是 | 同类 abstract 标签去重 |
 | Phase 3 层级修剪 | `tag_cleanup.go` 三个函数 | 否 | 孤儿关系 / 多父 / 空抽象 |
 | Phase 4 收养更窄标签 | `queue_batch_processor.go` `ProcessPendingAdoptNarrowerTasks` | 是 | 处理 pending 的 adopt_narrower 队列任务 |
@@ -417,7 +453,7 @@ flowchart TD
 | Phase 6 整树审查 | `hierarchy_cleanup.go` `ReviewHierarchyTrees` | 是 | 含 windowDays 内新关系的 minDepth=2 标签树 |
 | Phase 7 Description回填 | `description_backfill.go` `BackfillMissingDescriptions` | 是 | active 标签中 description 为空的，从关联文章获取上下文生成 |
 
-核心文件: `jobs/tag_hierarchy_cleanup.go`（调度器）、`topicanalysis/tag_cleanup.go`（Phase 1-3）、`topicanalysis/queue_batch_processor.go`（Phase 4-5）、`topicanalysis/hierarchy_cleanup.go`（Phase 6）、`topicextraction/description_backfill.go`（Phase 7）
+核心文件: `jobs/tag_hierarchy_cleanup.go`（调度器）、`topicanalysis/tag_cleanup.go`（Phase 1-1.7-3）、`topicanalysis/queue_batch_processor.go`（Phase 4-5）、`topicanalysis/hierarchy_cleanup.go`（Phase 6）、`topicextraction/description_backfill.go`（Phase 7）
 
 Phase 4-5 在整树审查前执行：先收养更窄标签挂到对应抽象节点下，再刷新抽象标签的 label/description，确保审查时层级结构已经是最新的。
 
@@ -452,7 +488,7 @@ Phase 7 批量查询 active 标签中 description 为空的记录，通过关联
                                      ↓
                异步: 生成embedding → 层级匹配 → EnqueueAdoptNarrower入队 → 入队刷新
                                      ↓
-               定时清理(7阶段): zombie → flat merge → 层级修剪 → 收养窄标签 → 抽象刷新 → 整树审查 → description回填
+                定时清理(10阶段): zombie → 零文章清理 → 低质量keyword清理 → 过期零分清理 → flat merge → 层级修剪 → 收养窄标签 → 抽象刷新 → 整树审查 → description回填
                                      ↓
                收养队列: 5s轮询 + Phase4批量处理 → batchJudgeNarrowerConcepts批量LLM → 收养更窄标签
                                      ↓

@@ -88,7 +88,8 @@ func (te *TagExtractor) extractCandidates(ctx context.Context, input topictypes.
 	maxTokens := 2048
 	temperature := 0.2
 	metadata := map[string]any{
-		"title": input.Title,
+		"operation": "tag_extraction",
+		"title":     input.Title,
 	}
 	if input.FeedName != "" {
 		metadata["feed_name"] = input.FeedName
@@ -167,6 +168,7 @@ func (te *TagExtractor) aiJudgment(ctx context.Context, candidate topictypes.Ext
 	maxTokens := 200
 	temperature := 0.1
 	metadata := map[string]any{
+		"operation": "ai_judgment",
 		"candidate": candidate.Label,
 	}
 	if input.FeedName != "" {
@@ -253,7 +255,9 @@ func buildExtractionSystemPrompt() string {
 	- event类标签必须是语义完整的名词短语，能独立传达事件内容
 	- 拒绝语义片段：不要把裸日期、无主体动作、无归属状态、裸地名、泛化活动名当作event，应归入keyword
 	- 无法判断语义完整性时，优先归入keyword类别
-	- 最多返回 8 个标签
+	- 最多返回 5 个标签，其中 keyword 类最多 3 个
+	- 宁少勿多：如果文章只聚焦一个话题，2-3 个标签就够了
+	- keyword 类标签必须是具有持久辨识度的实体或术语，不接受只在一篇文章出现的临时性描述词。如果一个 keyword 只在单篇文章中有意义，不要提取它
 	- 标签必须按优先级从高到低排序，最重要的标签放前面
 	- 标签应该简洁、准确
 

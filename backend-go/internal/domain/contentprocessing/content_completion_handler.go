@@ -1,7 +1,6 @@
 package contentprocessing
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 
@@ -27,25 +26,6 @@ func loadCompletionAISettings() {
 	provider, _, err := airouter.NewRouter().ResolvePrimaryProvider(airouter.CapabilityArticleCompletion)
 	if err == nil && provider != nil && provider.BaseURL != "" && provider.APIKey != "" && provider.Model != "" {
 		completionService.SetAICredentials(provider.BaseURL, provider.APIKey, provider.Model)
-		return
-	}
-
-	var settings models.AISettings
-	if err := database.DB.Where("key = ?", "summary_config").First(&settings).Error; err != nil {
-		return
-	}
-
-	var config struct {
-		BaseURL string `json:"base_url"`
-		APIKey  string `json:"api_key"`
-		Model   string `json:"model"`
-	}
-	if err := json.Unmarshal([]byte(settings.Value), &config); err != nil {
-		return
-	}
-
-	if config.BaseURL != "" && config.APIKey != "" && config.Model != "" {
-		completionService.SetAICredentials(config.BaseURL, config.APIKey, config.Model)
 	}
 }
 
@@ -192,7 +172,7 @@ func GetCompletionOverview(c *gin.Context) {
 		},
 	}
 
-	if scheduler, ok := runtimeinfo.AISummarySchedulerInterface.(interface{ GetStatus() map[string]interface{} }); ok {
+	if scheduler, ok := runtimeinfo.ContentCompletionSchedulerInterface.(interface{ GetStatus() map[string]interface{} }); ok {
 		status := scheduler.GetStatus()
 		for _, key := range []string{"is_executing", "current_article", "last_processed", "next_run", "last_error", "database_state", "overview"} {
 			if value, exists := status[key]; exists {

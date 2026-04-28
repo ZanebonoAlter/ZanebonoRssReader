@@ -718,13 +718,6 @@ func batchJudgeNarrowerConcepts(ctx context.Context, parentTag *models.TopicTag,
 	if len(candidates) == 0 {
 		return nil, nil
 	}
-	if len(candidates) == 1 {
-		ok, err := aiJudgeNarrowerConcept(ctx, parentTag, candidates[0].Tag)
-		if err != nil || !ok {
-			return nil, err
-		}
-		return []uint{candidates[0].Tag.ID}, nil
-	}
 
 	parentChildren := loadAbstractChildLabels(parentTag.ID, 5)
 
@@ -1384,45 +1377,8 @@ func reparentOrLinkAbstractChild(ctx context.Context, childID, newParentID uint)
 
 		var oldParentRelation models.TopicTagRelation
 		if err := tx.Where("child_id = ? AND relation_type = ?", childID, "abstract").First(&oldParentRelation).Error; err == nil {
-			var oldParentTag models.TopicTag
-			if err := tx.First(&oldParentTag, oldParentRelation.ParentID).Error; err != nil {
-				return fmt.Errorf("load old parent tag: %w", err)
-			}
-
-			var newParentTag models.TopicTag
-			if err := tx.First(&newParentTag, newParentID).Error; err != nil {
-				return fmt.Errorf("load new parent tag: %w", err)
-			}
-
-			narrower, err := aiJudgeNarrowerConceptFn(ctx, &newParentTag, &oldParentTag)
-			if err != nil {
-				return fmt.Errorf("judge old parent narrower: %w", err)
-			}
-			if !narrower {
-				return fmt.Errorf("child %d already has parent %d which is not narrower than %d", childID, oldParentRelation.ParentID, newParentID)
-			}
-
-			oldParentCycle, err := wouldCreateCycle(tx, newParentID, oldParentRelation.ParentID)
-			if err != nil {
-				return fmt.Errorf("cycle check for old parent: %w", err)
-			}
-			if oldParentCycle {
-				return fmt.Errorf("would create cycle via old parent: parent=%d, old_parent=%d", newParentID, oldParentRelation.ParentID)
-			}
-
-			oldParentSubtreeDepth := getAbstractSubtreeDepth(tx, oldParentRelation.ParentID)
-			newParentAncestryDepth := getTagDepthFromRootDB(tx, newParentID)
-			if oldParentSubtreeDepth+newParentAncestryDepth+1 > maxHierarchyDepth {
-				return fmt.Errorf("depth limit: reparenting old_parent %d (subtree=%d) under new_parent %d (ancestry=%d) would exceed max depth %d",
-					oldParentRelation.ParentID, oldParentSubtreeDepth, newParentID, newParentAncestryDepth, maxHierarchyDepth)
-			}
-
-			relation := models.TopicTagRelation{
-				ParentID:     newParentID,
-				ChildID:      oldParentRelation.ParentID,
-				RelationType: "abstract",
-			}
-			return tx.Where("parent_id = ? AND child_id = ? AND relation_type = ?", newParentID, oldParentRelation.ParentID, "abstract").FirstOrCreate(&relation).Error
+			logging.Infof("reparentOrLinkAbstractChild: child %d already has parent %d, skipping (defer to scheduled cleanup)", childID, oldParentRelation.ParentID)
+			return nil
 		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return fmt.Errorf("find old parent: %w", err)
 		}

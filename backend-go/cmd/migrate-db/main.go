@@ -13,7 +13,6 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	"my-robot-backend/internal/domain/digest"
 	"my-robot-backend/internal/platform/config"
 	"my-robot-backend/internal/platform/database"
 	"my-robot-backend/internal/platform/database/datamigrate"
@@ -185,10 +184,6 @@ func openTargetPostgres(dsn string) (*gorm.DB, error) {
 func prepareTargetSchema(ctx context.Context, db *gorm.DB) error {
 	if err := database.RunMigrations(db); err != nil {
 		return fmt.Errorf("run postgres migrations: %w", err)
-	}
-
-	if err := db.WithContext(ctx).AutoMigrate(&digest.DigestConfig{}); err != nil {
-		return fmt.Errorf("migrate digest_configs: %w", err)
 	}
 
 	statement := `

@@ -32,8 +32,6 @@ const emit = defineEmits<{
   categoryClick: [categoryId: string]
   feedClick: [feedId: string]
   favoritesClick: []
-  aiSummariesClick: []
-  digestClick: []
   topicGraphClick: []
   allArticlesClick: []
   editCategory: [categoryId: string]
@@ -92,16 +90,6 @@ function handleFeedClick(feedId: string) {
 function handleFavoritesClick() {
   updateSelection('favorites', null)
   emit('favoritesClick')
-}
-
-function handleAISummariesClick() {
-  updateSelection('ai-summaries', null)
-  emit('aiSummariesClick')
-}
-
-function handleDigestClick() {
-  updateSelection('digest', null)
-  emit('digestClick')
 }
 
 function handleTopicGraphClick() {
@@ -183,16 +171,6 @@ const navigateTo = useNuxtApp().$router ? (path: string) => useNuxtApp().$router
         <Icon icon="mdi:star" width="20" height="20" />
         <span v-if="!sidebarCollapsed" class="flex-1 text-left font-medium">收藏夹</span>
         <span v-if="!sidebarCollapsed && articlesStore.favoriteCount > 0" class="badge badge-amber">{{ articlesStore.favoriteCount }}</span>
-      </button>
-
-      <button class="sidebar-item" :class="{ active: selectedCategory === 'ai-summaries' }" @click="handleAISummariesClick">
-        <Icon icon="mdi:brain" width="20" height="20" class="text-ink-600" />
-        <span v-if="!sidebarCollapsed" class="flex-1 text-left font-medium">AI 总结</span>
-      </button>
-
-      <button class="sidebar-item" :class="{ active: selectedCategory === 'digest' }" @click="handleDigestClick">
-        <Icon icon="mdi:newspaper-variant-multiple" width="20" height="20" class="text-ink-600" />
-        <span v-if="!sidebarCollapsed" class="flex-1 text-left font-medium">日报周报</span>
       </button>
 
       <button class="sidebar-item" :class="{ active: selectedCategory === 'topic-graph' }" @click="handleTopicGraphClick">

@@ -78,7 +78,7 @@ func GetTopicArticles(c *gin.Context) {
 	}
 
 	// Parse query parameters
-	kind := c.DefaultQuery("type", "daily")
+	kind := c.DefaultQuery("type", "all")
 	page := 1
 	pageSize := 15
 

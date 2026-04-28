@@ -26,10 +26,6 @@ vi.mock('~/api/opml', () => ({
   useOpmlApi: () => ({}),
 }))
 
-vi.mock('~/api/summaries', () => ({
-  useSummariesApi: () => ({}),
-}))
-
 const testGlobals = globalThis as typeof globalThis & {
   defineStore: typeof defineStore
   ref: typeof ref

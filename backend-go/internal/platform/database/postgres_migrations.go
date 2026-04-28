@@ -184,24 +184,6 @@ func postgresMigrations() []Migration {
 			},
 		},
 		{
-			Version:     "20260414_0003",
-			Description: "Add article-level feed summary markers to prevent repeated article aggregation.",
-			Up: func(db *gorm.DB) error {
-				stmts := []string{
-					"ALTER TABLE articles ADD COLUMN IF NOT EXISTS feed_summary_id BIGINT REFERENCES ai_summaries(id)",
-					"ALTER TABLE articles ADD COLUMN IF NOT EXISTS feed_summary_generated_at TIMESTAMP",
-					"CREATE INDEX IF NOT EXISTS idx_articles_feed_summary_id ON articles(feed_summary_id)",
-					"CREATE INDEX IF NOT EXISTS idx_articles_feed_summary_generated_at ON articles(feed_summary_generated_at)",
-				}
-				for _, s := range stmts {
-					if err := db.Exec(s).Error; err != nil {
-						return fmt.Errorf("article feed summary marker migration: %w", err)
-					}
-				}
-				return nil
-			},
-		},
-		{
 			Version:     "20260415_0001",
 			Description: "Add is_watched and watched_at columns to topic_tags for watched tag support.",
 			Up: func(db *gorm.DB) error {

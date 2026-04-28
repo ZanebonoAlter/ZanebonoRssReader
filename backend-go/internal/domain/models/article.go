@@ -20,8 +20,7 @@ type Article struct {
 	SummaryStatus              string     `gorm:"size:20;default:complete" json:"summary_status"`
 	SummaryGeneratedAt         *time.Time `json:"summary_generated_at"`
 	SummaryProcessingStartedAt *time.Time `json:"summary_processing_started_at"`
-	FeedSummaryID              *uint      `gorm:"index" json:"feed_summary_id"`
-	FeedSummaryGeneratedAt     *time.Time `json:"feed_summary_generated_at"`
+
 	CompletionAttempts         int        `gorm:"default:0" json:"completion_attempts"`
 	CompletionError            string     `gorm:"type:text" json:"completion_error"`
 	AIContentSummary           string     `gorm:"type:text" json:"ai_content_summary"`
@@ -56,8 +55,7 @@ func (a *Article) ToDict() map[string]interface{} {
 		"summary_status":                a.SummaryStatus,
 		"summary_generated_at":          FormatDatetimeCSTPtr(a.SummaryGeneratedAt),
 		"summary_processing_started_at": FormatDatetimeCSTPtr(a.SummaryProcessingStartedAt),
-		"feed_summary_id":               a.FeedSummaryID,
-		"feed_summary_generated_at":     FormatDatetimeCSTPtr(a.FeedSummaryGeneratedAt),
+
 		"completion_attempts":           a.CompletionAttempts,
 		"completion_error":              a.CompletionError,
 		"ai_content_summary":            a.AIContentSummary,

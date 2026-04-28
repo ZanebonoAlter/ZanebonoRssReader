@@ -121,6 +121,9 @@ func ComputeAllQualityScores() error {
 		if parentIDs[tag.ID] {
 			continue
 		}
+		if tag.Kind == "abstract" || tag.Source == "abstract" {
+			continue
+		}
 
 		score := 0.0
 		if articleCountMap[tag.ID] > 0 {

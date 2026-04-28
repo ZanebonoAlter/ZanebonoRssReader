@@ -2,14 +2,11 @@ package topicanalysis
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
 	"my-robot-backend/internal/domain/models"
-	"my-robot-backend/internal/platform/airouter"
 	"my-robot-backend/internal/platform/database"
-	"my-robot-backend/internal/platform/jsonutil"
 	"my-robot-backend/internal/platform/logging"
 
 	"gorm.io/gorm"
@@ -99,17 +96,6 @@ func MatchAbstractTagHierarchy(ctx context.Context, abstractTagID uint) {
 	}
 
 	if len(mediumSimilars) == 0 {
-		return
-	}
-
-	if len(mediumSimilars) == 1 {
-		candidate := mediumSimilars[0]
-		judgment, err := judgeAbstractRelationship(ctx, abstractTagID, candidate.Tag.ID)
-		if err != nil {
-			logging.Warnf("MatchAbstractTagHierarchy: AI judgment failed for %d vs %d: %v", abstractTagID, candidate.Tag.ID, err)
-			return
-		}
-		processAbstractRelationJudgment(ctx, abstractTagID, candidate.Tag.ID, judgment)
 		return
 	}
 
@@ -296,8 +282,9 @@ func linkAbstractParentChild(childID, parentID uint) error {
 }
 
 type parentWithInfo struct {
-	RelationID uint
-	Parent     *models.TopicTag
+	RelationID      uint
+	Parent          *models.TopicTag
+	SimilarityScore float64
 }
 
 type multiParentConflict struct {
@@ -351,103 +338,26 @@ func batchResolveMultiParentConflicts(conflicts []multiParentConflict) (int, []s
 		return resolved, errors
 	}
 
-	// Phase 2: Batch LLM judgment for remaining conflicts
-	type conflictEntry struct {
-		ChildID uint     `json:"child_id"`
-		Child   string   `json:"child_label"`
-		Parents []string `json:"parent_labels"`
-	}
-	var entries []conflictEntry
+	// Phase 2: Resolve by highest similarity score (no LLM)
 	for _, c := range remaining {
-		var parentLabels []string
-		for _, p := range c.Parents {
-			parentLabels = append(parentLabels, fmt.Sprintf("%d:%s", p.Parent.ID, p.Parent.Label))
-		}
-		entries = append(entries, conflictEntry{
-			ChildID: c.ChildID,
-			Child:   c.Child.Label,
-			Parents: parentLabels,
-		})
-	}
-
-	entriesJSON, _ := json.MarshalIndent(entries, "", "  ")
-	prompt := fmt.Sprintf(`以下标签有多个父标签（多父冲突），请为每个子标签选择最合适的父标签。
-
-冲突列表：
-%s
-
-规则：
-- 选择最具体、最相关的父标签
-- 如果子标签与某个父标签有直接从属关系，选该父标签
-- 如果子标签是某父标签领域的具体实例，选该父标签
-
-返回 JSON: {"decisions": [{"child_id": ID, "best_index": 父标签在列表中的序号(从0开始)}, ...]}`,
-		string(entriesJSON))
-
-	router := airouter.NewRouter()
-	req := airouter.ChatRequest{
-		Capability: airouter.CapabilityTopicTagging,
-		Messages: []airouter.Message{
-			{Role: "system", Content: "You are a tag taxonomy assistant. Respond only with valid JSON."},
-			{Role: "user", Content: prompt},
-		},
-		JSONMode: true,
-		JSONSchema: &airouter.JSONSchema{
-			Type: "object",
-			Properties: map[string]airouter.SchemaProperty{
-				"decisions": {
-					Type: "array",
-					Items: &airouter.SchemaProperty{
-						Type: "object",
-						Properties: map[string]airouter.SchemaProperty{
-							"child_id":   {Type: "integer"},
-							"best_index": {Type: "integer"},
-						},
-						Required: []string{"child_id", "best_index"},
-					},
-				},
-			},
-			Required: []string{"decisions"},
-		},
-		Temperature: func() *float64 { f := 0.2; return &f }(),
-		Metadata: map[string]any{
-			"operation":      "batch_resolve_multi_parent",
-			"conflict_count": len(remaining),
-		},
-	}
-
-	result, err := router.Chat(context.Background(), req)
-	if err != nil {
-		logging.Warnf("batchResolveMultiParentConflicts: LLM call failed: %v", err)
-		return resolved, errors
-	}
-
-	content := jsonutil.SanitizeLLMJSON(result.Content)
-	var judgment batchParentJudgment
-	if err := json.Unmarshal([]byte(content), &judgment); err != nil {
-		logging.Warnf("batchResolveMultiParentConflicts: parse failed: %v", err)
-		return resolved, errors
-	}
-
-	conflictMap := make(map[uint]*multiParentConflict)
-	for i := range remaining {
-		conflictMap[remaining[i].ChildID] = &remaining[i]
-	}
-
-	for _, decision := range judgment.Decisions {
-		conflict, ok := conflictMap[decision.ChildID]
-		if !ok {
+		if len(c.Parents) == 0 {
 			continue
 		}
-		if decision.BestIndex < 0 || decision.BestIndex >= len(conflict.Parents) {
-			errors = append(errors, fmt.Sprintf("child %d: invalid best_index %d", decision.ChildID, decision.BestIndex))
-			continue
+		bestIdx := 0
+		bestScore := c.Parents[0].SimilarityScore
+		bestChildrenCount := countAbstractChildren(c.Parents[0].Parent.ID)
+		for i := 1; i < len(c.Parents); i++ {
+			score := c.Parents[i].SimilarityScore
+			childrenCount := countAbstractChildren(c.Parents[i].Parent.ID)
+			if score > bestScore || (score == bestScore && childrenCount > bestChildrenCount) {
+				bestIdx = i
+				bestScore = score
+				bestChildrenCount = childrenCount
+			}
 		}
 
-		// Wrap in transaction for atomicity
-		childID := decision.ChildID
-		bestIdx := decision.BestIndex
-		parents := conflict.Parents
+		childID := c.ChildID
+		parents := c.Parents
 		if err := database.DB.Transaction(func(tx *gorm.DB) error {
 			for i, p := range parents {
 				if i == bestIdx {
@@ -463,8 +373,8 @@ func batchResolveMultiParentConflicts(conflicts []multiParentConflict) (int, []s
 			continue
 		}
 
-		logging.Infof("batchResolveMultiParentConflicts: resolved child %d, kept parent %d",
-			decision.ChildID, conflict.Parents[decision.BestIndex].Parent.ID)
+		logging.Infof("batchResolveMultiParentConflicts: resolved child %d, kept parent %d (%s) (score=%.4f)",
+			childID, parents[bestIdx].Parent.ID, parents[bestIdx].Parent.Label, bestScore)
 		resolved++
 	}
 
@@ -498,7 +408,7 @@ func resolveMultiParentConflict(childID uint) (bool, error) {
 			if r.Parent == nil {
 				continue
 			}
-			parents = append(parents, parentWithInfo{RelationID: r.ID, Parent: r.Parent})
+			parents = append(parents, parentWithInfo{RelationID: r.ID, Parent: r.Parent, SimilarityScore: r.SimilarityScore})
 		}
 		if len(parents) <= 1 {
 			return nil
@@ -510,9 +420,18 @@ func resolveMultiParentConflict(childID uint) (bool, error) {
 			return nil
 		}
 
-		bestIdx, err := aiJudgeBestParentFn(context.Background(), &childTag, parents)
-		if err != nil {
-			return fmt.Errorf("judge best parent for child %d: %w", childID, err)
+		// Pick parent with highest similarity score; if tied, prefer the one with more children.
+		bestIdx := 0
+		bestScore := parents[0].SimilarityScore
+		bestChildrenCount := countAbstractChildren(parents[0].Parent.ID)
+		for i := 1; i < len(parents); i++ {
+			score := parents[i].SimilarityScore
+			childrenCount := countAbstractChildren(parents[i].Parent.ID)
+			if score > bestScore || (score == bestScore && childrenCount > bestChildrenCount) {
+				bestIdx = i
+				bestScore = score
+				bestChildrenCount = childrenCount
+			}
 		}
 
 		removed := 0
@@ -524,9 +443,9 @@ func resolveMultiParentConflict(childID uint) (bool, error) {
 				return fmt.Errorf("remove relation %d: %w", p.RelationID, delErr)
 			} else {
 				removed++
-				logging.Infof("resolveMultiParentConflict: removed parent %d (%s) from child %d (%s), keeping parent %d (%s)",
+				logging.Infof("resolveMultiParentConflict: removed parent %d (%s) from child %d (%s), keeping parent %d (%s) (score=%.4f)",
 					p.Parent.ID, p.Parent.Label, childID, childTag.Label,
-					parents[bestIdx].Parent.ID, parents[bestIdx].Parent.Label)
+					parents[bestIdx].Parent.ID, parents[bestIdx].Parent.Label, bestScore)
 			}
 		}
 
@@ -537,6 +456,15 @@ func resolveMultiParentConflict(childID uint) (bool, error) {
 		return nil
 	})
 	return result, err
+}
+
+func countAbstractChildren(tagID uint) int {
+	var count int64
+	database.DB.Model(&models.TopicTag{}).
+		Joins("JOIN topic_tag_relations ON topic_tag_relations.child_id = topic_tags.id").
+		Where("topic_tag_relations.parent_id = ? AND topic_tag_relations.relation_type = ?", tagID, "abstract").
+		Count(&count)
+	return int(count)
 }
 
 func removeRedundantAncestorParentsTx(tx *gorm.DB, childID uint, parents []parentWithInfo) (bool, error) {

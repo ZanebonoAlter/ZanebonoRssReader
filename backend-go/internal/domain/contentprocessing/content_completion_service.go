@@ -199,7 +199,7 @@ func (s *ContentCompletionService) CompleteArticleWithMetadata(ctx context.Conte
 		ArticleID:    article.ID,
 		FeedName:     feed.Title,
 		CategoryName: topicextraction.FeedCategoryName(feed),
-		ForceRetag:   true,
+		ForceRetag:   false,
 		Reason:       "summary_completed",
 	}); err != nil {
 		return fmt.Errorf("enqueue retag job after completion: %w", err)

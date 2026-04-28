@@ -13,7 +13,7 @@ import (
 	"my-robot-backend/internal/platform/logging"
 )
 
-const maxArticleTags = 8
+const maxArticleTags = 5
 
 func FeedCategoryName(feed models.Feed) string {
 	if feed.Category != nil && strings.TrimSpace(feed.Category.Name) != "" {
@@ -455,7 +455,6 @@ func cleanupOrphanedTags(tagIDs []uint) {
 	database.DB.Model(&models.TopicTag{}).
 		Where("id IN ?", tagIDs).
 		Where("id NOT IN (SELECT topic_tag_id FROM article_topic_tags)").
-		Where("id NOT IN (SELECT topic_tag_id FROM ai_summary_topics)").
 		Pluck("id", &orphanIDs)
 
 	if len(orphanIDs) == 0 {

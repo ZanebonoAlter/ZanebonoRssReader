@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/robfig/cron/v3"
-	"my-robot-backend/internal/app/runtimeinfo"
 	"my-robot-backend/internal/domain/feeds"
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/platform/database"
@@ -174,7 +173,6 @@ func (s *AutoRefreshScheduler) runRefreshCycle(triggerSource string) (*AutoRefre
 	now := time.Now()
 	summary.StaleResetFeeds = s.resetStaleRefreshingFeeds(now)
 
-	var refreshWG sync.WaitGroup
 	for _, feed := range feeds {
 		if !s.needsRefresh(&feed, now) {
 			continue
@@ -187,16 +185,14 @@ func (s *AutoRefreshScheduler) runRefreshCycle(triggerSource string) (*AutoRefre
 		}
 
 		s.markFeedRefreshing(feed.ID)
-		refreshWG.Add(1)
 		go func(feedID uint) {
-			defer refreshWG.Done()
 			s.refreshFeedAsync(context.Background(), feedID)
 		}(feed.ID)
 		summary.TriggeredFeeds++
 	}
 
 	if summary.TriggeredFeeds > 0 {
-		go s.triggerAutoSummaryAfterRefreshes(&refreshWG, startTime, summary)
+		go s.broadcastRefreshCompletion(startTime, summary)
 	}
 
 	summary.FinishedAt = time.Now().Format(time.RFC3339)
@@ -246,9 +242,7 @@ func (s *AutoRefreshScheduler) resetFeedStatus(feedID uint, errMsg string) {
 	})
 }
 
-func (s *AutoRefreshScheduler) triggerAutoSummaryAfterRefreshes(wg *sync.WaitGroup, startTime time.Time, summary *AutoRefreshRunSummary) {
-	wg.Wait()
-
+func (s *AutoRefreshScheduler) broadcastRefreshCompletion(startTime time.Time, summary *AutoRefreshRunSummary) {
 	duration := time.Since(startTime).Seconds()
 	msg := ws.AutoRefreshCompleteMessage{
 		Type:            "auto_refresh_complete",
@@ -262,20 +256,6 @@ func (s *AutoRefreshScheduler) triggerAutoSummaryAfterRefreshes(wg *sync.WaitGro
 		logging.Warnf("Auto-refresh completion message marshal failed: %v", err)
 	} else {
 		ws.GetHub().BroadcastRaw(data)
-	}
-
-	if runtimeinfo.AutoSummarySchedulerInterface == nil {
-		return
-	}
-
-	triggerable, ok := runtimeinfo.AutoSummarySchedulerInterface.(interface{ TriggerNow() map[string]interface{} })
-	if !ok {
-		return
-	}
-
-	result := triggerable.TriggerNow()
-	if accepted, ok := result["accepted"].(bool); ok && !accepted {
-		logging.Infoln("Auto-summary trigger after refresh was skipped:", result["reason"])
 	}
 }
 

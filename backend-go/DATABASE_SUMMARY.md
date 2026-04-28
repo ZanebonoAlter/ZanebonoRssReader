@@ -1,17 +1,16 @@
 # 数据库初始化总结
 
-## 当前数据库表（8张）
+## 当前数据库表（7张）
 
 | 序号 | 表名 | 说明 |
 |------|------|------|
 | 1 | categories | 分类表 |
 | 2 | feeds | 订阅源表 |
 | 3 | articles | 文章表 |
-| 4 | ai_summaries | AI 摘要表 |
-| 5 | scheduler_tasks | 定时任务表 |
-| 6 | ai_settings | AI 设置表 |
-| 7 | reading_behaviors | 阅读行为表 |
-| 8 | user_preferences | 用户偏好表 |
+| 4 | scheduler_tasks | 定时任务表 |
+| 5 | ai_settings | AI 设置表 |
+| 6 | reading_behaviors | 阅读行为表 |
+| 7 | user_preferences | 用户偏好表 |
 
 ## 已实现功能
 

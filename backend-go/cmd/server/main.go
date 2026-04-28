@@ -7,7 +7,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 	appbootstrap "my-robot-backend/internal/app"
-	"my-robot-backend/internal/domain/digest"
 	"my-robot-backend/internal/platform/airouter"
 	"my-robot-backend/internal/platform/config"
 	"my-robot-backend/internal/platform/database"
@@ -23,10 +22,6 @@ func main() {
 
 	if err := database.InitDB(config.AppConfig); err != nil {
 		logging.Fatalf("Failed to initialize database: %v", err)
-	}
-
-	if err := digest.Migrate(); err != nil {
-		logging.Fatalf("Failed to run digest migrations: %v", err)
 	}
 
 	if err := airouter.EnsureLegacySummaryConfigMigrated(); err != nil {

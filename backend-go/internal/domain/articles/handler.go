@@ -118,7 +118,7 @@ func GetArticles(c *gin.Context) {
 	}
 
 	// Select fields — vary by watched tags mode and sort
-	articleCols := "articles.id, articles.feed_id, articles.title, articles.description, articles.content, articles.link, articles.image_url, articles.pub_date, articles.author, articles.read, articles.favorite, articles.summary_status, articles.summary_generated_at, articles.summary_processing_started_at, articles.feed_summary_id, articles.feed_summary_generated_at, articles.completion_attempts, articles.completion_error, articles.ai_content_summary, articles.firecrawl_status, articles.firecrawl_error, articles.firecrawl_content, articles.firecrawl_crawled_at, articles.created_at"
+	articleCols := "articles.id, articles.feed_id, articles.title, articles.description, articles.content, articles.link, articles.image_url, articles.pub_date, articles.author, articles.read, articles.favorite, articles.summary_status, articles.summary_generated_at, articles.summary_processing_started_at, articles.completion_attempts, articles.completion_error, articles.ai_content_summary, articles.firecrawl_status, articles.firecrawl_error, articles.firecrawl_content, articles.firecrawl_crawled_at, articles.created_at"
 	if usingWatchedTags && sortBy == "relevance" {
 		query = query.
 			Select(articleCols+", feeds.category_id AS category_id, (SELECT COUNT(*) FROM article_topic_tags att_cnt WHERE att_cnt.article_id = articles.id) AS tag_count, (SELECT COALESCE(SUM(CASE WHEN att2.topic_tag_id IN ? THEN 2.0 ELSE 1.0 END), 0) FROM article_topic_tags att2 WHERE att2.article_id = articles.id AND att2.topic_tag_id IN ?) AS relevance_score", childTagIDs, expandedTagIDs).

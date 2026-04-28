@@ -224,18 +224,18 @@ export interface TopicArticlesResponse {
   articles: Array<{
     id: string
     title: string
+    link: string
     summary: string
     content?: string
-    pubDate: string
-    feedName: string
-    feedId: string
+    pub_date: string
+    feed_name: string
+    feed_id: string
     tags: Array<{
       slug: string
       label: string
       category: TopicCategory
     }>
-    imageUrl?: string
-    link: string
+    image_url?: string
   }>
   total: number
   page: number

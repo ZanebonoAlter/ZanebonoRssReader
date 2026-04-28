@@ -11,8 +11,6 @@
 | `categories` | 分类 | `models.Category` |
 | `feeds` | 订阅源 | `models.Feed` |
 | `articles` | 文章 | `models.Article` |
-| `ai_summaries` | AI 摘要 | `models.AISummary` |
-| `ai_summary_feeds` | 摘要关联的订阅源 | `models.AISummaryFeed` |
 | `scheduler_tasks` | 调度任务状态 | `models.SchedulerTask` |
 | `ai_settings` | AI 配置（键值对） | `models.AISettings` |
 | `ai_providers` | AI 供应商 | `models.AIProvider` |
@@ -26,7 +24,6 @@
 | `topic_tag_analyses` | 主题分析快照 | `models.TopicTagAnalysis` |
 | `topic_analysis_cursors` | 主题分析游标 | `models.TopicAnalysisCursor` |
 | `topic_analysis_jobs` | 主题分析任务队列 | `topicanalysis.topicAnalysisJobRecord` |
-| `ai_summary_topics` | 摘要-主题关联 | `models.AISummaryTopic` |
 | `article_topic_tags` | 文章-主题关联 | `models.ArticleTopicTag` |
 | `topic_tag_relations` | 主题标签层级关系 | `models.TopicTagRelation` |
 | `embedding_config` | 向量配置 | `models.EmbeddingConfig` |
@@ -35,7 +32,6 @@
 | `firecrawl_jobs` | Firecrawl 抓取任务 | `models.FirecrawlJob` |
 | `tag_jobs` | 标签任务 | `models.TagJob` |
 | `narrative_summaries` | 叙事摘要 | `models.NarrativeSummary` |
-| `digest_configs` | 摘要推送配置 | `digest.DigestConfig` |
 | `schema_migrations` | 迁移版本追踪 | （框架管理） |
 
 ---
@@ -89,13 +85,6 @@
 | `firecrawl_error` | TEXT | Firecrawl 抓取错误信息 | — |
 | `firecrawl_crawled_at` | TIMESTAMP | Firecrawl 抓取时间 | — |
 
-#### Feed Summary 标记字段
-
-| 字段名 | 类型 | 用途 |
-|--------|------|------|
-| `feed_summary_id` | BIGINT REFERENCES ai_summaries(id) | 文章已参与过的订阅源总结 ID |
-| `feed_summary_generated_at` | TIMESTAMP | 订阅源总结生成时间 |
-
 #### 虚拟字段（计算列）
 
 | 字段名 | 用途 |
@@ -132,7 +121,7 @@
 
 | 字段名 | 类型 | 用途 | 说明 |
 |--------|------|------|------|
-| `ai_summary_enabled` | BOOLEAN DEFAULT true | 是否启用 Feed/分类级批量 AI 总结 | 聚合多条文章后生成摘要 |
+| `ai_summary_enabled` | BOOLEAN DEFAULT true | 是否启用文章级 AI 总结 | 依赖 Firecrawl 先抓取完整内容 |
 | `article_summary_enabled` | BOOLEAN DEFAULT false | 是否启用文章级 AI 总结 | 依赖 Firecrawl 先抓取完整内容 |
 | `completion_on_refresh` | BOOLEAN DEFAULT true | 刷新时是否自动触发内容补全 | — |
 | `max_completion_retries` | INTEGER DEFAULT 3 | AI 总结最大重试次数 | — |
@@ -154,25 +143,7 @@
 
 ---
 
-### 4. ai_summaries（AI 摘要表）
-
-| 字段名 | 类型 | 用途 |
-|--------|------|------|
-| `id` | SERIAL PK | 主键 |
-| `feed_id` | INTEGER | 关联订阅源 ID（可为 NULL，表示分类级摘要） |
-| `category_id` | INTEGER | 关联分类 ID |
-| `title` | VARCHAR(200) NOT NULL | 摘要标题 |
-| `summary` | TEXT NOT NULL | 摘要正文 |
-| `key_points` | TEXT | 关键要点 |
-| `articles` | TEXT | 反规范化文章载荷文本 |
-| `article_count` | INTEGER DEFAULT 0 | 文章数量 |
-| `time_range` | INTEGER DEFAULT 180 | 时间范围（分钟） |
-| `created_at` | TIMESTAMP | 创建时间 |
-| `updated_at` | TIMESTAMP | 更新时间 |
-
----
-
-### 5. scheduler_tasks（调度任务表）
+### 4. scheduler_tasks（调度任务表）
 
 | 字段名 | 类型 | 用途 |
 |--------|------|------|
@@ -197,7 +168,6 @@
 | 任务名 | 描述 | 执行间隔 |
 |--------|------|----------|
 | `auto_refresh` | 自动刷新 RSS 订阅源 | 60 秒 |
-| `auto_summary` | 生成分类级别的 AI 总结 | 3600 秒（1小时）|
 | `ai_summary` | AI 智能总结文章内容（基于 Firecrawl）| 3600 秒（1小时）|
 
 ---
@@ -387,17 +357,6 @@ HNSW 索引：`idx_topic_tag_embeddings_embedding USING hnsw (embedding vector_c
 
 唯一约束：`(parent_id, child_id)`
 
-#### ai_summary_topics（摘要-主题关联）
-
-| 字段名 | 类型 | 用途 |
-|--------|------|------|
-| `id` | SERIAL PK | 主键 |
-| `summary_id` | INTEGER NOT NULL | 摘要 ID |
-| `topic_tag_id` | INTEGER NOT NULL | 标签 ID |
-| `score` | FLOAT DEFAULT 0 | 相关度评分 |
-| `source` | VARCHAR(20) DEFAULT 'llm' | 来源 |
-| `created_at` | TIMESTAMP | 创建时间 |
-
 #### article_topic_tags（文章-主题关联）
 
 | 字段名 | 类型 | 用途 |
@@ -559,40 +518,6 @@ HNSW 索引：`idx_topic_tag_embeddings_embedding USING hnsw (embedding vector_c
 | `created_at` | TIMESTAMP | 创建时间 |
 | `updated_at` | TIMESTAMP | 更新时间 |
 
-#### digest_configs（摘要推送配置）
-
-| 字段名 | 类型 | 用途 |
-|--------|------|------|
-| `id` | SERIAL PK | 主键 |
-| `daily_enabled` | BOOLEAN DEFAULT false | 每日摘要开关 |
-| `daily_time` | VARCHAR(5) DEFAULT '09:00' | 每日推送时间 |
-| `weekly_enabled` | BOOLEAN DEFAULT false | 每周摘要开关 |
-| `weekly_day` | INTEGER DEFAULT 1 | 每周推送日（0=周日，1=周一...） |
-| `weekly_time` | VARCHAR(5) DEFAULT '09:00' | 每周推送时间 |
-| `feishu_enabled` | BOOLEAN DEFAULT false | 飞书推送开关 |
-| `feishu_webhook_url` | TEXT | 飞书 Webhook URL |
-| `feishu_push_summary` | BOOLEAN DEFAULT true | 飞书推送摘要 |
-| `feishu_push_details` | BOOLEAN DEFAULT false | 飞书推送详情 |
-| `obsidian_enabled` | BOOLEAN DEFAULT false | Obsidian 集成开关 |
-| `obsidian_vault_path` | TEXT | Obsidian Vault 路径 |
-| `obsidian_daily_digest` | BOOLEAN DEFAULT true | Obsidian 每日摘要 |
-| `obsidian_weekly_digest` | BOOLEAN DEFAULT true | Obsidian 每周摘要 |
-| `created_at` | TIMESTAMP | 创建时间 |
-| `updated_at` | TIMESTAMP | 更新时间 |
-
-#### ai_summary_feeds（摘要关联的订阅源）
-
-| 字段名 | 类型 | 用途 |
-|--------|------|------|
-| `id` | SERIAL PK | 主键 |
-| `summary_id` | INTEGER NOT NULL | 摘要 ID |
-| `feed_id` | INTEGER NOT NULL | 订阅源 ID |
-| `feed_title` | VARCHAR(200) | 订阅源标题快照 |
-| `feed_icon` | VARCHAR(1000) | 订阅源图标快照 |
-| `feed_color` | VARCHAR(20) | 订阅源颜色快照 |
-| `article_count` | INTEGER DEFAULT 0 | 文章数量 |
-| `created_at` | TIMESTAMP | 创建时间 |
-
 ---
 
 ## 工作流程
@@ -715,10 +640,7 @@ complete（默认）→ incomplete（Firecrawl 完成后设置）→ pending →
 |--------|------|------|
 | `idx_articles_feed_created_at` | articles | `(feed_id, created_at DESC)` |
 | `idx_articles_pub_date` | articles | `(pub_date)` |
-| `idx_ai_summaries_feed_created_at` | ai_summaries | `(feed_id, created_at DESC)` |
-| `idx_ai_summaries_category_created_at` | ai_summaries | `(category_id, created_at DESC)` |
 | `idx_article_topic_tags_topic_article` | article_topic_tags | `(topic_tag_id, article_id)` |
-| `idx_ai_summary_topics_topic_summary` | ai_summary_topics | `(topic_tag_id, summary_id)` |
 | `idx_reading_behaviors_feed_created_at` | reading_behaviors | `(feed_id, created_at DESC)` |
 | `idx_firecrawl_jobs_status_available_at` | firecrawl_jobs | `(status, available_at)` |
 | `idx_firecrawl_jobs_lease_expires_at` | firecrawl_jobs | `(lease_expires_at)` |
@@ -735,8 +657,6 @@ complete（默认）→ incomplete（Firecrawl 完成后设置）→ pending →
 
 | 索引名 | 表 | 迁移版本 |
 |--------|------|----------|
-| `idx_articles_feed_summary_id` | articles | `20260414_0003` |
-| `idx_articles_feed_summary_generated_at` | articles | `20260414_0003` |
 | `idx_topic_tags_status` | topic_tags | `20260413_0003` |
 | `idx_topic_tags_merged_into_id` | topic_tags | `20260413_0003` |
 
@@ -753,7 +673,7 @@ complete（默认）→ incomplete（Firecrawl 完成后设置）→ pending →
 - 新增 `topic_tag_relations`（标签层级关系）
 - 新增 `narrative_summaries`（叙事摘要）
 - 新增 `topic_tags` 的 `status`、`merged_into_id`、`description`、`is_watched`、`watched_at`、`quality_score` 字段
-- 新增 `articles` 的 `summary_processing_started_at`、`feed_summary_id`、`feed_summary_generated_at` 字段
+- 新增 `articles` 的 `summary_processing_started_at` 字段
 - 新增索引清单章节
 - 更新 Summary 状态流转说明（默认值为 `complete` 而非 `incomplete`）
 

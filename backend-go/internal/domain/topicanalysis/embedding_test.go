@@ -352,3 +352,74 @@ func TestSaveEmbeddingReturnsTagNotFoundWhenParentDeleted(t *testing.T) {
 		t.Fatalf("embedding count = %d, want 0", count)
 	}
 }
+
+func TestThresholdsForCategory(t *testing.T) {
+	tests := []struct {
+		name              string
+		category          string
+		wantHighSim       float64
+		wantLowSim        float64
+	}{
+		{
+			name:        "keyword uses override high=0.90",
+			category:    "keyword",
+			wantHighSim: 0.90,
+			wantLowSim:  0.78,
+		},
+		{
+			name:        "event falls back to default",
+			category:    "event",
+			wantHighSim: 0.97,
+			wantLowSim:  0.78,
+		},
+		{
+			name:        "person falls back to default",
+			category:    "person",
+			wantHighSim: 0.97,
+			wantLowSim:  0.78,
+		},
+		{
+			name:        "unknown category falls back to default",
+			category:    "organization",
+			wantHighSim: 0.97,
+			wantLowSim:  0.78,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ThresholdsForCategory(tt.category)
+			if got.HighSimilarity != tt.wantHighSim {
+				t.Errorf("HighSimilarity = %.2f, want %.2f", got.HighSimilarity, tt.wantHighSim)
+			}
+			if got.LowSimilarity != tt.wantLowSim {
+				t.Errorf("LowSimilarity = %.2f, want %.2f", got.LowSimilarity, tt.wantLowSim)
+			}
+		})
+	}
+}
+
+func TestThresholdsForCategoryOverrideIsolation(t *testing.T) {
+	original := CategoryThresholdOverrides["keyword"]
+	defer func() {
+		CategoryThresholdOverrides["keyword"] = original
+	}()
+
+	CategoryThresholdOverrides["keyword"] = EmbeddingMatchThresholds{
+		HighSimilarity: 0.85,
+		LowSimilarity:  0.70,
+	}
+
+	got := ThresholdsForCategory("keyword")
+	if got.HighSimilarity != 0.85 {
+		t.Errorf("HighSimilarity = %.2f, want 0.85", got.HighSimilarity)
+	}
+	if got.LowSimilarity != 0.70 {
+		t.Errorf("LowSimilarity = %.2f, want 0.70", got.LowSimilarity)
+	}
+
+	eventGot := ThresholdsForCategory("event")
+	if eventGot.HighSimilarity != 0.97 {
+		t.Errorf("event HighSimilarity should be unaffected, got %.2f", eventGot.HighSimilarity)
+	}
+}

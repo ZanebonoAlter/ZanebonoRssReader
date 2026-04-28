@@ -1,18 +1,14 @@
 package topicgraph
 
 import (
-	"encoding/json"
 	"fmt"
 	"time"
 
 	"my-robot-backend/internal/domain/models"
-	"my-robot-backend/internal/domain/topicextraction"
 	"my-robot-backend/internal/domain/topictypes"
 	"my-robot-backend/internal/platform/database"
 )
 
-// collectAllChildTagIDs recursively collects all child tag IDs for a given parent tag
-// from the topic_tag_relations table. Returns a set of tag IDs including the parent itself.
 func collectAllChildTagIDs(parentTagID uint) map[uint]bool {
 	result := map[uint]bool{parentTagID: true}
 	queue := []uint{parentTagID}
@@ -36,189 +32,75 @@ func collectAllChildTagIDs(parentTagID uint) map[uint]bool {
 	return result
 }
 
-// HotspotDigestCard represents a digest summary for hotspot display
-// Returned when tracing from article tag back to containing digests
 type HotspotDigestCard struct {
-	ID                  uint                            `json:"id"`
-	Title               string                          `json:"title"`
-	Summary             string                          `json:"summary"`
-	FeedName            string                          `json:"feed_name"`
-	FeedIcon            string                          `json:"feed_icon"`
-	FeedColor           string                          `json:"feed_color"`
-	CategoryName        string                          `json:"category_name"`
-	ArticleCount        int                             `json:"article_count"`
-	CreatedAt           time.Time                       `json:"created_at"`
-	AggregatedTags      []topictypes.AggregatedTopicTag `json:"aggregated_tags"`
-	MatchedArticles     []HotspotArticleRef             `json:"matched_articles,omitempty"`
-	MatchedArticlesTags []topictypes.AggregatedTopicTag `json:"matched_articles_tags,omitempty"`
+	ID          uint                        `json:"id"`
+	Title       string                      `json:"title"`
+	Link        string                      `json:"link"`
+	FeedName    string                      `json:"feed_name"`
+	FeedIcon    string                      `json:"feed_icon,omitempty"`
+	FeedColor   string                      `json:"feed_color,omitempty"`
+	PublishedAt string                      `json:"published_at,omitempty"`
+	Tags        []topictypes.AggregatedTopicTag `json:"tags,omitempty"`
 }
 
-// HotspotArticleRef represents a matched article reference
-type HotspotArticleRef struct {
-	ID        uint   `json:"id"`
-	Title     string `json:"title"`
-	FeedName  string `json:"feed_name,omitempty"`
-	FeedIcon  string `json:"feed_icon,omitempty"`
-	FeedColor string `json:"feed_color,omitempty"`
-}
-
-// GetDigestsByArticleTag retrieves digests that contain articles with the given tag
-// This enables the reverse trace: Tag -> Articles -> Digests (containing those articles)
 func GetDigestsByArticleTag(tagSlug string, kind string, anchor time.Time, limit int) ([]HotspotDigestCard, error) {
 	windowStart, windowEnd, _, err := topictypes.ResolveWindow(kind, anchor)
 	if err != nil {
 		return nil, err
 	}
 
-	// Step 1: Get the topic tag
 	var topicTag models.TopicTag
 	err = database.DB.Where("slug = ?", tagSlug).First(&topicTag).Error
 	if err != nil {
 		return nil, fmt.Errorf("topic tag not found: %w", err)
 	}
 
-	// Step 2: Get articles with this tag (and all child tags if abstract) in the time window
 	tagIDSet := collectAllChildTagIDs(topicTag.ID)
 	tagIDs := make([]uint, 0, len(tagIDSet))
 	for id := range tagIDSet {
 		tagIDs = append(tagIDs, id)
 	}
 
-	var articleIDs []uint
-	err = database.DB.Model(&models.ArticleTopicTag{}).
-		Joins("JOIN articles ON articles.id = article_topic_tags.article_id").
+	var articles []models.Article
+	err = database.DB.
+		Joins("JOIN article_topic_tags ON articles.id = article_topic_tags.article_id").
 		Where("article_topic_tags.topic_tag_id IN ?", tagIDs).
 		Where("articles.created_at >= ? AND articles.created_at < ?", windowStart, windowEnd).
-		Pluck("DISTINCT articles.id", &articleIDs).Error
+		Preload("Feed").
+		Omit("tag_count", "relevance_score").
+		Distinct().
+		Order("articles.created_at DESC").
+		Find(&articles).Error
 	if err != nil {
 		return nil, fmt.Errorf("failed to get articles: %w", err)
 	}
 
-	if len(articleIDs) == 0 {
-		return []HotspotDigestCard{}, nil
+	if limit > 0 && len(articles) > limit {
+		articles = articles[:limit]
 	}
 
-	// Step 2.5: Fetch article details with feed info
-	var articles []models.Article
-	err = database.DB.Omit("tag_count", "relevance_score").Preload("Feed").Where("id IN ?", articleIDs).Find(&articles).Error
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch article details: %w", err)
-	}
-	articleDetails := make(map[uint]models.Article)
-	for _, a := range articles {
-		articleDetails[a.ID] = a
-	}
-
-	// Step 3: Get summaries that contain any of these articles
-	// The articles field in ai_summaries is a JSON array of article IDs
-	var summaries []models.AISummary
-	err = database.DB.
-		Where("created_at >= ? AND created_at < ?", windowStart, windowEnd).
-		Preload("Feed").
-		Preload("Category").
-		Order("created_at DESC").
-		Find(&summaries).Error
-	if err != nil {
-		return nil, fmt.Errorf("failed to get summaries: %w", err)
-	}
-
-	// Step 4: Filter summaries that contain our articles and build result
-	var result []HotspotDigestCard
-	for _, summary := range summaries {
-		matchedArticles := getMatchedArticlesFromSummary(summary, articleIDs, articleDetails)
-		if len(matchedArticles) == 0 {
-			continue
-		}
-
+	result := make([]HotspotDigestCard, 0, len(articles))
+	for _, article := range articles {
 		card := HotspotDigestCard{
-			ID:              summary.ID,
-			Title:           summary.Title,
-			Summary:         summary.Summary,
-			ArticleCount:    summary.ArticleCount,
-			CreatedAt:       summary.CreatedAt,
-			MatchedArticles: matchedArticles,
+			ID:    article.ID,
+			Title: article.Title,
+			Link:  article.Link,
 		}
 
-		aggregatedTags, err := topicextraction.AggregateArticleTags(parseSummaryArticleIDs(summary.Articles))
-		if err == nil {
-			card.AggregatedTags = aggregatedTags
+		if article.PubDate != nil {
+			card.PublishedAt = article.PubDate.In(topictypes.TopicGraphCST).Format(time.RFC3339)
 		}
 
-		// Aggregate tags only for matched articles
-		matchedArticleIDs := make([]uint, 0, len(matchedArticles))
-		for _, ma := range matchedArticles {
-			matchedArticleIDs = append(matchedArticleIDs, ma.ID)
-		}
-		matchedArticlesTags, err := topicextraction.AggregateArticleTags(matchedArticleIDs)
-		if err == nil {
-			card.MatchedArticlesTags = matchedArticlesTags
-		}
-
-		if summary.Feed != nil {
-			card.FeedName = summary.Feed.Title
-			card.FeedIcon = summary.Feed.Icon
-			card.FeedColor = summary.Feed.Color
-		}
-
-		if summary.Category != nil {
-			card.CategoryName = summary.Category.Name
+		if article.Feed.ID != 0 {
+			card.FeedName = article.Feed.Title
+			card.FeedIcon = article.Feed.Icon
+			card.FeedColor = article.Feed.Color
+		} else {
+			card.FeedName = "未知订阅源"
 		}
 
 		result = append(result, card)
-		if limit > 0 && len(result) >= limit {
-			break
-		}
 	}
 
 	return result, nil
-}
-
-func parseSummaryArticleIDs(raw string) []uint {
-	if raw == "" {
-		return nil
-	}
-
-	var articleIDs []uint
-	if err := json.Unmarshal([]byte(raw), &articleIDs); err != nil {
-		return nil
-	}
-
-	return articleIDs
-}
-
-// getMatchedArticlesFromSummary extracts matched articles from a summary's articles JSON field
-func getMatchedArticlesFromSummary(summary models.AISummary, targetArticleIDs []uint, articleDetails map[uint]models.Article) []HotspotArticleRef {
-	if summary.Articles == "" {
-		return nil
-	}
-
-	var articleIDs []uint
-	if err := json.Unmarshal([]byte(summary.Articles), &articleIDs); err != nil {
-		return nil
-	}
-
-	// Build lookup set for target articles
-	targetSet := make(map[uint]bool)
-	for _, id := range targetArticleIDs {
-		targetSet[id] = true
-	}
-
-	// Find matches
-	var matched []HotspotArticleRef
-	for _, id := range articleIDs {
-		if targetSet[id] {
-			ref := HotspotArticleRef{ID: id}
-			if article, ok := articleDetails[id]; ok {
-				ref.Title = article.Title
-				if article.Feed.ID != 0 {
-					ref.FeedName = article.Feed.Title
-					ref.FeedIcon = article.Feed.Icon
-					ref.FeedColor = article.Feed.Color
-				}
-			}
-			matched = append(matched, ref)
-		}
-	}
-
-	return matched
 }

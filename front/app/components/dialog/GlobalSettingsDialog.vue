@@ -297,14 +297,6 @@ function getScoreColor(score: number): string {
   return 'bg-gray-400'
 }
 
-// Save AI summary settings
-async function saveAISummarySettings() {
-  success.value = 'AI 配置已迁移到 AI Router 面板，请在该模块里保存主模型和备用链。'
-  setTimeout(() => {
-    success.value = null
-  }, 2000)
-}
-
 // Test AI connection
 async function testAIConnection() {
   error.value = '连接测试已迁移到 AI Router 面板，请在那里直接测试主模型。'
@@ -402,10 +394,6 @@ function getAutoRefreshRunSummary(scheduler: SchedulerStatus) {
   return scheduler.last_run_summary?.scanned_feeds !== undefined ? scheduler.last_run_summary : null
 }
 
-function getAutoSummaryRunSummary(scheduler: SchedulerStatus) {
-  return scheduler.name === 'auto_summary' ? scheduler.last_run_summary : null
-}
-
 function getAutoRefreshReasonLabel(reason: string | undefined): string {
   switch (reason) {
     case 'feeds_triggered':
@@ -420,27 +408,6 @@ function getAutoRefreshReasonLabel(reason: string | undefined): string {
       return '查 feed 时就出错了。'
     default:
       return '这轮扫描已经结束。'
-  }
-}
-
-function getAutoSummaryReasonLabel(reason: string | undefined): string {
-  switch (reason) {
-    case 'manual_run_started':
-      return '这次是你手动点的。'
-    case 'summaries_generated':
-      return '这轮真的产出了新总结。'
-    case 'no_content_to_summarize':
-      return '有 feed，但这轮没凑出可总结内容。'
-    case 'no_feeds_enabled':
-      return '没有 feed 开着 AI 总结。'
-    case 'generation_failed':
-      return '这轮进去了，但中途有失败。'
-    case 'ai_config_missing':
-      return 'AI 配置没就位，所以不会开跑。'
-    case 'already_running':
-      return '它已经在跑了。'
-    default:
-      return '等下一轮状态回传。'
   }
 }
 
@@ -1225,42 +1192,6 @@ function formatNextRun(nextRun: string | null | undefined): string {
                     <div class="rounded-xl bg-white p-3 shadow-sm ring-1 ring-sky-100">
                       <div class="text-xs text-gray-500">已在刷新</div>
                       <div class="mt-1 text-2xl font-bold text-amber-600">{{ getAutoRefreshRunSummary(scheduler)?.already_refreshing_feeds ?? 0 }}</div>
-                    </div>
-                  </div>
-                </div>
-
-                <div
-                  v-if="scheduler.name === 'auto_summary' && getAutoSummaryRunSummary(scheduler)"
-                  class="mt-4 rounded-2xl border border-ink-200 bg-gradient-to-br from-paper-cream via-white to-amber-50 p-4"
-                >
-                  <div class="flex items-start justify-between gap-4">
-                    <div>
-                      <div class="text-sm font-semibold text-gray-900">自动总结状态</div>
-                      <p class="mt-1 text-xs text-gray-600">
-                        {{ getAutoSummaryReasonLabel(getAutoSummaryRunSummary(scheduler)?.reason || getSchedulerFeedback(scheduler.name)?.reason) }}
-                      </p>
-                    </div>
-                    <div class="rounded-full border border-ink-200 bg-white px-3 py-1 text-xs font-medium text-ink-700">
-                      {{ scheduler.ai_configured ? 'AI 已配置' : 'AI 未配置' }}
-                    </div>
-                  </div>
-
-                  <div class="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
-                    <div class="rounded-xl bg-white p-3 shadow-sm ring-1 ring-amber-100">
-                      <div class="text-xs text-gray-500">启用 feed</div>
-                      <div class="mt-1 text-2xl font-bold text-gray-900">{{ getAutoSummaryRunSummary(scheduler)?.feed_count ?? 0 }}</div>
-                    </div>
-                    <div class="rounded-xl bg-white p-3 shadow-sm ring-1 ring-amber-100">
-                      <div class="text-xs text-gray-500">新总结</div>
-                      <div class="mt-1 text-2xl font-bold text-emerald-600">{{ getAutoSummaryRunSummary(scheduler)?.generated_count ?? 0 }}</div>
-                    </div>
-                    <div class="rounded-xl bg-white p-3 shadow-sm ring-1 ring-amber-100">
-                      <div class="text-xs text-gray-500">跳过</div>
-                      <div class="mt-1 text-2xl font-bold text-stone-700">{{ getAutoSummaryRunSummary(scheduler)?.skipped_count ?? 0 }}</div>
-                    </div>
-                    <div class="rounded-xl bg-white p-3 shadow-sm ring-1 ring-amber-100">
-                      <div class="text-xs text-gray-500">失败</div>
-                      <div class="mt-1 text-2xl font-bold text-rose-600">{{ getAutoSummaryRunSummary(scheduler)?.failed_count ?? 0 }}</div>
                     </div>
                   </div>
                 </div>

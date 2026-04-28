@@ -53,6 +53,18 @@ func (s *AdoptNarrowerQueueService) Enqueue(abstractTagID uint, source string) e
 		return nil
 	}
 
+	var recentCompleted int64
+	err = s.db.Model(&models.AdoptNarrowerQueue{}).
+		Where("abstract_tag_id = ? AND status = ? AND completed_at > ?", abstractTagID,
+			models.AdoptNarrowerQueueStatusCompleted, time.Now().Add(-24*time.Hour)).
+		Count(&recentCompleted).Error
+	if err != nil {
+		return err
+	}
+	if recentCompleted > 0 {
+		return nil
+	}
+
 	task := models.AdoptNarrowerQueue{
 		AbstractTagID: abstractTagID,
 		Source:        source,

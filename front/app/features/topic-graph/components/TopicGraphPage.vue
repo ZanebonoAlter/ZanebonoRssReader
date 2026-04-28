@@ -13,12 +13,10 @@ import {
   type TopicsByCategoryPayload,
 } from '~/api/topicGraph'
 import type { Article } from '~/types'
-import type { TimelineDigest, TimelineDigestSelection, PendingArticle } from '~/types/timeline'
+import type { TimelineDigest, TimelineDigestSelection, PendingArticle, TimelineAggregationGroup, TimelineAggregationMode, TimelineAggregationArticle } from '~/types/timeline'
 import ArticleContentView from '~/features/articles/components/ArticleContentView.vue'
 import { useApiStore } from '~/stores/api'
-import DigestDetail from '../../digest/components/DigestDetail.vue'
 import { normalizeArticle } from '../../articles/utils/normalizeArticle'
-import type { DigestPreviewSummary } from '~/api/digest'
 import FeedCategoryFilter from '~/features/topic-graph/components/FeedCategoryFilter.vue'
 import TopicGraphCanvas from '~/features/topic-graph/components/TopicGraphCanvas.client.vue'
 import TopicGraphFooterPanels from '~/features/topic-graph/components/TopicGraphFooterPanels.vue'
@@ -135,6 +133,12 @@ const selectedHotspotTag = ref<{ slug: string; label: string; category: TopicCat
 const pendingArticles = ref<PendingArticle[]>([])
 const selectedPendingNode = ref(false)
 const loadingPendingArticles = ref(false)
+
+// Timeline aggregation state
+const aggregationMode = ref<TimelineAggregationMode>('day')
+const aggregatedArticles = ref<TimelineAggregationArticle[]>([])
+const loadingAggregatedArticles = ref(false)
+const selectedGroupKey = ref<string | null>(null)
 
 // Abstract tag node tracking (for sidebar detail panel)
 const abstractNodeSlug = ref<string | null>(null)
@@ -457,7 +461,7 @@ const hotspotTimelineItems = computed((): TimelineDigest[] => {
       feedIcon: digest.feed_icon,
       categoryName: digest.category_name,
       articleCount: digest.article_count,
-      tags: digest.aggregated_tags.map(tag => ({
+      tags: (digest.aggregated_tags || []).map(tag => ({
         slug: tag.slug,
         label: tag.label,
         category: normalizeTopicCategory(tag.category, tag.kind),
@@ -519,34 +523,6 @@ const selectedDigest = computed<TimelineDigestSelection | null>(() => {
 const previewDigest = computed(() => {
   if (!previewDigestId.value) return null
   return effectiveTimelineItems.value.find(item => item.id === previewDigestId.value) || null
-})
-const previewDigestSummary = computed<DigestPreviewSummary | null>(() => {
-  if (!previewDigest.value) return null
-
-  const summarySource = detail.value?.summaries.find(item => String(item.id) === previewDigest.value?.id)
-  const hotspotSource = hotspotDigests.value.find(item => String(item.id) === previewDigest.value?.id)
-
-  return {
-    id: Number(previewDigest.value.id),
-    feed_id: null,
-    feed_name: previewDigest.value.feedName,
-    feed_icon: 'mdi:rss',
-    feed_color: summarySource?.feed_color || hotspotSource?.feed_color || '#3b6b87',
-    category_id: 0,
-    category_name: previewDigest.value.categoryName,
-    summary_text: previewDigest.value.summary,
-    article_count: previewDigest.value.articleCount,
-    article_ids: previewDigest.value.articles.map(article => article.id),
-    topics: [],
-    aggregated_tags: previewDigest.value.tags.map(tag => ({
-      slug: tag.slug,
-      label: tag.label,
-      category: tag.category,
-      score: 0,
-      article_count: 0,
-    })),
-    created_at: previewDigest.value.createdAt,
-  }
 })
 function buildCurrentFilters(): TopicGraphFilters | undefined {
   if (selectedFilterFeedId.value) return { feedId: selectedFilterFeedId.value }
@@ -730,6 +706,9 @@ async function handleTagSelect(slug: string, category: TopicCategory) {
   // Load pending articles for this tag
   void loadPendingArticles(slug)
 
+  // Load aggregated articles for timeline
+  void loadAggregatedArticles(slug)
+
   // Also load topic detail for the sidebar
   void loadTopicDetail(slug)
 }
@@ -807,6 +786,9 @@ async function handleChildTagSelect(childSlug: string, childLabel: string) {
   // Load pending articles for the child tag
   void loadPendingArticles(childSlug)
 
+  // Load aggregated articles for timeline
+  void loadAggregatedArticles(childSlug)
+
   // Load topic detail for the sidebar
   void loadTopicDetail(childSlug)
 
@@ -859,6 +841,9 @@ async function handleAbstractTagSelect(abstractSlug: string) {
   // Load pending articles for the abstract tag
   void loadPendingArticles(abstractSlug)
 
+  // Load aggregated articles for timeline
+  void loadAggregatedArticles(abstractSlug)
+
   // Load topic detail for the sidebar
   void loadTopicDetail(abstractSlug)
 
@@ -898,6 +883,155 @@ async function loadPendingArticles(tagSlug: string) {
   }
 }
 
+async function loadAggregatedArticles(tagSlug: string) {
+  loadingAggregatedArticles.value = true
+  try {
+    const isAbstract = hotspotData.value && [
+      ...hotspotData.value.events,
+      ...hotspotData.value.people,
+      ...hotspotData.value.keywords,
+    ].find(t => t.slug === tagSlug)?.is_abstract
+
+    const childSlugs = hotspotData.value && [
+      ...hotspotData.value.events,
+      ...hotspotData.value.people,
+      ...hotspotData.value.keywords,
+    ].find(t => t.slug === tagSlug)?.child_slugs
+
+    const slugs = (isAbstract && childSlugs?.length) ? childSlugs : [tagSlug]
+
+    const allArticles: TimelineAggregationArticle[] = []
+    const seenIds = new Set<string>()
+
+    for (const slug of slugs) {
+      const response = await topicGraphApi.getTopicArticles({
+        slug,
+        page: 1,
+        pageSize: 100,
+      })
+      if (response.success && response.data) {
+        for (const article of response.data.articles) {
+          if (!seenIds.has(article.id)) {
+            seenIds.add(article.id)
+            allArticles.push({
+              id: article.id,
+              title: article.title,
+              link: article.link,
+              pubDate: article.pub_date,
+              feedName: article.feed_name,
+              feedIcon: article.image_url || '',
+              tags: (article.tags || []).map(t => ({
+                slug: t.slug,
+                label: t.label,
+                category: t.category,
+              })),
+            })
+          }
+        }
+      }
+    }
+
+    allArticles.sort((a, b) => new Date(b.pubDate).getTime() - new Date(a.pubDate).getTime())
+    aggregatedArticles.value = allArticles
+  } catch (error) {
+    console.error('Failed to load aggregated articles:', error)
+    aggregatedArticles.value = []
+  } finally {
+    loadingAggregatedArticles.value = false
+  }
+}
+
+const timelineAggregationGroups = computed((): TimelineAggregationGroup[] => {
+  if (!aggregatedArticles.value.length) return []
+
+  const groups: TimelineAggregationGroup[] = []
+  const groupMap = new Map<string, TimelineAggregationArticle[]>()
+
+  for (const article of aggregatedArticles.value) {
+    const date = new Date(article.pubDate)
+    if (Number.isNaN(date.getTime())) continue
+
+    let key: string
+    let startDate: Date
+    let endDate: Date
+    let label: string
+
+    if (aggregationMode.value === 'hour') {
+      const hour = date.getHours()
+      key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}-${hour}`
+      startDate = new Date(date.getFullYear(), date.getMonth(), date.getDate(), hour, 0, 0)
+      endDate = new Date(date.getFullYear(), date.getMonth(), date.getDate(), hour + 1, 0, 0)
+      const startFmt = `${String(hour).padStart(2, '0')}:00`
+      const endFmt = `${String(hour + 1).padStart(2, '0')}:00`
+      label = `${startFmt} - ${endFmt}`
+    } else {
+      key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+      startDate = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0)
+      endDate = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1, 0, 0, 0)
+      label = new Intl.DateTimeFormat('zh-CN', {
+        month: 'short',
+        day: 'numeric',
+        weekday: 'short',
+      }).format(startDate)
+    }
+
+    if (!groupMap.has(key)) {
+      groupMap.set(key, [])
+    }
+    groupMap.get(key)!.push(article)
+  }
+
+  const sortedKeys = Array.from(groupMap.keys()).sort((a, b) => b.localeCompare(a))
+
+  for (const key of sortedKeys) {
+    const articles = groupMap.get(key)!
+    if (!articles.length) continue
+    const first = articles[0]!
+    const date = new Date(first.pubDate)
+
+    let startDate: Date
+    let endDate: Date
+
+    if (aggregationMode.value === 'hour') {
+      const hour = date.getHours()
+      startDate = new Date(date.getFullYear(), date.getMonth(), date.getDate(), hour, 0, 0)
+      endDate = new Date(date.getFullYear(), date.getMonth(), date.getDate(), hour + 1, 0, 0)
+    } else {
+      startDate = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0)
+      endDate = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1, 0, 0, 0)
+    }
+
+    groups.push({
+      key,
+      label: '',
+      startDate,
+      endDate,
+      articles,
+    })
+  }
+
+  return groups
+})
+
+const totalAggregatedCount = computed(() => aggregatedArticles.value.length)
+
+function handleTimelineGroupSelect(groupKey: string) {
+  selectedGroupKey.value = groupKey
+  selectedPendingNode.value = false
+  selectedDigestId.value = null
+}
+
+function handleAggregationModeChange(mode: TimelineAggregationMode) {
+  aggregationMode.value = mode
+  selectedGroupKey.value = null
+}
+
+const selectedGroupArticles = computed((): TimelineAggregationArticle[] => {
+  if (!selectedGroupKey.value) return aggregatedArticles.value
+  const group = timelineAggregationGroups.value.find(g => g.key === selectedGroupKey.value)
+  return group?.articles || []
+})
+
 function handleSelectPending() {
   selectedPendingNode.value = true
   selectedDigestId.value = null
@@ -934,6 +1068,9 @@ function handleNodeClick(node: { slug?: string; kind: string; category?: TopicCa
 
   // Load pending articles for this node
   void loadPendingArticles(node.slug)
+
+  // Load aggregated articles for timeline
+  void loadAggregatedArticles(node.slug)
 
   void loadTopicDetail(node.slug)
 }
@@ -976,7 +1113,7 @@ async function openArticlePreview(articleId: number) {
 
     selectedPreviewArticle.value = normalizeArticle(response.data)
 
-    if (detail.value) {
+    if (detail.value?.summaries) {
       const ids = detail.value.summaries.flatMap(summary => summary.articles.map(article => article.id))
       const uniqueIds = Array.from(new Set(ids))
       const articleResponses = await Promise.all(uniqueIds.slice(0, 12).map(id => articlesApi.getArticle(id)))
@@ -1056,6 +1193,17 @@ watch(effectiveTimelineItems, (items) => {
     selectedPendingNode.value = false
   }
 }, { immediate: true })
+
+watch(timelineAggregationGroups, (groups) => {
+  if (!groups.length) {
+    selectedGroupKey.value = null
+    return
+  }
+  const currentExists = selectedGroupKey.value && groups.some(g => g.key === selectedGroupKey.value)
+  if (!currentExists) {
+    selectedGroupKey.value = groups[0]?.key || null
+  }
+})
 
 await loadGraph()
 </script>
@@ -1350,7 +1498,7 @@ await loadGraph()
           >
             <Icon icon="mdi:timeline-clock-outline" width="18" />
             <span class="timeline-fab__label">时间线</span>
-            <span v-if="effectiveTimelineItems.length" class="timeline-fab__badge">{{ effectiveTimelineItems.length }}</span>
+            <span v-if="totalAggregatedCount" class="timeline-fab__badge">{{ totalAggregatedCount }}</span>
           </button>
         </div>
 
@@ -1367,6 +1515,8 @@ await loadGraph()
             :selected-pending-node="selectedPendingNode"
             :abstract-node-slug="abstractNodeSlug"
             :abstract-node-label="abstractNodeLabel"
+            :timeline-group-articles="selectedGroupArticles"
+            :timeline-group-key="selectedGroupKey"
             @open-article="openArticlePreview"
             @highlight-keyword="handleKeywordHighlight"
             @select-child-tag="handleChildTagSelect"
@@ -1398,7 +1548,7 @@ await loadGraph()
               <Icon icon="mdi:drag-horizontal-variant" width="16" class="text-white/40 cursor-grab" />
               <Icon icon="mdi:timeline-clock-outline" width="16" class="text-[rgba(240,138,75,0.8)]" />
               <span class="font-serif text-sm text-white">时间线</span>
-              <span v-if="effectiveTimelineItems.length" class="text-xs text-white/40">{{ effectiveTimelineItems.length }} 条</span>
+              <span v-if="totalAggregatedCount" class="text-xs text-white/40">{{ totalAggregatedCount }} 篇</span>
             </div>
             <button
               type="button"
@@ -1412,43 +1562,17 @@ await loadGraph()
           <div class="timeline-float-panel__body">
             <TopicTimeline
               :selected-topic="selectedTopicInfo"
-              :items="effectiveTimelineItems"
-              :active-digest-id="selectedDigestId"
-              :pending-article-count="pendingArticles.length"
-              :selected-pending-node="selectedPendingNode"
-              @select-digest="handleDigestSelect"
-              @preview-digest="handlePreviewDigest"
+              :groups="timelineAggregationGroups"
+              :active-group-key="selectedGroupKey"
+              :aggregation-mode="aggregationMode"
+              :total-count="totalAggregatedCount"
+              @select-group="handleTimelineGroupSelect"
               @open-article="openArticlePreview"
-              @select-pending="handleSelectPending"
+              @update:aggregation-mode="handleAggregationModeChange"
             />
           </div>
         </div>
       </Transition>
-    </Teleport>
-
-    <Teleport to="body">
-      <div
-        v-if="previewDigest"
-        class="topic-digest-modal"
-        data-testid="topic-graph-digest-preview"
-        @click.self="closeDigestPreview"
-      >
-        <div class="topic-digest-modal__panel topic-digest-modal__panel--detail">
-          <button
-            class="topic-digest-modal__close btn-ghost min-h-11 min-w-11 px-0"
-            type="button"
-            aria-label="关闭日报弹窗"
-            @click="closeDigestPreview"
-          >
-            <Icon icon="mdi:close" width="18" />
-          </button>
-
-          <DigestDetail
-            :summary="previewDigestSummary"
-            active-type-label="日报"
-          />
-        </div>
-      </div>
     </Teleport>
 
     <Teleport to="body">

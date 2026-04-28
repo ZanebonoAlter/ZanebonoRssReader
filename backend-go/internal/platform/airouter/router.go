@@ -16,10 +16,8 @@ import (
 const maxResponseSnippet = 10000
 
 var defaultConcurrency = map[Capability]int{
-	CapabilitySummary:            2,
 	CapabilityArticleCompletion:  2,
 	CapabilityTopicTagging:       3,
-	CapabilityDigestPolish:       2,
 	CapabilityOpenNotebook:       2,
 	CapabilityEmbedding:          5,
 }

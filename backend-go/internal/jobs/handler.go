@@ -9,7 +9,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"my-robot-backend/internal/app/runtimeinfo"
 	"my-robot-backend/internal/domain/models"
-	"my-robot-backend/internal/domain/summaries"
 	"my-robot-backend/internal/platform/database"
 	"my-robot-backend/internal/platform/logging"
 )
@@ -57,15 +56,6 @@ func schedulerDescriptors() []schedulerDescriptor {
 			},
 		},
 		{
-			Name:        "auto_summary",
-			DisplayName: "Auto Summary",
-			Description: "Auto-generate AI summaries for feeds",
-			TaskName:    "auto_summary",
-			Get: func() interface{} {
-				return runtimeinfo.AutoSummarySchedulerInterface
-			},
-		},
-		{
 			Name:        "preference_update",
 			DisplayName: "Preference Update",
 			Description: "Update reading preferences from behavior data",
@@ -80,7 +70,7 @@ func schedulerDescriptors() []schedulerDescriptor {
 			Description: "Complete article content and generate article summaries",
 			TaskName:    "ai_summary",
 			Get: func() interface{} {
-				return runtimeinfo.AISummarySchedulerInterface
+				return runtimeinfo.ContentCompletionSchedulerInterface
 			},
 		},
 		{
@@ -89,22 +79,6 @@ func schedulerDescriptors() []schedulerDescriptor {
 			Description: "Auto-crawl full content for articles",
 			Get: func() interface{} {
 				return runtimeinfo.FirecrawlSchedulerInterface
-			},
-		},
-		{
-			Name:        "digest",
-			DisplayName: "Digest",
-			Description: "Run digest cron schedules",
-			Get: func() interface{} {
-				return runtimeinfo.DigestSchedulerInterface
-			},
-		},
-		{
-			Name:        "auto_tag_merge",
-			DisplayName: "Auto Tag Merge",
-			Description: "Auto-merge similar tags based on embedding similarity",
-			Get: func() interface{} {
-				return runtimeinfo.AutoTagMergeSchedulerInterface
 			},
 		},
 		{
@@ -336,25 +310,7 @@ func GetTasksStatus(c *gin.Context) {
 	queueSize := 0
 	activeTasks := 0
 
-	if batch := summaries.GetSummaryQueue().GetCurrentBatch(); batch != nil {
-		pendingJobs := batch.TotalJobs - batch.CompletedJobs - batch.FailedJobs
-		if pendingJobs < 0 {
-			pendingJobs = 0
-		}
-		queueSize += pendingJobs
-		activeTasks++
-		tasks = append(tasks, gin.H{
-			"type":           "summary_queue",
-			"status":         batch.Status,
-			"batch_id":       batch.ID,
-			"total_jobs":     batch.TotalJobs,
-			"completed_jobs": batch.CompletedJobs,
-			"failed_jobs":    batch.FailedJobs,
-			"pending_jobs":   pendingJobs,
-		})
-	}
-
-	if status := safeGetTaskStatus(runtimeinfo.AISummarySchedulerInterface); status != nil {
+	if status := safeGetTaskStatus(runtimeinfo.ContentCompletionSchedulerInterface); status != nil {
 		if overview, ok := status["overview"].(map[string]interface{}); ok {
 			pendingCount := asInt(overview["pending_count"])
 			processingCount := asInt(overview["processing_count"])
