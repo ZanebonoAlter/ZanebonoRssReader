@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"sort"
 	"strings"
 	"sync"
@@ -15,6 +14,7 @@ import (
 
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/domain/topictypes"
+	"my-robot-backend/internal/platform/logging"
 )
 
 const (
@@ -27,7 +27,6 @@ type AnalysisService interface {
 	GetAnalysis(tagID uint64, analysisType, windowType string, anchorDate time.Time) (*models.TopicTagAnalysis, error)
 	RebuildAnalysis(tagID uint64, analysisType, windowType string, anchorDate time.Time) error
 	GetAnalysisStatus(tagID uint64, analysisType, windowType string, anchorDate time.Time) (status string, progress float64, err error)
-	EnqueueForSummary(summaryID uint64, priority int) error
 }
 
 type analysisService struct {
@@ -69,17 +68,6 @@ func GetAnalysisService(db *gorm.DB) AnalysisService {
 		analysisServiceGlobal = NewAnalysisService(db)
 	})
 	return analysisServiceGlobal
-}
-
-func EnqueueTopicAnalysisForSummary(summaryID uint64, priority int, db *gorm.DB) error {
-	service := GetAnalysisService(db)
-	impl, ok := service.(interface {
-		EnqueueForSummary(summaryID uint64, priority int) error
-	})
-	if !ok {
-		return fmt.Errorf("analysis service does not support summary enqueue")
-	}
-	return impl.EnqueueForSummary(summaryID, priority)
 }
 
 func (s *analysisService) GetOrCreateAnalysis(tagID uint64, analysisType, windowType string, anchorDate time.Time) (*models.TopicTagAnalysis, error) {
@@ -152,26 +140,6 @@ func (s *analysisService) GetAnalysisStatus(tagID uint64, analysisType, windowTy
 	return "ready", 1, nil
 }
 
-func (s *analysisService) EnqueueForSummary(summaryID uint64, priority int) error {
-	tagIDs, err := s.fetchTagIDsBySummaryID(summaryID)
-	if err != nil {
-		return err
-	}
-	if len(tagIDs) == 0 {
-		return nil
-	}
-
-	anchor := normalizeQueueAnchorDate(time.Now().In(topictypes.TopicGraphCST))
-	for _, tagID := range tagIDs {
-		for _, analysisType := range []string{AnalysisTypeEvent, AnalysisTypePerson, AnalysisTypeKeyword} {
-			if err := s.enqueue(tagID, analysisType, WindowTypeDaily, anchor, priority); err != nil {
-				log.Printf("[WARN] enqueue topic analysis failed summary=%d tag=%d type=%s: %v", summaryID, tagID, analysisType, err)
-			}
-		}
-	}
-	return nil
-}
-
 func (s *analysisService) enqueue(tagID uint64, analysisType, windowType string, anchorDate time.Time, priority int) error {
 	return s.queue.Enqueue(&AnalysisJob{
 		TopicTagID:   tagID,
@@ -195,7 +163,7 @@ func (s *analysisService) runQueueWorker() {
 			if strings.Contains(strings.ToLower(err.Error()), "closed") {
 				return
 			}
-			log.Printf("[WARN] analysis dequeue failed: %v", err)
+			logging.Warnf("analysis dequeue failed: %v", err)
 			continue
 		}
 		if job == nil {
@@ -235,7 +203,7 @@ func (s *analysisService) buildAndPersist(tagID uint64, analysisType, windowType
 		return nil, err
 	}
 
-	summaries, err := s.fetchSummariesByTag(tagID, windowStart, windowEnd)
+	summaries, err := s.fetchArticlesByTag(tagID, windowStart, windowEnd)
 	if err != nil {
 		return nil, err
 	}
@@ -250,12 +218,12 @@ func (s *analysisService) buildAndPersist(tagID uint64, analysisType, windowType
 		return nil, fmt.Errorf("failed to load existing analysis: %w", err)
 	}
 
-	maxID := maxSummaryID(summaries)
+	maxID := maxArticleID(summaries)
 	cursor, err := s.getCursor(tagID, analysisType, windowType)
 	if err != nil {
 		return nil, err
 	}
-	if analysis.ID != 0 && cursor != nil && cursor.LastSummaryID >= maxID {
+	if analysis.ID != 0 && cursor != nil && cursor.LastArticleID >= maxID {
 		return &analysis, nil
 	}
 
@@ -264,7 +232,7 @@ func (s *analysisService) buildAndPersist(tagID uint64, analysisType, windowType
 		return nil, err
 	}
 
-	analysis.SummaryCount = len(summaries)
+	analysis.ArticleCount = len(summaries)
 	analysis.PayloadJSON = payloadJSON
 	analysis.Source = source
 	if analysis.Version <= 0 {
@@ -289,14 +257,16 @@ func (s *analysisService) buildAndPersist(tagID uint64, analysisType, windowType
 	return &analysis, nil
 }
 
-func (s *analysisService) buildPayloadJSON(tag models.TopicTag, analysisType string, summaries []models.AISummary, windowType string, anchor time.Time) (string, string, error) {
+const maxArticlesPerTag = 20
+
+func (s *analysisService) buildPayloadJSON(tag models.TopicTag, analysisType string, articles []models.Article, windowType string, anchor time.Time) (string, string, error) {
 	aiParams := AnalysisParams{
 		TopicTagID:   uint64(tag.ID),
 		TopicLabel:   tag.Label,
 		AnalysisType: analysisType,
 		WindowType:   windowType,
 		AnchorDate:   anchor,
-		Summaries:    mapSummaryInfos(summaries),
+		Summaries:    mapArticleInfos(articles),
 	}
 	result, err := s.aiService.Analyze(nil, aiParams)
 	if err == nil && result != nil {
@@ -309,7 +279,7 @@ func (s *analysisService) buildPayloadJSON(tag models.TopicTag, analysisType str
 		}
 	}
 
-	payload, fallbackErr := s.buildPayload(tag, analysisType, summaries, windowType)
+	payload, fallbackErr := s.buildPayload(tag, analysisType, articles, windowType)
 	if fallbackErr != nil {
 		if err != nil {
 			return "", "", fmt.Errorf("ai analysis failed: %w; fallback failed: %v", err, fallbackErr)
@@ -323,63 +293,43 @@ func (s *analysisService) buildPayloadJSON(tag models.TopicTag, analysisType str
 	return string(bytes), "heuristic", nil
 }
 
-const maxSummariesPerTag = 20
-
-func (s *analysisService) fetchSummariesByTag(tagID uint64, windowStart, windowEnd time.Time) ([]models.AISummary, error) {
-	var summaries []models.AISummary
-	err := s.db.Model(&models.AISummary{}).
-		Joins("JOIN ai_summary_topics ast ON ast.summary_id = ai_summaries.id").
-		Where("ast.topic_tag_id = ?", tagID).
-		Where("ai_summaries.created_at >= ? AND ai_summaries.created_at < ?", windowStart, windowEnd).
+func (s *analysisService) fetchArticlesByTag(tagID uint64, windowStart, windowEnd time.Time) ([]models.Article, error) {
+	var articles []models.Article
+	err := s.db.Model(&models.Article{}).
+		Joins("JOIN article_topic_tags att ON att.article_id = articles.id").
+		Where("att.topic_tag_id = ?", tagID).
+		Where("articles.created_at >= ? AND articles.created_at < ?", windowStart, windowEnd).
 		Preload("Feed").
-		Preload("Category").
-		Order("ai_summaries.created_at DESC").
-		Limit(maxSummariesPerTag).
-		Find(&summaries).Error
+		Order("articles.created_at DESC").
+		Limit(maxArticlesPerTag).
+		Find(&articles).Error
 	if err != nil {
-		return nil, fmt.Errorf("failed to query summaries for tag: %w", err)
+		return nil, fmt.Errorf("failed to query articles for tag: %w", err)
 	}
-	return summaries, nil
+	return articles, nil
 }
 
-func (s *analysisService) fetchTagIDsBySummaryID(summaryID uint64) ([]uint64, error) {
-	rows := make([]struct {
-		TopicTagID uint64 `gorm:"column:topic_tag_id"`
-	}, 0)
-	err := s.db.Table("ai_summary_topics").Select("topic_tag_id").Where("summary_id = ?", summaryID).Group("topic_tag_id").Scan(&rows).Error
-	if err != nil {
-		return nil, fmt.Errorf("failed to load summary tags: %w", err)
-	}
-	out := make([]uint64, 0, len(rows))
-	for _, row := range rows {
-		if row.TopicTagID > 0 {
-			out = append(out, row.TopicTagID)
-		}
-	}
-	return out, nil
-}
-
-func (s *analysisService) needsRefresh(tagID uint64, analysisType string, windowType string, anchorDate time.Time, currentSummaryCount uint64) (bool, error) {
+func (s *analysisService) needsRefresh(tagID uint64, analysisType string, windowType string, anchorDate time.Time, currentArticleCount uint64) (bool, error) {
 	windowStart, windowEnd, _, err := topictypes.ResolveWindow(windowType, anchorDate)
 	if err != nil {
 		return false, err
 	}
-	summaries, err := s.fetchSummariesByTag(tagID, windowStart, windowEnd)
+	articles, err := s.fetchArticlesByTag(tagID, windowStart, windowEnd)
 	if err != nil {
 		return false, err
 	}
-	latestID := maxSummaryID(summaries)
+	latestID := maxArticleID(articles)
 	cursor, err := s.getCursor(tagID, analysisType, windowType)
 	if err != nil {
 		return false, err
 	}
-	if uint64(len(summaries)) != currentSummaryCount {
+	if uint64(len(articles)) != currentArticleCount {
 		return true, nil
 	}
 	if cursor == nil {
 		return latestID > 0, nil
 	}
-	return latestID > cursor.LastSummaryID, nil
+	return latestID > cursor.LastArticleID, nil
 }
 
 func (s *analysisService) getCursor(tagID uint64, analysisType string, windowType string) (*models.TopicAnalysisCursor, error) {
@@ -394,68 +344,72 @@ func (s *analysisService) getCursor(tagID uint64, analysisType string, windowTyp
 	return &cursor, nil
 }
 
-func maxSummaryID(summaries []models.AISummary) uint64 {
+func maxArticleID(articles []models.Article) uint64 {
 	var maxID uint64
-	for _, summary := range summaries {
-		if uint64(summary.ID) > maxID {
-			maxID = uint64(summary.ID)
+	for _, article := range articles {
+		if uint64(article.ID) > maxID {
+			maxID = uint64(article.ID)
 		}
 	}
 	return maxID
 }
 
-func mapSummaryInfos(summaries []models.AISummary) []SummaryInfo {
-	out := make([]SummaryInfo, 0, len(summaries))
-	for _, summary := range summaries {
+func mapArticleInfos(articles []models.Article) []SummaryInfo {
+	out := make([]SummaryInfo, 0, len(articles))
+	for _, article := range articles {
+		summary := article.Description
+		if article.AIContentSummary != "" {
+			summary = article.AIContentSummary
+		}
 		item := SummaryInfo{
-			SummaryID: uint64(summary.ID),
-			Title:     summary.Title,
-			Summary:   summary.Summary,
-			CreatedAt: summary.CreatedAt.In(topictypes.TopicGraphCST).Format("2006-01-02"),
+			ArticleID: uint64(article.ID),
+			Title:     article.Title,
+			Summary:   summary,
+			CreatedAt: article.CreatedAt.In(topictypes.TopicGraphCST).Format("2006-01-02"),
 		}
-		if summary.Feed != nil {
-			item.FeedName = summary.Feed.Title
-		}
-		if summary.Category != nil {
-			item.CategoryName = summary.Category.Name
+		if article.Feed.ID != 0 {
+			item.FeedName = article.Feed.Title
 		}
 		out = append(out, item)
 	}
 	return out
 }
 
-func (s *analysisService) buildPayload(tag models.TopicTag, analysisType string, summaries []models.AISummary, windowType string) (map[string]any, error) {
+func (s *analysisService) buildPayload(tag models.TopicTag, analysisType string, articles []models.Article, windowType string) (map[string]any, error) {
 	switch analysisType {
 	case AnalysisTypeEvent:
-		return s.buildEventPayload(tag, summaries), nil
+		return s.buildEventPayload(tag, articles), nil
 	case AnalysisTypePerson:
-		return s.buildPersonPayload(tag, summaries, windowType), nil
+		return s.buildPersonPayload(tag, articles, windowType), nil
 	case AnalysisTypeKeyword:
-		return s.buildKeywordPayload(tag, summaries, windowType), nil
+		return s.buildKeywordPayload(tag, articles, windowType), nil
 	default:
 		return nil, fmt.Errorf("unsupported analysis type: %s", analysisType)
 	}
 }
 
-func (s *analysisService) buildEventPayload(tag models.TopicTag, summaries []models.AISummary) map[string]any {
-	articlesBySummary := topictypes.FetchArticlesForSummaries(summaries)
-	timeline := make([]map[string]any, 0, len(summaries))
-	keyMoments := make([]string, 0, minInt(len(summaries), 5))
+func (s *analysisService) buildEventPayload(tag models.TopicTag, articles []models.Article) map[string]any {
+	timeline := make([]map[string]any, 0, len(articles))
+	keyMoments := make([]string, 0, minInt(len(articles), 5))
 
-	for i, summary := range summaries {
-		sources := make([]map[string]any, 0, len(articlesBySummary[summary.ID]))
-		for _, article := range articlesBySummary[summary.ID] {
-			sources = append(sources, map[string]any{"article_id": article.ID, "title": article.Title, "link": article.Link})
+	for i, article := range articles {
+		sources := []map[string]any{
+			{"article_id": article.ID, "title": article.Title, "link": article.Link},
+		}
+
+		summary := article.Description
+		if article.AIContentSummary != "" {
+			summary = article.AIContentSummary
 		}
 
 		timeline = append(timeline, map[string]any{
-			"date":            summary.CreatedAt.In(topictypes.TopicGraphCST).Format("2006-01-02"),
-			"title":           summary.Title,
-			"summary":         truncateText(summary.Summary, 240),
+			"date":            article.CreatedAt.In(topictypes.TopicGraphCST).Format("2006-01-02"),
+			"title":           article.Title,
+			"summary":         truncateText(summary, 240),
 			"source_articles": sources,
 		})
 		if i < 5 {
-			keyMoments = append(keyMoments, summary.Title)
+			keyMoments = append(keyMoments, article.Title)
 		}
 	}
 
@@ -466,26 +420,34 @@ func (s *analysisService) buildEventPayload(tag models.TopicTag, summaries []mod
 	}
 }
 
-func (s *analysisService) buildPersonPayload(tag models.TopicTag, summaries []models.AISummary, windowType string) map[string]any {
-	articlesBySummary := topictypes.FetchArticlesForSummaries(summaries)
-	appearances := make([]map[string]any, 0, len(summaries))
+func (s *analysisService) buildPersonPayload(tag models.TopicTag, articles []models.Article, windowType string) map[string]any {
+	appearances := make([]map[string]any, 0, len(articles))
 
-	for _, summary := range summaries {
-		item := map[string]any{
-			"date":  summary.CreatedAt.In(topictypes.TopicGraphCST).Format("2006-01-02"),
-			"scene": truncateText(summary.Title, 96),
-			"quote": firstSentence(summary.Summary),
+	for _, article := range articles {
+		summary := article.Description
+		if article.AIContentSummary != "" {
+			summary = article.AIContentSummary
 		}
-		if cards := articlesBySummary[summary.ID]; len(cards) > 0 {
-			item["article_title"] = cards[0].Title
-			item["article_link"] = cards[0].Link
+
+		item := map[string]any{
+			"date":  article.CreatedAt.In(topictypes.TopicGraphCST).Format("2006-01-02"),
+			"scene": truncateText(article.Title, 96),
+			"quote": firstSentence(summary),
+		}
+		if article.Title != "" {
+			item["article_title"] = article.Title
+			item["article_link"] = article.Link
 		}
 		appearances = append(appearances, item)
 	}
 
 	background := "暂无背景资料"
-	if len(summaries) > 0 {
-		background = truncateText(summaries[0].Summary, 280)
+	if len(articles) > 0 {
+		bg := articles[0].Description
+		if articles[0].AIContentSummary != "" {
+			bg = articles[0].AIContentSummary
+		}
+		background = truncateText(bg, 280)
 	}
 
 	return map[string]any{
@@ -495,19 +457,23 @@ func (s *analysisService) buildPersonPayload(tag models.TopicTag, summaries []mo
 			"background": background,
 		},
 		"appearances": appearances,
-		"trend_data":  buildTrendData(summaries, windowType),
+		"trend_data":  buildTrendData(articles, windowType),
 	}
 }
 
-func (s *analysisService) buildKeywordPayload(tag models.TopicTag, summaries []models.AISummary, windowType string) map[string]any {
-	contextExamples := make([]map[string]any, 0, minInt(len(summaries), 6))
-	for i, summary := range summaries {
+func (s *analysisService) buildKeywordPayload(tag models.TopicTag, articles []models.Article, windowType string) map[string]any {
+	contextExamples := make([]map[string]any, 0, minInt(len(articles), 6))
+	for i, article := range articles {
 		if i >= 6 {
 			break
 		}
+		summary := article.Description
+		if article.AIContentSummary != "" {
+			summary = article.AIContentSummary
+		}
 		contextExamples = append(contextExamples, map[string]any{
-			"text":   truncateText(summary.Summary, 220),
-			"source": summary.Title,
+			"text":   truncateText(summary, 220),
+			"source": article.Title,
 		})
 	}
 
@@ -522,7 +488,7 @@ func (s *analysisService) buildKeywordPayload(tag models.TopicTag, summaries []m
 	}
 
 	return map[string]any{
-		"trend_data":       buildTrendData(summaries, windowType),
+		"trend_data":       buildTrendData(articles, windowType),
 		"related_topics":   relatedTopics,
 		"co_occurrence":    coOccurrence,
 		"context_examples": contextExamples,
@@ -532,12 +498,12 @@ func (s *analysisService) buildKeywordPayload(tag models.TopicTag, summaries []m
 func (s *analysisService) fetchRelatedTopicLabels(tagID uint64, limit int) []string {
 	type row struct{ Label string }
 	rows := make([]row, 0)
-	_ = s.db.Table("ai_summary_topics ast").
+	_ = s.db.Table("article_topic_tags att").
 		Select("tt.label").
-		Joins("JOIN ai_summary_topics ast2 ON ast2.summary_id = ast.summary_id").
-		Joins("JOIN topic_tags tt ON tt.id = ast2.topic_tag_id").
-		Where("ast.topic_tag_id = ?", tagID).
-		Where("ast2.topic_tag_id <> ?", tagID).
+		Joins("JOIN article_topic_tags att2 ON att2.article_id = att.article_id").
+		Joins("JOIN topic_tags tt ON tt.id = att2.topic_tag_id").
+		Where("att.topic_tag_id = ?", tagID).
+		Where("att2.topic_tag_id <> ?", tagID).
 		Group("tt.id, tt.label").
 		Order("COUNT(*) DESC").
 		Limit(limit).
@@ -558,12 +524,12 @@ func (s *analysisService) fetchCoOccurrence(tagID uint64, limit int) []map[strin
 		Count   int
 	}
 	rows := make([]row, 0)
-	_ = s.db.Table("ai_summary_topics ast").
+	_ = s.db.Table("article_topic_tags att").
 		Select("tt.label AS keyword, COUNT(*) AS count").
-		Joins("JOIN ai_summary_topics ast2 ON ast2.summary_id = ast.summary_id").
-		Joins("JOIN topic_tags tt ON tt.id = ast2.topic_tag_id").
-		Where("ast.topic_tag_id = ?", tagID).
-		Where("ast2.topic_tag_id <> ?", tagID).
+		Joins("JOIN article_topic_tags att2 ON att2.article_id = att.article_id").
+		Joins("JOIN topic_tags tt ON tt.id = att2.topic_tag_id").
+		Where("att.topic_tag_id = ?", tagID).
+		Where("att2.topic_tag_id <> ?", tagID).
 		Group("tt.id, tt.label").
 		Order("COUNT(*) DESC").
 		Limit(limit).
@@ -587,7 +553,7 @@ func (s *analysisService) fetchCoOccurrence(tagID uint64, limit int) []map[strin
 	return out
 }
 
-func (s *analysisService) updateCursor(tagID uint64, analysisType, windowType string, summaries []models.AISummary) error {
+func (s *analysisService) updateCursor(tagID uint64, analysisType, windowType string, articles []models.Article) error {
 	lookup := models.TopicAnalysisCursor{TopicTagID: tagID, AnalysisType: analysisType, WindowType: windowType}
 	var cursor models.TopicAnalysisCursor
 	err := s.db.Where(&lookup).First(&cursor).Error
@@ -597,7 +563,7 @@ func (s *analysisService) updateCursor(tagID uint64, analysisType, windowType st
 		return fmt.Errorf("failed to query analysis cursor: %w", err)
 	}
 
-	cursor.LastSummaryID = maxSummaryID(summaries)
+	cursor.LastArticleID = maxArticleID(articles)
 	cursor.LastUpdatedAt = time.Now().In(topictypes.TopicGraphCST)
 
 	if cursor.ID == 0 {
@@ -634,10 +600,10 @@ func normalizeAnalysisAnchor(windowType string, anchorDate time.Time) (time.Time
 	return windowStart, nil
 }
 
-func buildTrendData(summaries []models.AISummary, windowType string) []map[string]any {
+func buildTrendData(articles []models.Article, windowType string) []map[string]any {
 	counter := map[string]int{}
-	for _, summary := range summaries {
-		key := summary.CreatedAt.In(topictypes.TopicGraphCST).Format("2006-01-02")
+	for _, article := range articles {
+		key := article.CreatedAt.In(topictypes.TopicGraphCST).Format("2006-01-02")
 		counter[key]++
 	}
 	trend := make([]map[string]any, 0, len(counter))

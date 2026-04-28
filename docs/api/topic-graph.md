@@ -1,175 +1,27 @@
-# Topic Graph API
+# 主题图谱 Topic Graph
 
-## 分析相关接口
+## 图谱查询
 
-### 获取分析结果
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/topic-graph/:type` | 获取图谱 |
+| GET | `/api/topic-graph/topic/:slug` | 主题详情 |
+| GET | `/api/topic-graph/by-category` | 按类别分组 |
+| GET | `/api/topic-graph/topic/:slug/articles` | 主题关联文章 |
+| GET | `/api/topic-graph/tag/:slug/digests` | 标签关联 Digest |
+| GET | `/api/topic-graph/tag/:slug/pending-articles` | 未收录文章 |
 
-```http
-GET /api/topic-graph/analysis/:tagID/:analysisType
-```
+---
 
-参数:
+### GET /api/topic-graph/:type
 
-- `tagID`: 标签 ID
-- `analysisType`: 分析类型（event | person | keyword）
-- `windowType`: 时间窗口类型（daily | weekly）
-- `anchorDate`: 锚点日期（YYYY-MM-DD）
+`type` 如 `daily`。
 
-响应:
-
-```json
-{
-  "success": true,
-  "data": {
-    "id": 1,
-    "topic_tag_id": 123,
-    "analysis_type": "event",
-    "window_type": "daily",
-    "anchor_date": "2024-01-01",
-    "summary_count": 10,
-    "payload_json": "{...}",
-    "source": "ai",
-    "version": 1
-  }
-}
-```
-
-### 触发重新分析
-
-```http
-POST /api/topic-graph/analysis/:tagID/:analysisType/rebuild
-```
-
-请求体:
-
-```json
-{
-  "windowType": "daily",
-  "anchorDate": "2024-01-01"
-}
-```
-
-### 获取分析状态
-
-```http
-GET /api/topic-graph/analysis/:tagID/:analysisType/status
-```
-
-响应:
-
-```json
-{
-  "success": true,
-  "data": {
-    "status": "processing",
-    "progress": 65,
-    "error": null,
-    "result": null
-  }
-}
-```
-
-## 主题日报接口
-
-### 获取主题日报列表
-
-获取指定主题下的日报列表，支持分页和时间筛选。
-
-```http
-GET /api/topic-graph/topic/:slug/articles
-```
-
-#### 路径参数
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| slug | string | 是 | 主题 slug，如 `ai-agent`、`openai` |
-
-#### 查询参数
-
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| page | integer | 否 | 1 | 页码，从 1 开始 |
-| page_size | integer | 否 | 15 | 每页数量，最大 100 |
-| type | string | 否 | daily | 时间窗口类型：daily 或 weekly |
-| date | string | 否 | 今天 | 锚点日期，格式 YYYY-MM-DD |
-
-#### 响应
-
-```json
-{
-  "success": true,
-  "data": {
-    "articles": [
-      {
-        "id": "123",
-        "title": "文章标题",
-        "summary": "文章摘要内容...",
-        "pub_date": "2024-01-15T10:30:00Z",
-        "feed_name": "Feed名称",
-        "feed_id": "1",
-        "link": "https://example.com/article",
-        "tags": [
-          {
-            "slug": "ai-agent",
-            "label": "AI Agent",
-            "category": "keyword"
-          }
-        ],
-        "image_url": "https://example.com/image.jpg"
-      }
-    ],
-    "total": 100,
-    "page": 1,
-    "page_size": 15
-  }
-}
-```
-
-#### 错误响应
-
-**缺少 slug 参数**
-
-```json
-{
-  "success": false,
-  "error": "slug is required"
-}
-```
-
-**主题不存在**
-
-```json
-{
-  "success": false,
-  "error": "topic not found: ..."
-}
-```
-
-#### 示例
-
-```bash
-# 获取第一页
-curl "http://localhost:5000/api/topic-graph/topic/ai-agent/articles?page=1&page_size=15&type=daily&date=2024-01-15"
-
-# 获取第二页
-curl "http://localhost:5000/api/topic-graph/topic/openai/articles?page=2&page_size=20&type=weekly&date=2024-01-15"
-```
-
-## 图谱接口
-
-### 获取主题图谱
-
-```http
-GET /api/topic-graph/:type
-```
-
-参数:
-
-- `type`: 图谱类型（daily | weekly）
-- `date`: 锚点日期（YYYY-MM-DD）
-
-响应:
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `date` | string | `YYYY-MM-DD` |
+| `category_id` | uint | 按分类 |
+| `feed_id` | uint | 按订阅源 |
 
 ```json
 {
@@ -182,12 +34,7 @@ GET /api/topic-graph/:type
     "summary_count": 25,
     "feed_count": 5,
     "top_topics": [
-      {
-        "slug": "ai-agent",
-        "label": "AI Agent",
-        "category": "keyword",
-        "score": 5.2
-      }
+      { "slug": "ai-agent", "label": "AI Agent", "category": "keyword", "score": 5.2 }
     ],
     "nodes": [...],
     "edges": [...]
@@ -195,88 +42,339 @@ GET /api/topic-graph/:type
 }
 ```
 
-### 获取主题详情
+### GET /api/topic-graph/topic/:slug
 
-```http
-GET /api/topic-graph/topic/:slug
-```
-
-参数:
-
-- `slug`: 主题 slug
-- `type`: 时间窗口类型（daily | weekly）
-- `date`: 锚点日期（YYYY-MM-DD）
-
-响应:
+查询参数：`type`（默认 `daily`）、`date`、`category_id`、`feed_id`
 
 ```json
 {
   "success": true,
   "data": {
-    "topic": {
-      "slug": "ai-agent",
-      "label": "AI Agent",
-      "category": "keyword"
-    },
+    "topic": { "slug": "ai-agent", "label": "AI Agent", "category": "keyword" },
     "articles": [...],
     "total_articles": 50,
     "related_tags": [...],
     "summaries": [...],
     "history": [...],
     "related_topics": [...],
-    "search_links": {
-      "youtube_videos": "https://...",
-      "youtube_live": "https://..."
-    },
-    "app_links": {
-      "digest_view": "/digest/daily",
-      "topic_graph": "/topics"
-    }
+    "search_links": { "youtube_videos": "...", "youtube_live": "..." },
+    "app_links": { "digest_view": "/digest/daily", "topic_graph": "/topics" }
   }
 }
 ```
 
-### 获取分类主题列表
+### GET /api/topic-graph/by-category
 
-```http
-GET /api/topic-graph/topics-by-category
-```
+返回标签按 event/person/keyword 分组。
 
-参数:
-
-- `type`: 时间窗口类型（daily | weekly）
-- `date`: 锚点日期（YYYY-MM-DD）
-
-响应:
+查询参数：`type`、`date`、`category_id`、`feed_id`
 
 ```json
 {
   "success": true,
   "data": {
-    "events": [
-      {
-        "slug": "gpt-5-launch",
-        "label": "GPT-5 发布",
-        "category": "event",
-        "score": 3.5
-      }
-    ],
-    "people": [
-      {
-        "slug": "sam-altman",
-        "label": "Sam Altman",
-        "category": "person",
-        "score": 2.8
-      }
-    ],
-    "keywords": [
-      {
-        "slug": "ai-agent",
-        "label": "AI Agent",
-        "category": "keyword",
-        "score": 5.2
-      }
-    ]
+    "events": [{ "slug": "...", "label": "...", "category": "event", "score": 3.5 }],
+    "people": [{ "slug": "...", "label": "...", "category": "person", "score": 2.8 }],
+    "keywords": [{ "slug": "...", "label": "...", "category": "keyword", "score": 5.2 }]
   }
 }
 ```
+
+### GET /api/topic-graph/topic/:slug/articles
+
+| 参数 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `type` | string | daily | 窗口类型 |
+| `date` | string | - | 锚点日期 |
+| `page` | int | 1 | 页码 |
+| `page_size` | int | 15 | 上限 100 |
+
+```json
+{
+  "success": true,
+  "data": {
+    "articles": [
+      {
+        "id": "123",
+        "title": "文章标题",
+        "summary": "...",
+        "pub_date": "2024-01-15T10:30:00Z",
+        "feed_name": "Feed名称",
+        "feed_id": "1",
+        "link": "https://...",
+        "tags": [{ "slug": "ai-agent", "label": "AI Agent", "category": "keyword" }],
+        "image_url": "https://..."
+      }
+    ],
+    "total": 100,
+    "page": 1,
+    "page_size": 15
+  }
+}
+```
+
+### GET /api/topic-graph/tag/:slug/digests
+
+查询参数：`type`（默认 `daily`）、`date`、`limit`（默认 `20`，上限 100）
+
+返回包含该标签文章的 digest 列表，附带 `total`。
+
+### GET /api/topic-graph/tag/:slug/pending-articles
+
+查询参数：`type`（默认 `daily`）、`date`
+
+指定标签下未收录到任何 Digest 的文章。
+
+---
+
+## 主题分析 Topic Analysis
+
+路由注册在 `/api/topic-graph/analysis` 下：
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/topic-graph/analysis` | 按查询参数获取分析 |
+| GET | `/api/topic-graph/analysis/status` | 按查询参数获取状态 |
+| POST | `/api/topic-graph/analysis/rebuild` | 按查询参数重建 |
+| POST | `/api/topic-graph/analysis/retry` | 同 rebuild |
+| GET | `/api/topic-graph/analysis/:tagID/:analysisType` | 获取指定分析 |
+| POST | `/api/topic-graph/analysis/:tagID/:analysisType/rebuild` | 重建指定分析 |
+| GET | `/api/topic-graph/analysis/:tagID/:analysisType/status` | 获取状态 |
+
+### 查询参数方式
+
+GET `/api/topic-graph/analysis`：
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `tag_id` | uint | 是 | 标签 ID |
+| `analysis_type` | string | 是 | 分析类型 |
+| `windowType` | string | 否 | 窗口类型 |
+| `anchorDate` | string | 否 | `YYYY-MM-DD` |
+
+### 路径参数方式
+
+GET `/api/topic-graph/analysis/:tagID/:analysisType`：
+
+| 参数 | 说明 |
+|------|------|
+| `tagID` | 标签 ID |
+| `analysisType` | 分析类型 |
+
+查询参数：`windowType`（或 `window_type`/`window`）、`anchorDate`（或 `anchor_date`/`date`）
+
+POST 请求还支持 JSON body 传入 `windowType` 和 `anchorDate`。
+
+### 分析状态响应
+
+```json
+{
+  "success": true,
+  "data": {
+    "status": "processing",
+    "progress": 65
+  }
+}
+```
+
+---
+
+## 标签管理 Topic Tags
+
+路由注册在 `/api/topic-tags` 下：
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/topic-tags/search` | 搜索标签 |
+| POST | `/api/topic-tags/merge` | 合并标签 |
+| POST | `/api/topic-tags/merge-with-name` | 合并标签并重命名 |
+| GET | `/api/topic-tags/merge-preview` | 扫描相似标签对 |
+| GET | `/api/topic-tags/hierarchy` | 获取标签层级树 |
+| POST | `/api/topic-tags/organize` | 异步整理未分类标签 |
+| PUT | `/api/topic-tags/:tag_id/abstract-name` | 重命名抽象标签 |
+| POST | `/api/topic-tags/:tag_id/detach` | 从抽象父标签分离子标签 |
+| POST | `/api/topic-tags/:tag_id/reassign` | 将标签移到新父标签 |
+| GET | `/api/topic-tags/watched` | 列出关注标签 |
+| POST | `/api/topic-tags/:tag_id/watch` | 关注标签 |
+| POST | `/api/topic-tags/:tag_id/unwatch` | 取消关注 |
+
+### GET /api/topic-tags/search
+
+| 参数 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `q` | string | - | 搜索关键词（必填，空则返回空列表） |
+| `category` | string | - | 按分类过滤 |
+| `limit` | int | 20 | 上限 100 |
+
+### POST /api/topic-tags/merge
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `source_tag_id` | uint | 是 | 源标签 ID（将被合并） |
+| `target_tag_id` | uint | 是 | 目标标签 ID（保留） |
+
+返回合并后的 `source_id`、`target_id`、`target_label`。
+
+### POST /api/topic-tags/merge-with-name
+
+合并标签并可选重命名目标标签：
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `source_tag_id` | uint | 是 | 源标签 ID |
+| `target_tag_id` | uint | 是 | 目标标签 ID |
+| `new_name` | string | 是 | 目标标签新名称 |
+
+### GET /api/topic-tags/merge-preview
+
+| 参数 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `limit` | int | 50 | 上限 100 |
+| `include_articles` | string | false | `true` 附带文章标题 |
+| `feed_id` | uint | - | 按订阅源过滤 |
+| `category_id` | uint | - | 按分类过滤 |
+
+返回相似标签候选列表。
+
+### GET /api/topic-tags/hierarchy
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `category` | string | 按分类过滤 |
+| `unclassified` | string | `true` 查未分类标签 |
+| `time_range` | string | 时间范围 |
+| `feed_id` | uint | 按订阅源 |
+| `category_id` | uint | 按分类 |
+
+返回 `nodes`（层级节点列表）和 `total`。
+
+### POST /api/topic-tags/organize
+
+异步整理未分类标签。接口接受请求后返回 `202`，实际整理进度通过 WebSocket 推送 `organize_progress` 消息。
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `category` | string | 可选。指定时只整理该分类；不指定时按每个标签自身分类查找相似候选 |
+
+整理流程会先用 embedding 查找同分类相似标签，过滤当前标签自身和低相似度候选，再交给 LLM 判断是否合并或创建抽象父标签。LLM 判定为 merge 时会调用标签合并流程落库；判定为 abstract 时会创建抽象标签关系。
+
+### PUT /api/topic-tags/:tag_id/abstract-name
+
+重命名抽象标签：
+
+```json
+{ "new_name": "新名称" }
+```
+
+名称不能超过 160 字符。标签名冲突时返回 `409`。
+
+### POST /api/topic-tags/:tag_id/detach
+
+从抽象父标签分离子标签：
+
+```json
+{ "child_id": 42 }
+```
+
+### POST /api/topic-tags/:tag_id/reassign
+
+将标签移到新的抽象父标签：
+
+```json
+{ "parent_id": 10 }
+```
+
+### GET /api/topic-tags/watched
+
+列出所有关注标签，含抽象标签元数据。
+
+### POST /api/topic-tags/:tag_id/watch
+
+关注指定标签。返回 `id`、`is_watched`、`watched_at`。
+
+### POST /api/topic-tags/:tag_id/unwatch
+
+取消关注指定标签。返回 `id`、`is_watched`。
+
+---
+
+## Embedding 配置
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/embedding/config` | 获取所有 embedding 配置 |
+| PUT | `/api/embedding/config/:key` | 更新单个配置项 |
+
+### GET /api/embedding/config
+
+返回所有 embedding 配置项列表。
+
+### PUT /api/embedding/config/:key
+
+```json
+{ "value": "新值" }
+```
+
+---
+
+## Embedding 队列
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/embedding/queue/status` | 队列状态 |
+| GET | `/api/embedding/queue/tasks` | 任务列表 |
+| POST | `/api/embedding/queue/retry` | 重试失败任务 |
+
+### GET /api/embedding/queue/tasks
+
+| 参数 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `status` | string | - | 按状态过滤 |
+| `limit` | int | 50 | 上限 200 |
+| `offset` | int | 0 | 偏移 |
+
+返回 `tasks` 和 `total`。
+
+---
+
+## Merge Reembedding 队列
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/embedding/merge-reembedding/status` | 队列状态 |
+| GET | `/api/embedding/merge-reembedding/tasks` | 任务列表 |
+| POST | `/api/embedding/merge-reembedding/retry` | 重试失败任务 |
+
+### GET /api/embedding/merge-reembedding/tasks
+
+| 参数 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `status` | string | - | `pending`/`processing`/`completed`/`failed` |
+| `limit` | int | 50 | 上限 200 |
+| `offset` | int | 0 | 偏移 |
+
+返回 `tasks` 和 `total`。
+
+---
+
+## 叙事 Narratives
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/narratives` | 按日期获取叙事列表 |
+| GET | `/api/narratives/:id` | 叙事详情（含树形结构） |
+| GET | `/api/narratives/:id/history` | 叙事历史 |
+
+### GET /api/narratives
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `date` | string | `YYYY-MM-DD`，默认今天 |
+
+### GET /api/narratives/:id
+
+返回完整的叙事树形结构。
+
+### GET /api/narratives/:id/history
+
+返回指定叙事的历史记录列表。

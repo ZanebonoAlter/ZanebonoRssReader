@@ -25,6 +25,7 @@ type FirecrawlJob struct {
 	URLSnapshot    string     `gorm:"size:1000" json:"url_snapshot"`
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
+	Article        *Article   `gorm:"foreignKey:ArticleID;constraint:OnDelete:CASCADE" json:"article,omitempty"`
 }
 
 func (FirecrawlJob) TableName() string {
@@ -48,6 +49,7 @@ type TagJob struct {
 	Reason               string     `gorm:"size:50" json:"reason"`
 	CreatedAt            time.Time  `json:"created_at"`
 	UpdatedAt            time.Time  `json:"updated_at"`
+	Article              *Article   `gorm:"foreignKey:ArticleID;constraint:OnDelete:CASCADE" json:"article,omitempty"`
 }
 
 func (TagJob) TableName() string {

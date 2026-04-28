@@ -37,33 +37,8 @@ func (OtelSpan) TableName() string {
 }
 
 func EnsureTracingTable(db *gorm.DB) error {
-	if !db.Migrator().HasTable(&OtelSpan{}) {
-		sql := `CREATE TABLE otel_spans (
-			id                    INTEGER PRIMARY KEY AUTOINCREMENT,
-			trace_id              CHAR(32)    NOT NULL,
-			span_id               CHAR(16)    NOT NULL,
-			parent_span_id        CHAR(16)    DEFAULT '',
-			trace_state           TEXT        DEFAULT '',
-			name                  VARCHAR(255) NOT NULL,
-			kind                  INTEGER     DEFAULT 1,
-			status_code           INTEGER     DEFAULT 0,
-			status_message        TEXT        DEFAULT '',
-			start_time_unix_nano  INTEGER     NOT NULL,
-			end_time_unix_nano    INTEGER     NOT NULL,
-			duration_ms           INTEGER     DEFAULT 0,
-			service_name          VARCHAR(100) DEFAULT 'rss-reader-backend',
-			service_version       VARCHAR(50) DEFAULT '',
-			resource_attributes   TEXT        DEFAULT '{}',
-			scope_name            VARCHAR(100) DEFAULT '',
-			scope_version         VARCHAR(50) DEFAULT '',
-			attributes            TEXT        DEFAULT '{}',
-			events                TEXT        DEFAULT '[]',
-			links                 TEXT        DEFAULT '[]',
-			created_at            DATETIME    DEFAULT CURRENT_TIMESTAMP
-		)`
-		if err := db.Exec(sql).Error; err != nil {
-			return fmt.Errorf("failed to create otel_spans table: %w", err)
-		}
+	if err := db.AutoMigrate(&OtelSpan{}); err != nil {
+		return fmt.Errorf("failed to migrate otel_spans table: %w", err)
 	}
 
 	indexes := []string{

@@ -71,6 +71,18 @@ export interface SchedulerLastRunSummary {
 	last_processed?: SchedulerArticleRef | null
 	stale_processing_article?: SchedulerArticleRef | null
 	error_samples?: SchedulerRunErrorSample[]
+	zombie_deactivated?: number
+	flat_merges_applied?: number
+	orphaned_relations?: number
+	trees_reviewed?: number
+	merges_applied?: number
+	moves_applied?: number
+	adopt_narrower_processed?: number
+	abstract_update_processed?: number
+	description_backfilled?: number
+	llm_calls_total?: number
+	llm_budget_total?: number
+	timed_out?: boolean
 }
 
 export interface SchedulerTriggerResult {

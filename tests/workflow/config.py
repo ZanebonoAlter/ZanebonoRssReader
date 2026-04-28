@@ -21,7 +21,6 @@ class TestConfig:
         "auto_refresh": 60,
         "firecrawl": 300,
         "ai_summary": 3600,
-        "auto_summary": 3600,
         "preference_update": 1800,
     }
 

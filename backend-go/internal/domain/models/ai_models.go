@@ -5,68 +5,6 @@ import (
 	"time"
 )
 
-type AISummary struct {
-	ID            uint             `gorm:"primaryKey" json:"id"`
-	FeedID        *uint            `gorm:"index" json:"feed_id"`
-	CategoryID    *uint            `gorm:"index" json:"category_id"`
-	Title         string           `gorm:"size:200;not null" json:"title"`
-	Summary       string           `gorm:"type:text;not null" json:"summary"`
-	KeyPoints     string           `gorm:"type:text" json:"key_points"`
-	Articles      string           `gorm:"type:text" json:"articles"`
-	ArticleCount  int              `gorm:"default:0" json:"article_count"`
-	TimeRange     int              `gorm:"default:180" json:"time_range"`
-	CreatedAt     time.Time        `json:"created_at"`
-	UpdatedAt     time.Time        `json:"updated_at"`
-	Feed          *Feed            `gorm:"foreignKey:FeedID" json:"feed,omitempty"`
-	Category      *Category        `gorm:"foreignKey:CategoryID" json:"category,omitempty"`
-	SummaryTopics []AISummaryTopic `gorm:"foreignKey:SummaryID" json:"summary_topics,omitempty"`
-}
-
-type AISummaryFeed struct {
-	ID           uint      `gorm:"primaryKey" json:"id"`
-	SummaryID    uint      `gorm:"not null;index" json:"summary_id"`
-	FeedID       uint      `gorm:"not null;index" json:"feed_id"`
-	FeedTitle    string    `gorm:"size:200" json:"feed_title"`
-	FeedIcon     string    `gorm:"size:50" json:"feed_icon"`
-	FeedColor    string    `gorm:"size:20" json:"feed_color"`
-	ArticleCount int       `gorm:"default:0" json:"article_count"`
-	CreatedAt    time.Time `json:"created_at"`
-}
-
-func (a *AISummary) ToDict() map[string]interface{} {
-	categoryName := "全部分类"
-	if a.Category != nil {
-		categoryName = a.Category.Name
-	}
-
-	feedName := ""
-	feedIcon := ""
-	feedColor := ""
-	if a.Feed != nil {
-		feedName = a.Feed.Title
-		feedIcon = a.Feed.Icon
-		feedColor = a.Feed.Color
-	}
-
-	return map[string]interface{}{
-		"id":            a.ID,
-		"feed_id":       a.FeedID,
-		"category_id":   a.CategoryID,
-		"title":         a.Title,
-		"summary":       a.Summary,
-		"key_points":    a.KeyPoints,
-		"articles":      a.Articles,
-		"article_count": a.ArticleCount,
-		"time_range":    a.TimeRange,
-		"created_at":    FormatDatetimeCST(a.CreatedAt),
-		"updated_at":    FormatDatetimeCST(a.UpdatedAt),
-		"category_name": categoryName,
-		"feed_name":     feedName,
-		"feed_icon":     feedIcon,
-		"feed_color":    feedColor,
-	}
-}
-
 type SchedulerTask struct {
 	ID                    uint       `gorm:"primaryKey" json:"id"`
 	Name                  string     `gorm:"size:50;unique;not null;index" json:"name"`
@@ -125,19 +63,20 @@ type AISettings struct {
 }
 
 type AIProvider struct {
-	ID             uint      `gorm:"primaryKey" json:"id"`
-	Name           string    `gorm:"size:100;unique;not null;index" json:"name"`
-	ProviderType   string    `gorm:"size:50;not null;default:openai_compatible;index" json:"provider_type"`
-	BaseURL        string    `gorm:"size:500;not null" json:"base_url"`
-	APIKey         string    `gorm:"type:text;not null" json:"api_key"`
-	Model          string    `gorm:"size:100;not null" json:"model"`
-	Enabled        bool      `gorm:"not null;default:true;index" json:"enabled"`
-	TimeoutSeconds int       `gorm:"not null;default:120" json:"timeout_seconds"`
-	MaxTokens      *int      `json:"max_tokens,omitempty"`
-	Temperature    *float64  `json:"temperature,omitempty"`
-	Metadata       string    `gorm:"type:text" json:"metadata"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID              uint      `gorm:"primaryKey" json:"id"`
+	Name            string    `gorm:"size:100;unique;not null;index" json:"name"`
+	ProviderType    string    `gorm:"size:50;not null;default:openai_compatible;index" json:"provider_type"`
+	BaseURL         string    `gorm:"size:500;not null" json:"base_url"`
+	APIKey          string    `gorm:"type:text;not null" json:"api_key"`
+	Model           string    `gorm:"size:100;not null" json:"model"`
+	Enabled         bool      `gorm:"not null;default:true;index" json:"enabled"`
+	TimeoutSeconds  int       `gorm:"not null;default:120" json:"timeout_seconds"`
+	MaxTokens       *int      `json:"max_tokens,omitempty"`
+	Temperature     *float64  `json:"temperature,omitempty"`
+	EnableThinking  bool      `gorm:"not null;default:false" json:"enable_thinking"`
+	Metadata        string    `gorm:"type:text" json:"metadata"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 func (AIProvider) TableName() string {
@@ -149,8 +88,10 @@ type AIRoute struct {
 	Name           string            `gorm:"size:100;not null;index:idx_ai_routes_capability_name,unique" json:"name"`
 	Capability     string            `gorm:"size:50;not null;index:idx_ai_routes_capability_name,unique;index" json:"capability"`
 	Enabled        bool              `gorm:"not null;default:true;index" json:"enabled"`
+	Priority       int               `gorm:"not null;default:100;index" json:"priority"`
 	Strategy       string            `gorm:"size:50;not null;default:ordered_failover" json:"strategy"`
 	Description    string            `gorm:"size:255" json:"description"`
+	MaxConcurrency int               `gorm:"not null;default:0" json:"max_concurrency"` // 0 means use default per capability
 	RouteProviders []AIRouteProvider `gorm:"foreignKey:RouteID" json:"route_providers,omitempty"`
 	CreatedAt      time.Time         `json:"created_at"`
 	UpdatedAt      time.Time         `json:"updated_at"`
@@ -176,17 +117,18 @@ func (AIRouteProvider) TableName() string {
 }
 
 type AICallLog struct {
-	ID           uint      `gorm:"primaryKey" json:"id"`
-	Capability   string    `gorm:"size:50;not null;index" json:"capability"`
-	RouteName    string    `gorm:"size:100;not null" json:"route_name"`
-	ProviderName string    `gorm:"size:100;not null" json:"provider_name"`
-	Success      bool      `gorm:"not null;index" json:"success"`
-	IsFallback   bool      `gorm:"not null;default:false" json:"is_fallback"`
-	LatencyMs    int       `json:"latency_ms"`
-	ErrorCode    string    `gorm:"size:100" json:"error_code"`
-	ErrorMessage string    `gorm:"type:text" json:"error_message"`
-	RequestMeta  string    `gorm:"type:text" json:"request_meta"`
-	CreatedAt    time.Time `json:"created_at"`
+	ID              uint      `gorm:"primaryKey" json:"id"`
+	Capability      string    `gorm:"size:50;not null;index" json:"capability"`
+	RouteName       string    `gorm:"size:100;not null" json:"route_name"`
+	ProviderName    string    `gorm:"size:100;not null" json:"provider_name"`
+	Success         bool      `gorm:"not null;index" json:"success"`
+	IsFallback      bool      `gorm:"not null;default:false" json:"is_fallback"`
+	LatencyMs       int       `json:"latency_ms"`
+	ErrorCode       string    `gorm:"size:100" json:"error_code"`
+	ErrorMessage    string    `gorm:"type:text" json:"error_message"`
+	RequestMeta     string    `gorm:"type:text" json:"request_meta"`
+	ResponseSnippet string    `gorm:"type:text" json:"response_snippet"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 func (AICallLog) TableName() string {

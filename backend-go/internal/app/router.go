@@ -6,11 +6,11 @@ import (
 	articlesdomain "my-robot-backend/internal/domain/articles"
 	categoriesdomain "my-robot-backend/internal/domain/categories"
 	contentprocessingdomain "my-robot-backend/internal/domain/contentprocessing"
-	digestdomain "my-robot-backend/internal/domain/digest"
 	feedsdomain "my-robot-backend/internal/domain/feeds"
+	narrativedomain "my-robot-backend/internal/domain/narrative"
 	preferencesdomain "my-robot-backend/internal/domain/preferences"
-	summariesdomain "my-robot-backend/internal/domain/summaries"
 	topicanalysisdomain "my-robot-backend/internal/domain/topicanalysis"
+	topicextractiondomain "my-robot-backend/internal/domain/topicextraction"
 	topicgraphdomain "my-robot-backend/internal/domain/topicgraph"
 	"my-robot-backend/internal/jobs"
 	"my-robot-backend/internal/platform/database"
@@ -82,10 +82,6 @@ func SetupRoutes(r *gin.Engine) {
 
 		ai := api.Group("/ai")
 		{
-			ai.POST("/summarize", summariesdomain.SummarizeArticle)
-			ai.POST("/test", summariesdomain.TestAIConnection)
-			ai.GET("/settings", summariesdomain.GetAISettings)
-			ai.POST("/settings", summariesdomain.SaveAISettings)
 			ai.GET("/providers", aiadmindomain.ListProviders)
 			ai.POST("/providers", aiadmindomain.UpsertProvider)
 			ai.PUT("/providers/:provider_id", aiadmindomain.UpdateProvider)
@@ -108,19 +104,6 @@ func SetupRoutes(r *gin.Engine) {
 			schedulers.POST("/:name/reset", jobs.ResetSchedulerStats)
 			schedulers.PUT("/:name/interval", jobs.UpdateSchedulerInterval)
 		}
-
-		summaries := api.Group("/summaries")
-		{
-			summaries.GET("", summariesdomain.GetSummaries)
-			summaries.GET("/:summary_id", summariesdomain.GetSummary)
-			summaries.DELETE("/:summary_id", summariesdomain.DeleteSummary)
-			summaries.POST("/queue", summariesdomain.SubmitQueueSummary)
-			summaries.GET("/queue/status", summariesdomain.GetQueueStatus)
-			summaries.GET("/queue/jobs/:job_id", summariesdomain.GetQueueJob)
-		}
-
-		api.GET("/auto-summary/status", summariesdomain.GetAutoSummaryStatus)
-		api.POST("/auto-summary/config", summariesdomain.UpdateAutoSummaryConfig)
 
 		readingBehavior := api.Group("/reading-behavior")
 		{
@@ -161,20 +144,18 @@ func SetupRoutes(r *gin.Engine) {
 			topicGraph.GET("/topic/:slug/articles", topicgraphdomain.GetTopicArticles)
 		}
 		topicanalysisdomain.RegisterAnalysisRoutes(topicGraph, topicanalysisdomain.GetAnalysisService(database.DB))
+		topicanalysisdomain.RegisterEmbeddingConfigRoutes(api)
+		topicanalysisdomain.RegisterEmbeddingQueueRoutes(api)
+		topicanalysisdomain.RegisterMergeReembeddingQueueRoutes(api)
+		topicanalysisdomain.RegisterAbstractTagUpdateQueueRoutes(api)
+		topicanalysisdomain.RegisterAdoptNarrowerQueueRoutes(api)
+		topicextractiondomain.RegisterTagQueueRoutes(api)
+		topicanalysisdomain.RegisterTagManagementRoutes(api)
+		topicanalysisdomain.RegisterWatchedTagsRoutes(api)
+		topicanalysisdomain.RegisterTagMergePreviewRoutes(api)
+		topicanalysisdomain.RegisterAbstractTagRoutes(api)
 
-		digestGroup := api.Group("/digest")
-		{
-			digestGroup.GET("/config", digestdomain.GetDigestConfig)
-			digestGroup.GET("/open-notebook/config", digestdomain.GetOpenNotebookConfig)
-			digestGroup.PUT("/open-notebook/config", digestdomain.UpdateOpenNotebookConfig)
-			digestGroup.POST("/open-notebook/:type", digestdomain.SendDigestToOpenNotebook)
-			digestGroup.GET("/status", digestdomain.GetDigestStatus)
-			digestGroup.GET("/preview/:type", digestdomain.GetDigestPreview)
-			digestGroup.PUT("/config", digestdomain.UpdateDigestConfig)
-			digestGroup.POST("/run/:type", digestdomain.RunDigestNow)
-			digestGroup.POST("/test-feishu", digestdomain.TestFeishuPush)
-			digestGroup.POST("/test-obsidian", digestdomain.TestObsidianWrite)
-		}
+		narrativedomain.RegisterNarrativeRoutes(api)
 
 		traceHandler := tracing.NewTraceHandler(database.DB)
 		traces := api.Group("/traces")

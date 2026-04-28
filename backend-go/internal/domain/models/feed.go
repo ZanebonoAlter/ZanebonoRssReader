@@ -10,7 +10,7 @@ type Feed struct {
 	Description           string     `gorm:"type:text" json:"description"`
 	URL                   string     `gorm:"size:500;unique;not null" json:"url"`
 	CategoryID            *uint      `gorm:"index" json:"category_id"`
-	Icon                  string     `gorm:"size:50;default:rss" json:"icon"`
+	Icon                  string     `gorm:"size:1000;default:rss" json:"icon"`
 	Color                 string     `gorm:"size:20;default:#8b5cf6" json:"color"`
 	LastUpdated           *time.Time `json:"last_updated"`
 	CreatedAt             time.Time  `json:"created_at"`
@@ -19,7 +19,7 @@ type Feed struct {
 	RefreshStatus         string     `gorm:"size:20;default:idle" json:"refresh_status"`
 	RefreshError          string     `gorm:"type:text" json:"refresh_error"`
 	LastRefreshAt         *time.Time `json:"last_refresh_at"`
-	AISummaryEnabled      bool       `gorm:"default:true" json:"ai_summary_enabled"`
+
 	ArticleSummaryEnabled bool       `gorm:"default:false" json:"article_summary_enabled"`
 	CompletionOnRefresh   bool       `gorm:"default:true" json:"completion_on_refresh"`
 	MaxCompletionRetries  int        `gorm:"default:3" json:"max_completion_retries"`
@@ -28,7 +28,16 @@ type Feed struct {
 	Category              *Category  `gorm:"foreignKey:CategoryID" json:"category,omitempty"`
 }
 
-func (f *Feed) ToDict(includeStats bool) map[string]interface{} {
+func (Feed) TableName() string {
+	return "feeds"
+}
+
+type FeedStats struct {
+	ArticleCount int
+	UnreadCount  int
+}
+
+func (f *Feed) ToDict(stats *FeedStats) map[string]interface{} {
 	data := map[string]interface{}{
 		"id":                      f.ID,
 		"title":                   f.Title,
@@ -44,23 +53,16 @@ func (f *Feed) ToDict(includeStats bool) map[string]interface{} {
 		"refresh_status":          f.RefreshStatus,
 		"refresh_error":           f.RefreshError,
 		"last_refresh_at":         FormatDatetimeCSTPtr(f.LastRefreshAt),
-		"ai_summary_enabled":      f.AISummaryEnabled,
+
 		"article_summary_enabled": f.ArticleSummaryEnabled,
 		"completion_on_refresh":   f.CompletionOnRefresh,
 		"max_completion_retries":  f.MaxCompletionRetries,
 		"firecrawl_enabled":       f.FirecrawlEnabled,
 	}
 
-	if includeStats {
-		articleCount := len(f.Articles)
-		unreadCount := 0
-		for _, a := range f.Articles {
-			if !a.Read {
-				unreadCount++
-			}
-		}
-		data["article_count"] = articleCount
-		data["unread_count"] = unreadCount
+	if stats != nil {
+		data["article_count"] = stats.ArticleCount
+		data["unread_count"] = stats.UnreadCount
 	}
 
 	return data

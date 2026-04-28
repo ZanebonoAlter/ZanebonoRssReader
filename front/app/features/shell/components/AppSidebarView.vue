@@ -1,9 +1,10 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { Icon } from '@iconify/vue'
 import { useRefreshPolling } from '~/features/feeds/composables/useRefreshPolling'
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from '~/utils/constants'
 import AppTooltip from '~/components/common/AppTooltip.vue'
 import FeedActionMenu from '~/components/feed/FeedActionMenu.vue'
+import type { WatchedTag } from '~/api/watchedTags'
 
 interface Props {
   sidebarCollapsed?: boolean
@@ -11,6 +12,8 @@ interface Props {
   selectedCategory?: string | null
   selectedFeed?: string | null
   globalUnreadCount?: number
+  watchedTags?: WatchedTag[]
+  selectedWatchedTagId?: string | null
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -19,6 +22,8 @@ const props = withDefaults(defineProps<Props>(), {
   selectedCategory: null,
   selectedFeed: null,
   globalUnreadCount: 0,
+  watchedTags: () => [],
+  selectedWatchedTagId: null,
 })
 
 const emit = defineEmits<{
@@ -27,8 +32,6 @@ const emit = defineEmits<{
   categoryClick: [categoryId: string]
   feedClick: [feedId: string]
   favoritesClick: []
-  aiSummariesClick: []
-  digestClick: []
   topicGraphClick: []
   allArticlesClick: []
   editCategory: [categoryId: string]
@@ -37,6 +40,8 @@ const emit = defineEmits<{
   markFeedAsRead: [feedId: string]
   startResizing: [event: MouseEvent]
   stopResizing: []
+  watchedTagsClick: []
+  watchedTagClick: [tagId: string]
 }>()
 
 const apiStore = useApiStore()
@@ -87,16 +92,6 @@ function handleFavoritesClick() {
   emit('favoritesClick')
 }
 
-function handleAISummariesClick() {
-  updateSelection('ai-summaries', null)
-  emit('aiSummariesClick')
-}
-
-function handleDigestClick() {
-  updateSelection('digest', null)
-  emit('digestClick')
-}
-
 function handleTopicGraphClick() {
   updateSelection('topic-graph', null)
   emit('topicGraphClick')
@@ -108,7 +103,7 @@ function handleAllArticlesClick() {
 }
 
 async function handleMarkFeedAsRead(feedId: string) {
-  const response = await apiStore.markAllAsRead(feedId)
+  const response = await apiStore.markAllAsRead({ feedId })
   if (!response.success) return
 
   const feed = feedsStore.feeds.find(f => f.id === feedId)
@@ -118,7 +113,48 @@ async function handleMarkFeedAsRead(feedId: string) {
 }
 
 import '~/components/layout/AppSidebar.css'
+
+const navigateTo = useNuxtApp().$router ? (path: string) => useNuxtApp().$router.push(path) : () => {}
 </script>
+
+<style scoped>
+.watched-tags-section {
+  padding: 0 0.5rem;
+}
+.watched-tags-header {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.5rem 0.5rem 0.25rem;
+}
+.sidebar-item--sm {
+  padding: 0.3rem 0.5rem;
+  font-size: 0.82rem;
+  gap: 0.4rem;
+}
+.watched-tags-empty {
+  padding: 0.5rem 0.5rem 0.75rem;
+  border-radius: 10px;
+  background: rgba(59, 107, 135, 0.06);
+  margin: 0.25rem 0;
+}
+.watched-tags-go-btn {
+  display: inline-block;
+  margin-top: 0.35rem;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid rgba(59, 107, 135, 0.25);
+  border-radius: 999px;
+  background: none;
+  color: var(--color-ink-600);
+  font-size: 0.72rem;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+.watched-tags-go-btn:hover {
+  background: rgba(59, 107, 135, 0.08);
+  border-color: rgba(59, 107, 135, 0.4);
+}
+</style>
 
 <template>
   <aside class="app-sidebar" :style="sidebarCollapsed ? 'width: 48px' : `width: ${sidebarWidth}px`">
@@ -137,20 +173,47 @@ import '~/components/layout/AppSidebar.css'
         <span v-if="!sidebarCollapsed && articlesStore.favoriteCount > 0" class="badge badge-amber">{{ articlesStore.favoriteCount }}</span>
       </button>
 
-      <button class="sidebar-item" :class="{ active: selectedCategory === 'ai-summaries' }" @click="handleAISummariesClick">
-        <Icon icon="mdi:brain" width="20" height="20" class="text-ink-600" />
-        <span v-if="!sidebarCollapsed" class="flex-1 text-left font-medium">AI 总结</span>
-      </button>
-
-      <button class="sidebar-item" :class="{ active: selectedCategory === 'digest' }" @click="handleDigestClick">
-        <Icon icon="mdi:newspaper-variant-multiple" width="20" height="20" class="text-ink-600" />
-        <span v-if="!sidebarCollapsed" class="flex-1 text-left font-medium">日报周报</span>
-      </button>
-
       <button class="sidebar-item" :class="{ active: selectedCategory === 'topic-graph' }" @click="handleTopicGraphClick">
         <Icon icon="mdi:graph-outline" width="20" height="20" class="text-ink-600" />
         <span v-if="!sidebarCollapsed" class="flex-1 text-left font-medium">主题图谱</span>
       </button>
+
+      <div v-if="!sidebarCollapsed" class="divider" />
+
+      <div v-if="!sidebarCollapsed" class="watched-tags-section">
+        <div class="watched-tags-header">
+          <Icon icon="mdi:heart-outline" width="14" class="text-ink-400" />
+          <span class="text-xs text-ink-400 font-medium">关注标签</span>
+        </div>
+
+        <template v-if="watchedTags.length > 0">
+          <button
+            class="sidebar-item sidebar-item--sm"
+            :class="{ active: selectedCategory === 'watched-tags' && !selectedWatchedTagId }"
+            @click="emit('watchedTagsClick')"
+          >
+            <Icon icon="mdi:heart-multiple" width="16" height="16" class="text-red-400" />
+            <span class="flex-1 text-left">全部关注</span>
+          </button>
+          <button
+            v-for="tag in watchedTags"
+            :key="tag.id"
+            class="sidebar-item sidebar-item--sm"
+            :class="{ active: selectedCategory === 'watched-tags' && selectedWatchedTagId === String(tag.id) }"
+            @click="emit('watchedTagClick', String(tag.id))"
+          >
+            <Icon :icon="tag.isAbstract ? 'mdi:tag-multiple' : 'mdi:tag'" width="16" height="16" :class="tag.isAbstract ? 'text-indigo-500' : 'text-ink-400'" />
+            <span class="flex-1 text-left truncate">{{ tag.label }}</span>
+          </button>
+        </template>
+
+        <div v-else class="watched-tags-empty">
+          <p class="text-xs text-ink-500">关注标签可获取个性化文章推送</p>
+          <button class="watched-tags-go-btn" @click="navigateTo('/topics')">
+            前往关注
+          </button>
+        </div>
+      </div>
 
       <div v-if="!sidebarCollapsed" class="divider" />
 

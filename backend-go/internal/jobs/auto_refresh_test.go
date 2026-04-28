@@ -3,24 +3,89 @@ package jobs
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
-	"my-robot-backend/internal/app/runtimeinfo"
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/ws"
 )
 
-type stubAutoSummaryTrigger struct {
-	triggered chan struct{}
+func TestAutoRefreshCompleteMessageJSON(t *testing.T) {
+	msg := ws.AutoRefreshCompleteMessage{
+		Type:            "auto_refresh_complete",
+		TriggeredFeeds:  3,
+		StaleResetFeeds: 1,
+		DurationSeconds: 2.5,
+		Timestamp:       "2026-04-11T04:20:00Z",
+	}
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("marshal auto refresh complete message: %v", err)
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("unmarshal auto refresh complete message: %v", err)
+	}
+
+	if payload["type"] != "auto_refresh_complete" {
+		t.Fatalf("type = %v, want auto_refresh_complete", payload["type"])
+	}
+	if payload["triggered_feeds"] != float64(3) {
+		t.Fatalf("triggered_feeds = %v, want 3", payload["triggered_feeds"])
+	}
+	if payload["stale_reset_feeds"] != float64(1) {
+		t.Fatalf("stale_reset_feeds = %v, want 1", payload["stale_reset_feeds"])
+	}
+	if payload["duration_seconds"] != 2.5 {
+		t.Fatalf("duration_seconds = %v, want 2.5", payload["duration_seconds"])
+	}
+	if payload["timestamp"] != "2026-04-11T04:20:00Z" {
+		t.Fatalf("timestamp = %v, want 2026-04-11T04:20:00Z", payload["timestamp"])
+	}
 }
 
-func (s stubAutoSummaryTrigger) TriggerNow() map[string]interface{} {
-	select {
-	case s.triggered <- struct{}{}:
-	default:
+func TestAutoRefreshCompleteBroadcastSource(t *testing.T) {
+	sourcePath := filepath.Join("auto_refresh.go")
+	content, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatalf("read %s: %v", sourcePath, err)
 	}
-	return map[string]interface{}{"accepted": true, "started": true}
+
+	source := string(content)
+
+	if !strings.Contains(source, `func (s *AutoRefreshScheduler) broadcastRefreshCompletion(startTime time.Time, summary *AutoRefreshRunSummary)`) {
+		t.Fatalf("broadcastRefreshCompletion should exist with startTime and summary params")
+	}
+	if !strings.Contains(source, `go s.broadcastRefreshCompletion(startTime, summary)`) {
+		t.Fatalf("runRefreshCycle should call broadcastRefreshCompletion in goroutine")
+	}
+	if !strings.Contains(source, `msg := ws.AutoRefreshCompleteMessage{`) {
+		t.Fatalf("broadcastRefreshCompletion should build ws.AutoRefreshCompleteMessage")
+	}
+	if !strings.Contains(source, `Type:            "auto_refresh_complete"`) {
+		t.Fatalf("completion broadcast should use auto_refresh_complete type")
+	}
+	if !strings.Contains(source, `TriggeredFeeds:  summary.TriggeredFeeds`) {
+		t.Fatalf("completion broadcast should include triggered feed count")
+	}
+	if !strings.Contains(source, `StaleResetFeeds: summary.StaleResetFeeds`) {
+		t.Fatalf("completion broadcast should include stale reset feed count")
+	}
+	if !strings.Contains(source, `DurationSeconds: duration`) {
+		t.Fatalf("completion broadcast should include duration seconds")
+	}
+	if !strings.Contains(source, `Timestamp:       time.Now().Format(time.RFC3339)`) {
+		t.Fatalf("completion broadcast should include RFC3339 timestamp")
+	}
+	if !strings.Contains(source, `ws.GetHub().BroadcastRaw(data)`) {
+		t.Fatalf("broadcastRefreshCompletion should broadcast raw websocket payload")
+	}
 }
 
 func TestAutoRefreshTriggerNowUpdatesSchedulerTaskAndFeedState(t *testing.T) {
@@ -82,52 +147,6 @@ func TestAutoRefreshTriggerNowUpdatesSchedulerTaskAndFeedState(t *testing.T) {
 	if refreshedFeed.RefreshStatus != "refreshing" {
 		t.Fatalf("refresh status = %q, want refreshing", refreshedFeed.RefreshStatus)
 	}
-	if refreshedFeed.LastRefreshAt == nil {
-		t.Fatal("expected last refresh timestamp to be set")
-	}
 }
 
-func TestAutoRefreshTriggerNowRunsAutoSummaryAfterTriggeredRefreshesFinish(t *testing.T) {
-	setupSchedulersTestDB(t)
 
-	triggered := make(chan struct{}, 1)
-	runtimeinfo.AutoSummarySchedulerInterface = stubAutoSummaryTrigger{triggered: triggered}
-	defer func() {
-		runtimeinfo.AutoSummarySchedulerInterface = nil
-	}()
-
-	feed := models.Feed{
-		Title:           "Due feed",
-		URL:             "https://example.com/rss",
-		RefreshInterval: 15,
-	}
-	if err := database.DB.Create(&feed).Error; err != nil {
-		t.Fatalf("create feed: %v", err)
-	}
-
-	refreshDone := make(chan struct{})
-	scheduler := &AutoRefreshScheduler{
-		checkInterval: time.Minute,
-		refreshFeed: func(ctx context.Context, feedID uint) error {
-			defer close(refreshDone)
-			return nil
-		},
-	}
-
-	result := scheduler.TriggerNow()
-	if result["accepted"] != true {
-		t.Fatalf("accepted = %v, want true", result["accepted"])
-	}
-
-	select {
-	case <-refreshDone:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for refresh to finish")
-	}
-
-	select {
-	case <-triggered:
-	case <-time.After(time.Second):
-		t.Fatal("expected auto summary trigger after refresh completion")
-	}
-}

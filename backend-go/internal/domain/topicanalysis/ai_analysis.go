@@ -33,7 +33,6 @@ type AnalysisParams struct {
 }
 
 type SummaryInfo struct {
-	SummaryID    uint64 `json:"summary_id"`
 	ArticleID    uint64 `json:"article_id,omitempty"`
 	Title        string `json:"title"`
 	Summary      string `json:"summary"`
@@ -338,7 +337,9 @@ func (s *AIAnalysisService) buildPrompt(params AnalysisParams) (string, error) {
 
 	lines := make([]string, 0, len(params.Summaries))
 	for idx, summary := range params.Summaries {
-		line := fmt.Sprintf("%d. [%s] %s\n%s", idx+1, summary.CreatedAt, strings.TrimSpace(summary.Title), strings.TrimSpace(summary.Summary))
+		title := truncateStr(strings.TrimSpace(summary.Title), 120)
+		content := truncateStr(strings.TrimSpace(summary.Summary), 300)
+		line := fmt.Sprintf("%d. [%s] %s\n%s", idx+1, summary.CreatedAt, title, content)
 		lines = append(lines, line)
 	}
 

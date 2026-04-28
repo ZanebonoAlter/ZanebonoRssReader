@@ -9,7 +9,7 @@
 - 内容补全怎样基于正文生成 `ai_content_summary`
 - 前端现在能通过哪些接口看到状态
 
-这份文档不讲 feed 聚合摘要 `ai_summaries`，那部分属于自动摘要与 digest 链路。
+这份文档只讲文章级内容处理链路，不涉及其他子系统。
 
 ## 当前真实链路
 
@@ -25,7 +25,7 @@ Feed refresh
   -> summary_status = complete
 ```
 
-一句话概括：当前内容处理链路的核心对象始终是 `articles` 表，Firecrawl 和内容补全都在给 article 补字段，不会直接生成 `ai_summaries`。
+一句话概括：当前内容处理链路的核心对象始终是 `articles` 表，Firecrawl 和内容补全都在给 article 补字段。
 
 ## 当前关键模块
 
@@ -178,15 +178,19 @@ Feed refresh
 前端可以通过 `GET /api/schedulers/status` 看这些调度器：
 
 - `auto_refresh`
-- `auto_summary`
 - `content_completion`
 - `firecrawl`
 - `preference_update`
 - `digest`
+- `blocked_article_recovery`
+- `tag_quality_score`
+- `narrative_summary`
 
 其中 `content_completion` 是文章级内容补全 scheduler，不是 feed 聚合摘要任务。
 
 为了兼容旧前端和旧调用，后端目前仍接受 `ai_summary` 作为 `content_completion` 的别名。
+
+`blocked_article_recovery` 调度器会定期恢复卡在 `processing` 状态的文章，将其重置为可重新处理的状态。
 
 ### 内容补全视角
 

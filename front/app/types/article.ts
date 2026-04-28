@@ -49,6 +49,9 @@ export interface ArticleFilters {
   search?: string
   start_date?: string
   end_date?: string
+  watched_tag_ids?: string
+  watched_tags?: boolean
+  sort_by?: 'relevance' | 'date'
 }
 
 export interface UpdateArticleData {
@@ -57,7 +60,10 @@ export interface UpdateArticleData {
 }
 
 export interface BulkUpdateArticlesData {
-  ids: number[]
+  ids?: number[]
+  feed_id?: number
+  category_id?: number
+  uncategorized?: boolean
   read?: boolean
   favorite?: boolean
 }

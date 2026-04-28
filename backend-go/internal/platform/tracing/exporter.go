@@ -4,7 +4,6 @@ import (
 	"context"
 	_ "encoding/json"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
@@ -13,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"gorm.io/gorm"
+	"my-robot-backend/internal/platform/logging"
 )
 
 type SQLiteSpanExporter struct {
@@ -114,7 +114,7 @@ func (e *SQLiteSpanExporter) batchInsert(records []OtelSpan) error {
 	return e.db.Transaction(func(tx *gorm.DB) error {
 		for _, record := range records {
 			if err := tx.Create(&record).Error; err != nil {
-				log.Printf("[tracing] failed to insert span: %v", err)
+				logging.Infof("[tracing] failed to insert span: %v", err)
 			}
 		}
 		return nil
@@ -139,11 +139,11 @@ func (e *SQLiteSpanExporter) cleanExpiredSpans() {
 	cutoff := time.Now().AddDate(0, 0, -e.cfg.RetentionDays)
 	result := e.db.Where("created_at < ?", cutoff).Delete(&OtelSpan{})
 	if result.Error != nil {
-		log.Printf("[tracing] failed to clean expired spans: %v", result.Error)
+		logging.Infof("[tracing] failed to clean expired spans: %v", result.Error)
 		return
 	}
 	if result.RowsAffected > 0 {
-		log.Printf("[tracing] cleaned up %d expired spans (retention: %d days)", result.RowsAffected, e.cfg.RetentionDays)
+		logging.Infof("[tracing] cleaned up %d expired spans (retention: %d days)", result.RowsAffected, e.cfg.RetentionDays)
 	}
 }
 

@@ -1,6 +1,7 @@
 package topicextraction
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -106,4 +107,38 @@ func findTopic(items []topictypes.TopicTag, label string) *topictypes.TopicTag {
 		}
 	}
 	return nil
+}
+
+func TestParseExtractedTagsFromRealOllamaResponse(t *testing.T) {
+	input := "```json\n[\n  {\n    \"label\": \"李飞飞\",\n    \"category\": \"person\",\n    \"confidence\": 1.0,\n    \"aliases\": [\"AI 教母\"],\n    \"evidence\": \"文中明确提到\"\n  },\n  {\n    \"label\": \"World Labs\",\n    \"category\": \"keyword\",\n    \"confidence\": 1.0,\n    \"aliases\": [\"世界模型团队\"],\n    \"evidence\": \"文中提到\"\n  },\n  {\n    \"label\": \"Spark 2.0\",\n    \"category\": \"keyword\",\n    \"confidence\": 1.0,\n    \"aliases\": [],\n    \"evidence\": \"文中多次提及\"\n  }\n]\n```"
+	parsed, err := parseExtractedTags(input)
+	require.NoError(t, err)
+	require.Len(t, parsed, 3)
+	require.Equal(t, "李飞飞", parsed[0].Label)
+	require.Equal(t, "person", parsed[0].Category)
+	require.Equal(t, "World Labs", parsed[1].Label)
+	require.Equal(t, "Spark 2.0", parsed[2].Label)
+}
+
+func TestParseExtractedTagsWithUnescapedQuotes(t *testing.T) {
+	input := `[{"label":"李飞飞","category":"person","confidence":1.0,"aliases":["AI 教母"],"evidence":"文中提到\"李飞飞团队\""},{"label":"World Labs","category":"keyword","confidence":1.0,"aliases":[],"evidence":"文中提到开源"}]`
+	parsed, err := parseExtractedTags(input)
+	require.NoError(t, err, "valid JSON should parse fine")
+	require.Len(t, parsed, 2)
+}
+
+func TestBuildExtractionSystemPromptLimitsAndOrdersTags(t *testing.T) {
+	prompt := buildExtractionSystemPrompt()
+
+	require.True(t, strings.Contains(prompt, "最多返回 5 个标签") || strings.Contains(prompt, "最多返回5个标签"))
+	require.True(t, strings.Contains(prompt, "按优先级从高到低排序") || strings.Contains(prompt, "按优先级排序"))
+}
+
+func TestFixBrokenJSONWithUnescapedQuotes(t *testing.T) {
+	input := `[{"label":"李飞飞","category":"person","confidence":1.0,"aliases":["AI 教母"],"evidence":"文中提到"李飞飞团队""},{"label":"World Labs","category":"keyword","confidence":1.0,"aliases":[],"evidence":"ok"}]`
+
+	parsed, err := parseExtractedTags(input)
+	require.NoError(t, err, "broken JSON with unescaped quotes should be auto-repaired")
+	require.Len(t, parsed, 2)
+	require.Equal(t, "李飞飞", parsed[0].Label)
 }

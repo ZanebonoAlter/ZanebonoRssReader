@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { Icon } from "@iconify/vue";
 import AIRouterSettingsPanel from '~/features/ai/components/AIRouterSettingsPanel.vue'
+import EmbeddingConfigPanel from '~/features/ai/components/EmbeddingConfigPanel.vue'
+import EmbeddingQueuePanel from '~/features/ai/components/EmbeddingQueuePanel.vue'
+import TagQueuePanel from '~/features/topic-graph/components/TagQueuePanel.vue'
 import type { RssFeed } from '~/types'
 import type { ReadingStats, UserPreference } from '~/types/reading_behavior'
 import type { SchedulerStatus, SchedulerTriggerResult } from '~/types/scheduler'
@@ -31,7 +34,7 @@ const apiStore = useApiStore()
 const feedsStore = useFeedsStore()
 const preferencesStore = usePreferencesStore()
 
-const activeTab = ref<'feeds' | 'categories' | 'general' | 'preferences' | 'firecrawl' | 'schedulers'>('feeds')
+const activeTab = ref<'feeds' | 'categories' | 'general' | 'queues' | 'preferences' | 'firecrawl' | 'schedulers'>('feeds')
 const loading = ref(false)
 const error = ref<string | null>(null)
 const success = ref<string | null>(null)
@@ -294,14 +297,6 @@ function getScoreColor(score: number): string {
   return 'bg-gray-400'
 }
 
-// Save AI summary settings
-async function saveAISummarySettings() {
-  success.value = 'AI 配置已迁移到 AI Router 面板，请在该模块里保存主模型和备用链。'
-  setTimeout(() => {
-    success.value = null
-  }, 2000)
-}
-
 // Test AI connection
 async function testAIConnection() {
   error.value = '连接测试已迁移到 AI Router 面板，请在那里直接测试主模型。'
@@ -399,10 +394,6 @@ function getAutoRefreshRunSummary(scheduler: SchedulerStatus) {
   return scheduler.last_run_summary?.scanned_feeds !== undefined ? scheduler.last_run_summary : null
 }
 
-function getAutoSummaryRunSummary(scheduler: SchedulerStatus) {
-  return scheduler.name === 'auto_summary' ? scheduler.last_run_summary : null
-}
-
 function getAutoRefreshReasonLabel(reason: string | undefined): string {
   switch (reason) {
     case 'feeds_triggered':
@@ -417,27 +408,6 @@ function getAutoRefreshReasonLabel(reason: string | undefined): string {
       return '查 feed 时就出错了。'
     default:
       return '这轮扫描已经结束。'
-  }
-}
-
-function getAutoSummaryReasonLabel(reason: string | undefined): string {
-  switch (reason) {
-    case 'manual_run_started':
-      return '这次是你手动点的。'
-    case 'summaries_generated':
-      return '这轮真的产出了新总结。'
-    case 'no_content_to_summarize':
-      return '有 feed，但这轮没凑出可总结内容。'
-    case 'no_feeds_enabled':
-      return '没有 feed 开着 AI 总结。'
-    case 'generation_failed':
-      return '这轮进去了，但中途有失败。'
-    case 'ai_config_missing':
-      return 'AI 配置没就位，所以不会开跑。'
-    case 'already_running':
-      return '它已经在跑了。'
-    default:
-      return '等下一轮状态回传。'
   }
 }
 
@@ -554,17 +524,17 @@ function formatNextRun(nextRun: string | null | undefined): string {
         </button>
         <button
           class="px-6 py-3 text-sm font-medium transition-colors"
-          :class="activeTab === 'categories' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:text-gray-700'"
-          @click="activeTab = 'categories'"
-        >
-          分类管理
-        </button>
-        <button
-          class="px-6 py-3 text-sm font-medium transition-colors"
           :class="activeTab === 'general' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:text-gray-700'"
           @click="activeTab = 'general'"
         >
           通用设置
+        </button>
+        <button
+          class="px-6 py-3 text-sm font-medium transition-colors"
+          :class="activeTab === 'queues' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:text-gray-700'"
+          @click="activeTab = 'queues'"
+        >
+          标签 & 队列
         </button>
         <button
           class="px-6 py-3 text-sm font-medium transition-colors"
@@ -746,11 +716,6 @@ function formatNextRun(nextRun: string | null | undefined): string {
           </div>
         </div>
 
-        <!-- Categories Management Tab -->
-        <div v-if="activeTab === 'categories'" class="space-y-4">
-          <p class="text-sm text-gray-500">分类管理功能开发中...</p>
-        </div>
-
         <!-- Reading Preferences Tab -->
         <div v-if="activeTab === 'preferences'" class="space-y-6">
           <!-- Loading State -->
@@ -919,9 +884,10 @@ function formatNextRun(nextRun: string | null | undefined): string {
         <!-- General Settings Tab -->
         <div v-if="activeTab === 'general'" class="space-y-6">
           <AIRouterSettingsPanel />
+          <EmbeddingConfigPanel />
 
           <!-- AI Podcast Settings -->
-          <div class="bg-gradient-to-br from-green-50 to-teal-50 rounded-xl p-6 border border-green-100">
+          <!-- <div class="bg-gradient-to-br from-green-50 to-teal-50 rounded-xl p-6 border border-green-100">
             <div class="flex items-start justify-between mb-4">
               <div class="flex items-center gap-3">
                 <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-green-500 to-teal-600 flex items-center justify-center">
@@ -948,7 +914,12 @@ function formatNextRun(nextRun: string | null | undefined): string {
               <Icon icon="mdi:information" width="16" height="16" class="text-green-600" />
               <span>AI 播客功能正在开发中，敬请期待...</span>
             </div>
-          </div>
+          </div> -->
+        </div>
+
+        <div v-if="activeTab === 'queues'" class="space-y-6">
+          <EmbeddingQueuePanel />
+          <TagQueuePanel />
         </div>
 
         <!-- Firecrawl Settings Tab -->
@@ -1226,38 +1197,44 @@ function formatNextRun(nextRun: string | null | undefined): string {
                 </div>
 
                 <div
-                  v-if="scheduler.name === 'auto_summary' && getAutoSummaryRunSummary(scheduler)"
-                  class="mt-4 rounded-2xl border border-ink-200 bg-gradient-to-br from-paper-cream via-white to-amber-50 p-4"
+                  v-if="scheduler.name === 'tag_hierarchy_cleanup' && scheduler.last_run_summary"
+                  class="mt-4 rounded-2xl border border-violet-200 bg-gradient-to-br from-violet-50 via-purple-50 to-white p-4"
                 >
                   <div class="flex items-start justify-between gap-4">
                     <div>
-                      <div class="text-sm font-semibold text-gray-900">自动总结状态</div>
+                      <div class="text-sm font-semibold text-gray-900">标签清理状态</div>
                       <p class="mt-1 text-xs text-gray-600">
-                        {{ getAutoSummaryReasonLabel(getAutoSummaryRunSummary(scheduler)?.reason || getSchedulerFeedback(scheduler.name)?.reason) }}
+                        僵尸清理 · 平级合并 · 树审查 · LLM 预算
                       </p>
                     </div>
-                    <div class="rounded-full border border-ink-200 bg-white px-3 py-1 text-xs font-medium text-ink-700">
-                      {{ scheduler.ai_configured ? 'AI 已配置' : 'AI 未配置' }}
+                    <div class="rounded-full border border-violet-200 bg-white px-3 py-1 text-xs font-medium text-violet-700">
+                      {{ formatDuration(scheduler.database_state.last_execution_duration) }}
                     </div>
                   </div>
 
                   <div class="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
-                    <div class="rounded-xl bg-white p-3 shadow-sm ring-1 ring-amber-100">
-                      <div class="text-xs text-gray-500">启用 feed</div>
-                      <div class="mt-1 text-2xl font-bold text-gray-900">{{ getAutoSummaryRunSummary(scheduler)?.feed_count ?? 0 }}</div>
+                    <div class="rounded-xl bg-white p-3 shadow-sm ring-1 ring-violet-100">
+                      <div class="text-xs text-gray-500">僵尸清理</div>
+                      <div class="mt-1 text-2xl font-bold text-gray-900">{{ scheduler.last_run_summary.zombie_deactivated ?? 0 }}</div>
                     </div>
-                    <div class="rounded-xl bg-white p-3 shadow-sm ring-1 ring-amber-100">
-                      <div class="text-xs text-gray-500">新总结</div>
-                      <div class="mt-1 text-2xl font-bold text-emerald-600">{{ getAutoSummaryRunSummary(scheduler)?.generated_count ?? 0 }}</div>
+                    <div class="rounded-xl bg-white p-3 shadow-sm ring-1 ring-violet-100">
+                      <div class="text-xs text-gray-500">平级合并</div>
+                      <div class="mt-1 text-2xl font-bold text-sky-700">{{ scheduler.last_run_summary.flat_merges_applied ?? 0 }}</div>
                     </div>
-                    <div class="rounded-xl bg-white p-3 shadow-sm ring-1 ring-amber-100">
-                      <div class="text-xs text-gray-500">跳过</div>
-                      <div class="mt-1 text-2xl font-bold text-stone-700">{{ getAutoSummaryRunSummary(scheduler)?.skipped_count ?? 0 }}</div>
+                    <div class="rounded-xl bg-white p-3 shadow-sm ring-1 ring-violet-100">
+                      <div class="text-xs text-gray-500">树审查</div>
+                      <div class="mt-1 text-2xl font-bold text-emerald-600">{{ scheduler.last_run_summary.trees_reviewed ?? 0 }}</div>
                     </div>
-                    <div class="rounded-xl bg-white p-3 shadow-sm ring-1 ring-amber-100">
-                      <div class="text-xs text-gray-500">失败</div>
-                      <div class="mt-1 text-2xl font-bold text-rose-600">{{ getAutoSummaryRunSummary(scheduler)?.failed_count ?? 0 }}</div>
+                    <div class="rounded-xl bg-white p-3 shadow-sm ring-1 ring-violet-100">
+                      <div class="text-xs text-gray-500">LLM 调用</div>
+                      <div class="mt-1 text-2xl font-bold" :class="scheduler.last_run_summary.timed_out ? 'text-rose-600' : 'text-violet-600'">
+                        {{ scheduler.last_run_summary.llm_calls_total ?? '-' }}
+                        <span class="text-xs text-gray-400">/ {{ scheduler.last_run_summary.llm_budget_total ?? '-' }}</span>
+                      </div>
                     </div>
+                  </div>
+                  <div v-if="scheduler.last_run_summary.timed_out" class="mt-2 text-xs text-rose-600">
+                    ⚠ 执行超时，部分阶段未完成
                   </div>
                 </div>
 

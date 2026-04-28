@@ -28,7 +28,12 @@ export interface TopicTag {
   kind?: TopicKind
   icon?: string
   aliases?: string[]
+  description?: string
   score: number
+  quality_score?: number
+  is_low_quality?: boolean
+  is_abstract?: boolean
+  child_slugs?: string[]
 }
 
 export interface AggregatedTopicTag {
@@ -53,6 +58,7 @@ export interface GraphNode {
   color?: string
   feed_name?: string
   category_name?: string
+  is_abstract?: boolean
 }
 
 export type TopicGraphNode = GraphNode
@@ -218,18 +224,18 @@ export interface TopicArticlesResponse {
   articles: Array<{
     id: string
     title: string
+    link: string
     summary: string
     content?: string
-    pubDate: string
-    feedName: string
-    feedId: string
+    pub_date: string
+    feed_name: string
+    feed_id: string
     tags: Array<{
       slug: string
       label: string
       category: TopicCategory
     }>
-    imageUrl?: string
-    link: string
+    image_url?: string
   }>
   total: number
   page: number
@@ -256,7 +262,7 @@ export function useTopicGraphApi() {
       }))
     },
 
-    async getTopicDetail(slug: string, type: TopicGraphType, date?: string, filters?: TopicGraphFilters) {
+    async getTopicDetail(slug: string, type?: TopicGraphType, date?: string, filters?: TopicGraphFilters) {
       return apiClient.get<TopicGraphDetailPayload>(withQuery(`/topic-graph/topic/${slug}`, {
         type,
         date,
@@ -310,7 +316,7 @@ export function useTopicGraphApi() {
       }))
     },
 
-    async getDigestsByArticleTag(slug: string, type: TopicGraphType, date?: string, limit?: number) {
+    async getDigestsByArticleTag(slug: string, type?: TopicGraphType, date?: string, limit?: number) {
       return apiClient.get<HotspotDigestsResponse>(withQuery(`/topic-graph/tag/${slug}/digests`, {
         type,
         date,
@@ -336,11 +342,113 @@ export function useTopicGraphApi() {
       )
     },
 
-    async getPendingArticlesByTag(slug: string, type: TopicGraphType, date?: string) {
+    async getPendingArticlesByTag(slug: string, type?: TopicGraphType, date?: string) {
       return apiClient.get<PendingArticlesResponse>(withQuery(`/topic-graph/tag/${slug}/pending-articles`, {
         type,
         date,
       }))
     },
+
+    async searchTags(query: string, category?: string, limit?: number) {
+      return apiClient.get<{ id: number; label: string; slug: string; category: string; feed_count: number }[]>(withQuery('/topic-tags/search', {
+        q: query,
+        category,
+        limit: limit ? String(limit) : undefined,
+      }))
+    },
+
+    async mergeTags(sourceTagId: number, targetTagId: number) {
+      return apiClient.post<{ source_id: number; target_id: number; target_label: string }>('/topic-tags/merge', {
+        source_tag_id: sourceTagId,
+        target_tag_id: targetTagId,
+      })
+    },
   }
+}
+
+export interface NarrativeItem {
+  id: number
+  title: string
+  summary: string
+  status: 'emerging' | 'continuing' | 'splitting' | 'merging' | 'ending'
+  period: string
+  period_date: string
+  generation: number
+  parent_ids: number[]
+  related_tags: { id: number; slug: string; label: string; category: TopicCategory; kind?: TopicKind }[]
+  child_ids: number[]
+}
+
+export interface NarrativeTimelineDay {
+  date: string
+  narratives: NarrativeItem[]
+}
+
+export interface NarrativeScopeCategory {
+  category_id: number
+  category_name: string
+  category_icon: string
+  category_color: string
+  narrative_count: number
+  last_generated_at: string
+}
+
+export interface NarrativeScopesResponse {
+  date: string
+  global_count: number
+  categories: NarrativeScopeCategory[]
+}
+
+export function useNarrativeApi() {
+  const getNarratives = async (date: string, scopeType?: string, categoryId?: number) => {
+    const params: Record<string, string | undefined> = { date }
+    if (scopeType) params.scope_type = scopeType
+    if (categoryId !== undefined) params.category_id = String(categoryId)
+    return apiClient.get<NarrativeItem[]>(
+      withQuery('/narratives', params)
+    )
+  }
+
+  const getNarrativeTimeline = async (date: string, days = 7, scopeType?: string, categoryId?: number) => {
+    const params: Record<string, string | undefined> = { date, days: String(days) }
+    if (scopeType) params.scope_type = scopeType
+    if (categoryId !== undefined) params.category_id = String(categoryId)
+    return apiClient.get<NarrativeTimelineDay[]>(
+      withQuery('/narratives/timeline', params)
+    )
+  }
+
+  const getNarrativeHistory = async (id: number) => {
+    return apiClient.get<NarrativeItem[]>(
+      `/narratives/${id}/history`
+    )
+  }
+
+  const deleteNarratives = async (date: string, scopeType?: string, categoryId?: number) => {
+    const params: Record<string, string | undefined> = { date }
+    if (scopeType) params.scope_type = scopeType
+    if (categoryId !== undefined) params.category_id = String(categoryId)
+    return apiClient.delete<{ deleted: number }>(
+      withQuery('/narratives', params)
+    )
+  }
+
+  const getNarrativeScopes = async (date: string) => {
+    return apiClient.get<NarrativeScopesResponse>(
+      `/narratives/scopes?date=${date}`
+    )
+  }
+
+  const regenerateNarratives = async (date: string, scopeType?: string, categoryId?: number) => {
+    return apiClient.post<{ saved: number }>(
+      '/narratives/regenerate',
+      {
+        date,
+        scope_type: scopeType || undefined,
+        category_id: categoryId !== undefined ? categoryId : undefined,
+      }
+    )
+  }
+
+  return { getNarratives, getNarrativeTimeline, getNarrativeHistory, deleteNarratives, getNarrativeScopes, regenerateNarratives }
 }

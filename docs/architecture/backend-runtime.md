@@ -5,28 +5,37 @@
 当前 Go 后端真实启动顺序在 `backend-go/cmd/server/main.go`，顺序如下：
 
 1. `config.LoadConfig("./configs")` 读取配置
-2. `database.InitDB(config.AppConfig)` 初始化 SQLite、建表和索引
+2. `database.InitDB(config.AppConfig)` 初始化 PostgreSQL、建表和索引
 3. `digest.Migrate()` 执行 digest 相关迁移
 4. `airouter.EnsureLegacySummaryConfigMigrated()` 把旧摘要配置迁到 AI route 体系
-5. 根据配置切换 Gin `debug/release` 模式
-6. 创建 `gin.Engine`，挂载 CORS 与 Recovery
-7. `app.SetupRoutes(r)` 注册 HTTP 与 WebSocket 路由
-8. `app.StartRuntime()` 启动后台 scheduler 与内容补全服务
-9. `app.SetupGracefulShutdown(runtime)` 注册优雅退出
-10. `r.Run(:port)` 开始监听
+5. `tracing.InitTracerProvider(database.DB, traceCfg)` 初始化 OpenTelemetry tracing
+6. 根据配置切换 Gin `debug/release` 模式
+7. 创建 `gin.Engine`，挂载 CORS 与 Recovery、otelgin 中间件
+8. `app.SetupRoutes(r)` 注册 HTTP 与 WebSocket 路由
+9. `app.StartRuntime()` 启动后台 scheduler 与内容补全服务
+10. `app.SetupGracefulShutdown(runtime)` 注册优雅退出
+11. `r.Run(:port)` 开始监听
 
 所以 `cmd/server` 现在只是薄入口，真正的运行时装配已经集中在 `internal/app/`。
 
 ## Runtime 里实际启动了什么
 
-`backend-go/internal/app/runtime.go` 里定义的 `Runtime` 目前会启动 6 类后台任务：
+`backend-go/internal/app/runtime.go` 里定义的 `Runtime` 目前会启动 10 类后台任务：
 
 - `AutoRefresh`：扫描到点 feed 并触发刷新
-- `AutoSummary`：按 feed 生成聚合摘要 `ai_summaries`
 - `PreferenceUpdate`：更新阅读偏好
 - `ContentCompletion`：基于 Firecrawl 正文生成文章级摘要
 - `Firecrawl`：抓取文章完整正文
-- `Digest`：daily / weekly digest cron
+- `BlockedArticleRecovery`：恢复因 Firecrawl 配置变更等原因阻塞的文章
+- `AutoTagMerge`：基于 embedding 相似度自动合并相似标签
+- `TagQualityScore`：重算 `topic_tags.quality_score`
+- `NarrativeSummary`：基于活跃主题标签生成每日叙事摘要
+
+此外还会启动以下异步队列 worker：
+
+- `topicextraction.GetTagQueue().Start()`：文章标签异步打标队列
+- `topicanalysis.StartEmbeddingQueueWorker()`：标签 embedding 向量化队列
+- `topicanalysis.StartMergeReembeddingQueueWorker()`：合并后 re-embedding 队列
 
 对应启动逻辑也都在 `StartRuntime()` 里，不存在额外的隐藏入口。
 
@@ -37,11 +46,12 @@
 现在真正挂进去的是这些：
 
 - `AutoRefreshSchedulerInterface`
-- `AutoSummarySchedulerInterface`
 - `PreferenceUpdateSchedulerInterface`
 - `AISummarySchedulerInterface`
 - `FirecrawlSchedulerInterface`
-- `DigestSchedulerInterface`
+- `AutoTagMergeSchedulerInterface`
+- `TagQualityScoreSchedulerInterface`
+- `NarrativeSummarySchedulerInterface`
 
 这里仍有一个命名差异要讲清楚：
 
@@ -52,10 +62,12 @@
 `StartRuntime()` 里目前写死了几组默认间隔：
 
 - `auto_refresh`：60 秒检查一次
-- `auto_summary`：3600 秒检查一次
 - `preference_update`：1800 秒检查一次
-- `content_completion`：60 分钟检查一次
-- `digest`：按数据库里的 daily / weekly 时间配置生成 cron
+- `content_completion`：60 秒检查一次
+- `firecrawl`：轮询
+- `blocked_article_recovery`：3600 秒检查一次
+- `tag_quality_score`：3600 秒检查一次
+- `narrative_summary`：86400 秒检查一次（每天一次）
 
 同时内容补全服务会先读取 `CRAWL_SERVICE_URL`：
 
@@ -78,7 +90,6 @@
 - `/api/categories`：分类 CRUD
 - `/api/feeds`：订阅 CRUD、单 feed 刷新、批量刷新、feed 预览抓取
 - `/api/articles`：文章列表、详情、统计、单条/批量状态更新
-- `/api/summaries`：摘要列表、详情、删除、队列任务
 - `/api/reading-behavior`：阅读行为上报与统计
 - `/api/user-preferences`：偏好查询与手动更新
 
@@ -90,19 +101,14 @@
 - `/api/ai/routes`：AI capability route 管理
 - `/api/content-completion`：文章级内容补全触发、状态与总览
 - `/api/firecrawl`：单文章抓取、feed Firecrawl 开关、状态、配置保存
-- `/api/auto-summary/status`：自动摘要状态
-- `/api/auto-summary/config`：自动摘要配置更新
 
 ### 主题与 digest API
 
-- `/api/topic-graph`：图谱、topic 详情、按分类聚合、topic 相关文章、相关 digest
+- `/api/topic-graph`：图谱、topic 详情、按分类聚合、topic 相关文章、相关 digest、pending 文章
 - `/api/topic-graph/analysis`：topic analysis 查询、状态、重建
-- `/api/digest/config`：digest 配置
-- `/api/digest/status`：digest scheduler 状态
-- `/api/digest/preview/:type`：daily / weekly 预览
-- `/api/digest/run/:type`：手动执行 digest 输出
-- `/api/digest/open-notebook/*`：Open Notebook 配置与发送
-- `/api/digest/test-feishu` / `/api/digest/test-obsidian`：输出链路测试
+- `/api/embedding`：embedding 配置与队列管理
+- `/api/topic-tags`：关注标签、标签合并预览、抽象标签管理
+- `/api/narratives`：叙事摘要列表、详情、历史
 
 ### Scheduler API
 
@@ -117,11 +123,12 @@
 这组 API 现在统一覆盖：
 
 - `auto_refresh`
-- `auto_summary`
 - `preference_update`
 - `content_completion`
 - `firecrawl`
-- `digest`
+- `tag_quality_score`
+- `narrative_summary`
+- `tag_hierarchy_cleanup`
 
 另外保留一个兼容别名：
 
@@ -129,10 +136,9 @@
 
 但能力不是完全对称的：
 
-- `auto_refresh`、`auto_summary`、`preference_update`、`content_completion`、`firecrawl` 支持统一状态查询
-- `auto_refresh`、`auto_summary`、`preference_update`、`content_completion`、`firecrawl` 支持统一 trigger
-- `auto_refresh`、`auto_summary`、`preference_update`、`content_completion`、`firecrawl` 支持 `reset` / `interval`
-- `digest` 现在被纳入统一状态总线，但手动运行与配置变更仍以 `/api/digest/*` 为主，`trigger/reset/interval` 不作为主控制面
+- `auto_refresh`、`preference_update`、`content_completion`、`firecrawl`、`tag_quality_score`、`narrative_summary`、`tag_hierarchy_cleanup` 支持统一状态查询
+- `auto_refresh`、`preference_update`、`content_completion`、`firecrawl`、`tag_quality_score`、`narrative_summary`、`tag_hierarchy_cleanup` 支持统一 trigger
+- `auto_refresh`、`preference_update`、`content_completion`、`firecrawl`、`tag_quality_score`、`narrative_summary`、`tag_hierarchy_cleanup` 支持 `reset` / `interval`
 
 ## Scheduler 状态现在能看到什么
 
@@ -149,7 +155,7 @@
 
 ### 数据库存档状态
 
-`auto_refresh`、`auto_summary`、`content_completion` 会把最近一轮执行结果写进 `scheduler_tasks`，包含：
+`auto_refresh`、`content_completion`、`tag_quality_score`、`narrative_summary`、`tag_hierarchy_cleanup` 会把最近一轮执行结果写进 `scheduler_tasks`，包含：
 
 - `last_execution_time`
 - `next_execution_time`
@@ -182,30 +188,16 @@
 4. `AutoRefreshScheduler` 执行扫描，结果写回 `scheduler_tasks.last_execution_result`
 5. 前端再查 `/api/schedulers/auto_refresh/status` 就能看到最近一轮扫描摘要
 
-### 链路 3：自动摘要配置热更新
-
-1. 前端调用 `POST /api/auto-summary/config`
-2. `summaries.UpdateAutoSummaryConfig` 先写 `aisettings` 和 AI route 兼容配置
-3. 如果 runtime 里存在 `AutoSummarySchedulerInterface`，会直接调用 `SetAIConfig(...)`
-4. 新配置无需重启进程即可生效在下一轮 `auto_summary` 执行中
-
-### 链路 4：digest 配置更新后重载 cron
-
-1. 前端调用 `PUT /api/digest/config`
-2. `digest.UpdateDigestConfig` 校验时间格式和 weekday
-3. 配置写回数据库
-4. 如果 runtime 里存在 `DigestSchedulerInterface`，则立即调用 `Reload()`
-5. 新的 daily / weekly cron 表达式当场替换旧计划
+### 链路 3：内容补全状态更新
 
 ## 这次补上的闭环
 
 当前运行时已经补齐了这些缺口：
 
-- `/api/tasks/status` 不再是固定占位，而是聚合 `summary_queue`、`content_completion`、`firecrawl` 的实时工作量
+- `/api/tasks/status` 不再是固定占位，而是聚合 `content_completion`、`firecrawl` 的实时工作量
 - `ResetSchedulerStats` 会真实清空支持调度器的统计状态；其中持久化调度器会同步重置 `scheduler_tasks`
-- `UpdateSchedulerInterval` 会真实更新运行中的调度器间隔，而不是只返回“重启后生效”文案
+- `UpdateSchedulerInterval` 会真实更新运行中的调度器间隔，而不是只返回"重启后生效"文案
 - `PreferenceUpdateScheduler` 已挂入统一 runtime registry，也能从 `/api/schedulers/*` 查询和触发
-- `/api/schedulers/status` 现在包含 `digest` 状态，`/api/digest/status` 变成 digest 侧的兼容专用入口
 - 调度器对外使用 `content_completion` 作为规范名，同时继续兼容旧名 `ai_summary`
 
 还保留的边界主要有两点：
@@ -222,14 +214,19 @@
 
 收到信号后会按顺序停止：
 
-- `AutoRefresh`
-- `AutoSummary`
-- `PreferenceUpdate`
-- `ContentCompletion`
-- `Firecrawl`
-- `Digest`
+- TagQueue
+- EmbeddingQueueWorker
+- MergeReembeddingQueueWorker
+- AutoRefresh
+- PreferenceUpdate
+- ContentCompletion
+- Firecrawl
+- BlockedArticleRecovery
+- AutoTagMerge
+- TagQualityScore
+- NarrativeSummary
 
-最后直接 `os.Exit(0)`。当前没有额外的 HTTP server drain 或任务持久化恢复逻辑，所以更准确的说法是“基础优雅退出”，不是复杂的停机编排。
+最后等待 30 秒超时后 `os.Exit(0)`。当前没有额外的 HTTP server drain 或任务持久化恢复逻辑，所以更准确的说法是“基础优雅退出”，不是复杂的停机编排。
 
 ## 读代码建议
 
@@ -239,9 +236,7 @@
 2. `backend-go/internal/app/router.go`
 3. `backend-go/internal/app/runtime.go`
 4. `backend-go/internal/jobs/handler.go`
-5. `backend-go/internal/jobs/auto_refresh.go`
-6. `backend-go/internal/jobs/auto_summary.go`
-7. `backend-go/internal/jobs/content_completion.go`
-8. `backend-go/internal/domain/digest/handler.go`
-
+5. `backend-go/internal/jobs/content_completion.go`
+6. `backend-go/internal/jobs/narrative_summary.go`
+7. `backend-go/internal/jobs/tag_hierarchy_cleanup.go`
 再回到 `docs/architecture/backend-go.md` 看业务分层，会比较容易把“启动装配”和“业务链路”对上。

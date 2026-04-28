@@ -1,23 +1,43 @@
 package jobs
 
 import (
+	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"my-robot-backend/internal/app/runtimeinfo"
 	"my-robot-backend/internal/domain/models"
-	"my-robot-backend/internal/domain/summaries"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/logging"
 )
 
 type UpdateSchedulerIntervalRequest struct {
 	Interval int `json:"interval" binding:"required"`
 }
 
+type SchedulerStatusResponse struct {
+	Name                   string                 `json:"name"`
+	Status                 string                 `json:"status"`
+	CheckInterval          int64                  `json:"check_interval"`
+	NextRun                int64                  `json:"next_run"`
+	IsExecuting            bool                   `json:"is_executing"`
+	Description            string                 `json:"description,omitempty"`
+	DatabaseState          map[string]interface{} `json:"database_state,omitempty"`
+	Overview               map[string]interface{} `json:"overview,omitempty"`
+	LastRunSummary         interface{}            `json:"last_run_summary,omitempty"`
+	CurrentArticle         interface{}            `json:"current_article,omitempty"`
+	LastProcessed          interface{}            `json:"last_processed,omitempty"`
+	LiveProcessingCount    int                    `json:"live_processing_count,omitempty"`
+	StaleProcessingCount   int                    `json:"stale_processing_count,omitempty"`
+	StaleProcessingArticle interface{}            `json:"stale_processing_article,omitempty"`
+	AIConfigured           bool                   `json:"ai_configured,omitempty"`
+}
+
 type schedulerDescriptor struct {
 	Name        string
+	DisplayName string
 	Aliases     []string
 	Description string
 	TaskName    string
@@ -28,6 +48,7 @@ func schedulerDescriptors() []schedulerDescriptor {
 	return []schedulerDescriptor{
 		{
 			Name:        "auto_refresh",
+			DisplayName: "Auto Refresh",
 			Description: "Auto-refresh RSS feeds",
 			TaskName:    "auto_refresh",
 			Get: func() interface{} {
@@ -35,15 +56,8 @@ func schedulerDescriptors() []schedulerDescriptor {
 			},
 		},
 		{
-			Name:        "auto_summary",
-			Description: "Auto-generate AI summaries for feeds",
-			TaskName:    "auto_summary",
-			Get: func() interface{} {
-				return runtimeinfo.AutoSummarySchedulerInterface
-			},
-		},
-		{
 			Name:        "preference_update",
+			DisplayName: "Preference Update",
 			Description: "Update reading preferences from behavior data",
 			Get: func() interface{} {
 				return runtimeinfo.PreferenceUpdateSchedulerInterface
@@ -51,25 +65,44 @@ func schedulerDescriptors() []schedulerDescriptor {
 		},
 		{
 			Name:        "content_completion",
+			DisplayName: "Content Completion",
 			Aliases:     []string{"ai_summary"},
 			Description: "Complete article content and generate article summaries",
 			TaskName:    "ai_summary",
 			Get: func() interface{} {
-				return runtimeinfo.AISummarySchedulerInterface
+				return runtimeinfo.ContentCompletionSchedulerInterface
 			},
 		},
 		{
 			Name:        "firecrawl",
+			DisplayName: "Firecrawl Crawler",
 			Description: "Auto-crawl full content for articles",
 			Get: func() interface{} {
 				return runtimeinfo.FirecrawlSchedulerInterface
 			},
 		},
 		{
-			Name:        "digest",
-			Description: "Run digest cron schedules",
+			Name:        "tag_quality_score",
+			DisplayName: "Tag Quality Score",
+			Description: "Recompute persistent quality scores for topic tags",
 			Get: func() interface{} {
-				return runtimeinfo.DigestSchedulerInterface
+				return runtimeinfo.TagQualityScoreSchedulerInterface
+			},
+		},
+		{
+			Name:        "narrative_summary",
+			DisplayName: "Narrative Summary",
+			Description: "Generate daily narrative summaries from active topic tags",
+			Get: func() interface{} {
+				return runtimeinfo.NarrativeSummarySchedulerInterface
+			},
+		},
+		{
+			Name:        "tag_hierarchy_cleanup",
+			DisplayName: "Tag Hierarchy Cleanup",
+			Description: "Auto-cleanup deep tag hierarchies by merging duplicates and creating abstract tags",
+			Get: func() interface{} {
+				return runtimeinfo.TagHierarchyCleanupSchedulerInterface
 			},
 		},
 	}
@@ -89,33 +122,39 @@ func resolveScheduler(name string) (*schedulerDescriptor, interface{}) {
 	return nil, nil
 }
 
-func safeGetStatus(scheduler interface{}, name, description string) map[string]interface{} {
+func safeGetStatus(scheduler interface{}, displayName string) *SchedulerStatusResponse {
 	if scheduler == nil {
 		return nil
 	}
 
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("Panic in %s scheduler GetStatus: %v", name, r)
+			logging.Errorf("Panic in %s scheduler GetStatus: %v", displayName, r)
 		}
 	}()
 
-	if status, ok := scheduler.(interface{ GetStatus() map[string]interface{} }); ok {
+	if status, ok := scheduler.(interface {
+		GetStatus() SchedulerStatusResponse
+	}); ok {
 		result := status.GetStatus()
-		if result != nil {
-			result["name"] = name
-			result["description"] = description
-			return result
-		}
+		result = normalizeSchedulerStatus(result, displayName)
+		return &result
+	}
+
+	if legacy, ok := scheduler.(interface{ GetStatus() map[string]interface{} }); ok {
+		result := schedulerStatusFromMap(legacy.GetStatus(), displayName)
+		return &result
 	}
 	return nil
 }
 
 func GetSchedulersStatus(c *gin.Context) {
-	schedulers := make([]map[string]interface{}, 0)
+	schedulers := make([]SchedulerStatusResponse, 0)
 	for _, descriptor := range schedulerDescriptors() {
-		if status := safeGetStatus(descriptor.Get(), descriptor.Name, descriptor.Description); status != nil {
-			schedulers = append(schedulers, status)
+		scheduler := descriptor.Get()
+		if status := safeGetStatus(scheduler, descriptor.DisplayName); status != nil {
+			enrichStatus(scheduler, descriptor, status)
+			schedulers = append(schedulers, *status)
 		}
 	}
 
@@ -133,11 +172,8 @@ func GetSchedulerStatus(c *gin.Context) {
 		return
 	}
 
-	if status := safeGetStatus(scheduler, descriptor.Name, descriptor.Description); status != nil {
-		if name != descriptor.Name {
-			status["requested_name"] = name
-			status["alias_of"] = descriptor.Name
-		}
+	if status := safeGetStatus(scheduler, descriptor.DisplayName); status != nil {
+		enrichStatus(scheduler, *descriptor, status)
 		c.JSON(http.StatusOK, gin.H{"success": true, "data": status})
 		return
 	}
@@ -153,13 +189,21 @@ func TriggerScheduler(c *gin.Context) {
 		return
 	}
 
+	if triggerable, ok := scheduler.(interface {
+		TriggerNowWithDate(dateStr string) map[string]interface{}
+	}); ok {
+		dateStr := c.Query("date")
+		respondTriggerResult(c, descriptor.Name, triggerable.TriggerNowWithDate(dateStr))
+		return
+	}
+
 	if triggerable, ok := scheduler.(interface{ TriggerNow() map[string]interface{} }); ok {
 		respondTriggerResult(c, descriptor.Name, triggerable.TriggerNow())
 		return
 	}
 
 	if triggerable, ok := scheduler.(interface{ Trigger() }); ok {
-		log.Printf("Triggering %s scheduler manually", descriptor.Name)
+		logging.Infof("Triggering %s scheduler manually", descriptor.Name)
 		triggerable.Trigger()
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
@@ -266,25 +310,7 @@ func GetTasksStatus(c *gin.Context) {
 	queueSize := 0
 	activeTasks := 0
 
-	if batch := summaries.GetSummaryQueue().GetCurrentBatch(); batch != nil {
-		pendingJobs := batch.TotalJobs - batch.CompletedJobs - batch.FailedJobs
-		if pendingJobs < 0 {
-			pendingJobs = 0
-		}
-		queueSize += pendingJobs
-		activeTasks++
-		tasks = append(tasks, gin.H{
-			"type":           "summary_queue",
-			"status":         batch.Status,
-			"batch_id":       batch.ID,
-			"total_jobs":     batch.TotalJobs,
-			"completed_jobs": batch.CompletedJobs,
-			"failed_jobs":    batch.FailedJobs,
-			"pending_jobs":   pendingJobs,
-		})
-	}
-
-	if status := safeGetStatus(runtimeinfo.AISummarySchedulerInterface, "content_completion", "Complete article content and generate article summaries"); status != nil {
+	if status := safeGetTaskStatus(runtimeinfo.ContentCompletionSchedulerInterface); status != nil {
 		if overview, ok := status["overview"].(map[string]interface{}); ok {
 			pendingCount := asInt(overview["pending_count"])
 			processingCount := asInt(overview["processing_count"])
@@ -302,7 +328,7 @@ func GetTasksStatus(c *gin.Context) {
 		}
 	}
 
-	if status := safeGetStatus(runtimeinfo.FirecrawlSchedulerInterface, "firecrawl", "Auto-crawl full content for articles"); status != nil {
+	if status := safeGetTaskStatus(runtimeinfo.FirecrawlSchedulerInterface); status != nil {
 		queueCount := asInt(status["queue_size"])
 		processingCount := asInt(status["processing"])
 		if queueCount > 0 || processingCount > 0 {
@@ -325,6 +351,118 @@ func GetTasksStatus(c *gin.Context) {
 			"tasks":        tasks,
 		},
 	})
+}
+
+func safeGetTaskStatus(scheduler interface{}) map[string]interface{} {
+	if scheduler == nil {
+		return nil
+	}
+
+	if status, ok := scheduler.(interface{ GetTaskStatusDetails() map[string]interface{} }); ok {
+		return status.GetTaskStatusDetails()
+	}
+
+	if legacy, ok := scheduler.(interface{ GetStatus() map[string]interface{} }); ok {
+		return legacy.GetStatus()
+	}
+
+	return nil
+}
+
+func enrichStatus(scheduler interface{}, descriptor schedulerDescriptor, status *SchedulerStatusResponse) {
+	status.Name = descriptor.Name
+	status.Description = descriptor.Description
+
+	if detailer, ok := scheduler.(interface{ GetTaskStatusDetails() map[string]interface{} }); ok {
+		details := detailer.GetTaskStatusDetails()
+		if details == nil {
+			return
+		}
+		if v, ok := details["database_state"].(map[string]interface{}); ok {
+			status.DatabaseState = v
+		}
+		if v, ok := details["overview"].(map[string]interface{}); ok {
+			status.Overview = v
+		}
+		if v, ok := details["last_run_summary"]; ok && v != nil {
+			status.LastRunSummary = v
+		}
+		if v, ok := details["current_article"]; ok && v != nil {
+			status.CurrentArticle = v
+		}
+		if v, ok := details["last_processed"]; ok && v != nil {
+			status.LastProcessed = v
+		}
+		if v, ok := details["live_processing_count"]; ok {
+			if n, ok := v.(int); ok && n > 0 {
+				status.LiveProcessingCount = n
+			}
+		}
+		if v, ok := details["stale_processing_count"]; ok {
+			if n, ok := v.(int); ok && n > 0 {
+				status.StaleProcessingCount = n
+			}
+		}
+		if v, ok := details["stale_processing_article"]; ok && v != nil {
+			status.StaleProcessingArticle = v
+		}
+		if v, ok := details["ai_configured"]; ok {
+			if b, ok := v.(bool); ok {
+				status.AIConfigured = b
+			}
+		}
+		return
+	}
+
+	taskName := descriptor.TaskName
+	if taskName == "" {
+		taskName = descriptor.Name
+	}
+	var task models.SchedulerTask
+	if err := database.DB.Where("name = ?", taskName).First(&task).Error; err == nil {
+		status.DatabaseState = task.ToDict()
+		if task.LastExecutionResult != "" {
+			var summary interface{}
+			if err := json.Unmarshal([]byte(task.LastExecutionResult), &summary); err == nil {
+				status.LastRunSummary = summary
+			}
+		}
+	}
+}
+
+func normalizeSchedulerStatus(status SchedulerStatusResponse, displayName string) SchedulerStatusResponse {
+	if status.Name == "" {
+		status.Name = displayName
+	}
+	return status
+}
+
+func schedulerStatusFromMap(status map[string]interface{}, displayName string) SchedulerStatusResponse {
+	if status == nil {
+		return SchedulerStatusResponse{Name: displayName}
+	}
+
+	response := SchedulerStatusResponse{
+		Name:        displayName,
+		Status:      asString(status["status"]),
+		NextRun:     toUnixTimestamp(status["next_run"]),
+		IsExecuting: asBool(status["is_executing"]),
+	}
+	if response.Status == "" {
+		if asBool(status["running"]) {
+			response.Status = "running"
+		} else {
+			response.Status = "idle"
+		}
+	}
+	if name := asString(status["name"]); name != "" {
+		response.Name = name
+	}
+	response.CheckInterval = asInt64(status["check_interval"])
+	if !response.IsExecuting && response.Status == "running" {
+		response.IsExecuting = true
+	}
+	return response
 }
 
 func resetSchedulerTask(taskName string) error {
@@ -357,6 +495,71 @@ func asInt(value interface{}) int {
 		return int(typed)
 	case float64:
 		return int(typed)
+	default:
+		return 0
+	}
+}
+
+func asInt64(value interface{}) int64 {
+	switch typed := value.(type) {
+	case int:
+		return int64(typed)
+	case int32:
+		return int64(typed)
+	case int64:
+		return typed
+	case float64:
+		return int64(typed)
+	default:
+		return 0
+	}
+}
+
+func asString(value interface{}) string {
+	if typed, ok := value.(string); ok {
+		return typed
+	}
+	return ""
+}
+
+func asBool(value interface{}) bool {
+	if typed, ok := value.(bool); ok {
+		return typed
+	}
+	return false
+}
+
+func toUnixTimestamp(value interface{}) int64 {
+	switch typed := value.(type) {
+	case nil:
+		return 0
+	case int:
+		return int64(typed)
+	case int32:
+		return int64(typed)
+	case int64:
+		return typed
+	case float64:
+		return int64(typed)
+	case time.Time:
+		if typed.IsZero() {
+			return 0
+		}
+		return typed.Unix()
+	case *time.Time:
+		if typed == nil || typed.IsZero() {
+			return 0
+		}
+		return typed.Unix()
+	case string:
+		if typed == "" {
+			return 0
+		}
+		parsed, err := time.Parse(time.RFC3339, typed)
+		if err != nil {
+			return 0
+		}
+		return parsed.Unix()
 	default:
 		return 0
 	}

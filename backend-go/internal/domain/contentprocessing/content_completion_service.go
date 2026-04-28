@@ -196,10 +196,11 @@ func (s *ContentCompletionService) CompleteArticleWithMetadata(ctx context.Conte
 	}
 
 	if err := topicextraction.NewTagJobQueue(database.DB).Enqueue(topicextraction.TagJobRequest{
-		ArticleID:  article.ID,
-		FeedName:   feed.Title,
-		ForceRetag: true,
-		Reason:     "summary_completed",
+		ArticleID:    article.ID,
+		FeedName:     feed.Title,
+		CategoryName: topicextraction.FeedCategoryName(feed),
+		ForceRetag:   false,
+		Reason:       "summary_completed",
 	}); err != nil {
 		return fmt.Errorf("enqueue retag job after completion: %w", err)
 	}
@@ -241,7 +242,7 @@ func (s *ContentCompletionService) ListReadyArticles(limit int) ([]models.Articl
 		Where("articles.firecrawl_status = ?", "completed").
 		Where("feeds.article_summary_enabled = ?", true).
 		Where("articles.summary_status = ? OR (articles.summary_status = ? AND (articles.summary_processing_started_at IS NULL OR articles.summary_processing_started_at <= ?))", "incomplete", "pending", staleBefore).
-		Omit("tag_count").
+		Omit("tag_count", "relevance_score").
 		Preload("Feed")
 
 	if limit > 0 {
@@ -257,7 +258,7 @@ func (s *ContentCompletionService) ListReadyArticles(limit int) ([]models.Articl
 
 func (s *ContentCompletionService) CheckAndMarkIncompleteArticles(feedID uint) (int, error) {
 	var articles []models.Article
-	if err := database.DB.Omit("tag_count").Where("feed_id = ?", feedID).Find(&articles).Error; err != nil {
+	if err := database.DB.Omit("tag_count", "relevance_score").Where("feed_id = ?", feedID).Find(&articles).Error; err != nil {
 		return 0, err
 	}
 

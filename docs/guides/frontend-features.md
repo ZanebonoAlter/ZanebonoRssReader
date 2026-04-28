@@ -1,10 +1,11 @@
-﻿# 前端功能说明
+# 前端功能说明
 
 ## 页面入口
 
 - 主阅读页：`/`
 - Digest 总览：`/digest`
 - Digest 单视图：`/digest/daily`、`/digest/weekly`
+- Digest 详情：`/digest/[id]`
 - Topic Graph：`/topics`
 
 ## 主阅读页
@@ -48,7 +49,7 @@
 - 删除分类
 - 分类可配置名称、图标、颜色、描述
 
-删除分类时，主界面文案明确说明“不删除该分类下订阅源”。
+删除分类时，主界面文案明确说明"不删除该分类下订阅源"。
 
 ### Feed
 
@@ -107,6 +108,10 @@ feed 还带这些能力开关：
 
 如果已经有 `aiContentSummary`，会优先展示 AI 整理稿。
 
+### 文章标签
+
+文章会展示由 AI 提取的 topic tags，支持标签合并、抽象层级和标签质量评分。
+
 ## AI 总结
 
 AI 总结列表在主阅读页中栏展示，详情在右栏展示。
@@ -126,6 +131,14 @@ AI 总结列表在主阅读页中栏展示，详情在右栏展示。
 - 发起多分类批量总结任务
 - 通过 WebSocket 实时显示队列进度
 - 支持失败任务错误展开
+
+### AI Provider 管理
+
+通过 Web UI 管理 AI Provider 和路由：
+
+- 配置多个 AI Provider（不同 base URL、API key、model）
+- 为不同能力（摘要、内容补全、话题分析等）配置路由
+- 支持测试连接
 
 ### 依赖
 
@@ -169,10 +182,36 @@ Digest 设置支持：
 
 - 日报开关和时间
 - 周报开关、星期和时间
-- 飞书推送开关与 webhook
+- 飞书推送开关与 webhook（支持摘要/详情两种推送模式）
 - Obsidian 导出开关与 vault 路径
+- Open Notebook 发送配置
 - 测试飞书
 - 测试 Obsidian
+
+## Topic Graph
+
+Topic Graph 是独立页面，不走主阅读页三栏壳。
+
+### 页面能力
+
+- 支持 `daily / weekly` 切换
+- 支持按锚点日期刷新图谱
+- 支持 3D topic/feed 图谱浏览
+- 支持热点标签分组浏览（事件 / 人物 / 关键词）
+- 支持 topic 详情、相关标签、相关文章
+- 支持按标签反查相关 digest
+- 支持底部 AI analysis 面板与历史面板
+- 支持文章预览，且复用 `ArticleContentView`
+- 支持标签层级视图和抽象标签浏览
+- 支持标签质量评分和低质量标签过滤
+
+### 数据链路特点
+
+- 图谱主体、热点分类、topic detail 是分开拉取的
+- 点击热点标签后，时间线会优先切到反查 digest 结果
+- 底部 analysis 面板会按 topic 类型自动加载对应 analysis
+
+更完整的组件分层和数据流说明见 `docs/guides/topic-graph.md`。
 
 ## 视觉与交互约束
 
@@ -191,26 +230,5 @@ Digest 设置支持：
 - WebSocket 只用于 AI 总结队列进度
 - Digest 详情里的文章弹窗直接复用主阅读组件
 - 文章内容源切换和 Firecrawl 状态已经进主阅读链路
-
-## Topic Graph
-
-Topic Graph 是独立页面，不走主阅读页三栏壳。
-
-### 页面能力
-
-- 支持 `daily / weekly` 切换
-- 支持按锚点日期刷新图谱
-- 支持 3D topic/feed 图谱浏览
-- 支持热点标签分组浏览（事件 / 人物 / 关键词）
-- 支持 topic 详情、相关标签、相关文章
-- 支持按标签反查相关 digest
-- 支持底部 AI analysis 面板与历史面板
-- 支持文章预览，且复用 `ArticleContentView`
-
-### 数据链路特点
-
-- 图谱主体、热点分类、topic detail 是分开拉取的
-- 点击热点标签后，时间线会优先切到反查 digest 结果
-- 底部 analysis 面板会按 topic 类型自动加载对应 analysis
-
-更完整的组件分层和数据流说明见 `docs/guides/topic-graph.md`。
+- 文章标签展示已进入主阅读链路和 Topic Graph 文章预览
+- AI Provider 和路由管理通过 `/api/ai/providers` 和 `/api/ai/routes` 端点管理

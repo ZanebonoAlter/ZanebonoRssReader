@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { buildTopicGraphViewModel } from './buildTopicGraphViewModel'
 
 describe('buildTopicGraphViewModel', () => {
-  it('sorts spotlight topics by weight and filters weak edges', () => {
+  it('prefers quality_score for top topics and shrinks low-quality nodes', () => {
     const viewModel = buildTopicGraphViewModel({
       type: 'daily',
       anchor_date: '2026-03-11',
@@ -12,8 +12,8 @@ describe('buildTopicGraphViewModel', () => {
       article_count: 2,
       feed_count: 2,
       top_topics: [
-        { label: 'OpenAI', slug: 'openai', category: 'keyword', score: 2.4 },
-        { label: 'AI Agent', slug: 'ai-agent', category: 'keyword', score: 2.9 },
+        { label: 'OpenAI', slug: 'openai', category: 'keyword', score: 2.9, quality_score: 0.22, is_low_quality: true },
+        { label: 'AI Agent', slug: 'ai-agent', category: 'keyword', score: 2.4, quality_score: 0.88 },
       ],
       nodes: [
         { id: 'ai-agent', label: 'AI Agent', slug: 'ai-agent', kind: 'topic', weight: 5.2, article_count: 2 },
@@ -30,8 +30,55 @@ describe('buildTopicGraphViewModel', () => {
     expect(viewModel.stats.heroLabel).toBe('AI Agent')
     expect(viewModel.graph.edges).toHaveLength(2)
     expect(viewModel.graph.nodes[0]!.size).toBeGreaterThan(viewModel.graph.nodes[2]!.size)
+    expect(viewModel.graph.nodes.find(node => node.id === 'ai-agent')?.size).toBeGreaterThan(viewModel.graph.nodes.find(node => node.id === 'openai')?.size ?? 0)
+    expect(viewModel.graph.nodes.find(node => node.id === 'ai-agent')?.opacity).toBeGreaterThan(viewModel.graph.nodes.find(node => node.id === 'openai')?.opacity ?? 0)
     expect(viewModel.graph.featuredNodeIds).toContain('ai-agent')
     expect(viewModel.graph.featuredNodeIds).toContain('openai')
+  })
+
+  it('falls back to weight when quality_score is missing', () => {
+    const viewModel = buildTopicGraphViewModel({
+      type: 'daily',
+      anchor_date: '2026-03-11',
+      period_label: '2026-03-11 当日',
+      topic_count: 2,
+      article_count: 2,
+      feed_count: 0,
+      top_topics: [
+        { label: 'Alpha', slug: 'alpha', category: 'keyword', score: 1.2 },
+      ],
+      nodes: [
+        { id: 'alpha', label: 'Alpha', slug: 'alpha', kind: 'topic', weight: 5.2, article_count: 2 },
+        { id: 'beta', label: 'Beta', slug: 'beta', kind: 'topic', weight: 3.1, article_count: 1 },
+      ],
+      edges: [],
+    })
+
+    expect(viewModel.graph.nodes.find(node => node.id === 'alpha')?.size).toBeGreaterThan(viewModel.graph.nodes.find(node => node.id === 'beta')?.size ?? 0)
+    expect(viewModel.graph.nodes.find(node => node.id === 'alpha')?.opacity).toBe(0.98)
+  })
+
+  it('keeps abstract tags visible even when marked low quality', () => {
+    const viewModel = buildTopicGraphViewModel({
+      type: 'daily',
+      anchor_date: '2026-03-11',
+      period_label: '2026-03-11 当日',
+      topic_count: 2,
+      article_count: 2,
+      feed_count: 0,
+      top_topics: [
+        { label: 'Parent', slug: 'parent', category: 'keyword', score: 0.8, quality_score: 0.12, is_low_quality: false, is_abstract: true },
+        { label: 'Child', slug: 'child', category: 'keyword', score: 1.1, quality_score: 0.18, is_low_quality: true },
+      ],
+      nodes: [
+        { id: 'parent', label: 'Parent', slug: 'parent', kind: 'topic', weight: 2.2, article_count: 2, is_abstract: true },
+        { id: 'child', label: 'Child', slug: 'child', kind: 'topic', weight: 2.6, article_count: 2 },
+      ],
+      edges: [],
+    })
+
+    expect(viewModel.topTopics[0]?.slug).toBe('child')
+    expect(viewModel.graph.nodes.find(node => node.id === 'parent')?.isAbstract).toBe(true)
   })
 
   it('derives trunk node from top topic and classifies emphasis levels', () => {
@@ -157,6 +204,58 @@ describe('buildTopicGraphViewModel', () => {
     expect(viewModel.graph.nodes.find(node => node.id === 'sam-altman')?.accent).toBe('#10b981')
     expect(viewModel.graph.nodes.find(node => node.id === 'ai-agent')?.accent).toBe('#6366f1')
     expect(viewModel.graph.nodes.find(node => node.id === 'feed-1')?.accent).toBe('#3b6b87')
+  })
+
+  it('propagates is_abstract to isAbstract on scene nodes', () => {
+    const viewModel = buildTopicGraphViewModel({
+      type: 'daily',
+      anchor_date: '2026-03-11',
+      period_label: '2026-03-11 当日',
+      topic_count: 3,
+      article_count: 2,
+      feed_count: 1,
+      top_topics: [
+        { label: 'AI Agent', slug: 'ai-agent', category: 'keyword', score: 2.9 },
+      ],
+      nodes: [
+        { id: 'ai-agent', label: 'AI Agent', slug: 'ai-agent', kind: 'topic', weight: 5.2, article_count: 2, is_abstract: true },
+        { id: 'openai', label: 'OpenAI', slug: 'openai', kind: 'topic', weight: 4.1, article_count: 2 },
+        { id: 'feed-1', label: 'OpenAI Blog', kind: 'feed', weight: 1.8, color: '#3b6b87', feed_name: 'OpenAI Blog', category_name: 'AI' },
+      ],
+      edges: [
+        { id: 'ai-agent::openai', source: 'ai-agent', target: 'openai', kind: 'topic_topic', weight: 2.2 },
+      ],
+    })
+
+    // Abstract node should have isAbstract = true
+    const abstractNode = viewModel.graph.nodes.find(n => n.id === 'ai-agent')
+    expect(abstractNode?.isAbstract).toBe(true)
+
+    // Non-abstract nodes should have isAbstract = false
+    const normalNode = viewModel.graph.nodes.find(n => n.id === 'openai')
+    expect(normalNode?.isAbstract).toBe(false)
+
+    // Feed nodes should also have isAbstract = false
+    const feedNode = viewModel.graph.nodes.find(n => n.id === 'feed-1')
+    expect(feedNode?.isAbstract).toBe(false)
+  })
+
+  it('defaults isAbstract to false when is_abstract is undefined', () => {
+    const viewModel = buildTopicGraphViewModel({
+      type: 'daily',
+      anchor_date: '2026-03-11',
+      period_label: '2026-03-11 当日',
+      topic_count: 1,
+      article_count: 1,
+      feed_count: 0,
+      top_topics: [],
+      nodes: [
+        { id: 'topic-1', label: 'Topic', slug: 'topic-1', kind: 'topic', weight: 3.0 },
+      ],
+      edges: [],
+    })
+
+    expect(viewModel.graph.nodes[0]?.isAbstract).toBe(false)
   })
 
   it('handles trunk derivation when hero does not match any node', () => {

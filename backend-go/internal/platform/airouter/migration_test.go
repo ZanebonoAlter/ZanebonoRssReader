@@ -11,10 +11,9 @@ import (
 func TestEnsureLegacySummaryConfigMigratedCreatesDefaultProviderAndRoutes(t *testing.T) {
 	db := setupAIRouterTestDB(t)
 	require.NoError(t, aisettings.SaveSummaryConfig(map[string]interface{}{
-		"base_url":   "https://api.example/v1",
-		"api_key":    "token",
-		"model":      "gpt-test",
-		"time_range": 180,
+		"base_url": "https://api.example/v1",
+		"api_key":  "token",
+		"model":    "gpt-test",
 	}, "legacy summary config"))
 
 	require.NoError(t, EnsureLegacySummaryConfigMigrated())
@@ -25,9 +24,5 @@ func TestEnsureLegacySummaryConfigMigratedCreatesDefaultProviderAndRoutes(t *tes
 
 	var routeCount int64
 	require.NoError(t, db.Model(&models.AIRoute{}).Count(&routeCount).Error)
-	require.GreaterOrEqual(t, routeCount, int64(4))
-
-	autoConfig, _, err := aisettings.LoadAutoSummaryConfig()
-	require.NoError(t, err)
-	require.Equal(t, float64(180), autoConfig["time_range"])
+	require.GreaterOrEqual(t, routeCount, int64(3))
 }

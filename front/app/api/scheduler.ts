@@ -1,39 +1,10 @@
 import type { ApiResponse } from '~/types'
 import type { SchedulerStatus, SchedulerTriggerResult } from '~/types/scheduler'
-import { API_BASE_URL } from '~/utils/constants'
 import { apiClient } from './client'
 
-async function triggerSchedulerRequest(name: string): Promise<ApiResponse<SchedulerTriggerResult>> {
-  try {
-    const response = await fetch(`${API_BASE_URL}/schedulers/${name}/trigger`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    })
-
-    const body = await response.json()
-
-    if (!response.ok) {
-      return {
-        success: false,
-        error: body.error || body.message || '触发失败',
-        message: body.message,
-        data: body.data,
-      }
-    }
-
-    return {
-      success: true,
-      data: body.data,
-      message: body.message,
-    }
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : '网络错误',
-    }
-  }
+async function triggerSchedulerRequest(name: string, params?: Record<string, string>): Promise<ApiResponse<SchedulerTriggerResult>> {
+  const query = params ? '?' + new URLSearchParams(params).toString() : ''
+  return apiClient.post<SchedulerTriggerResult>(`/schedulers/${name}/trigger${query}`, {})
 }
 
 export function useSchedulerApi() {
@@ -46,8 +17,8 @@ export function useSchedulerApi() {
       return apiClient.get<SchedulerStatus>(`/schedulers/${name}/status`)
     },
 
-    async triggerScheduler(name: string) {
-      return triggerSchedulerRequest(name)
+    async triggerScheduler(name: string, params?: Record<string, string>) {
+      return triggerSchedulerRequest(name, params)
     },
 
     async resetSchedulerStats(name: string) {

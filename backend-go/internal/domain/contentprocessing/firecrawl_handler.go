@@ -92,10 +92,11 @@ func CrawlArticle(c *gin.Context) {
 	article.FirecrawlCrawledAt = &now
 	database.DB.Save(&article)
 	_ = topicextraction.NewTagJobQueue(database.DB).Enqueue(topicextraction.TagJobRequest{
-		ArticleID:  article.ID,
-		FeedName:   feed.Title,
-		ForceRetag: true,
-		Reason:     "manual_firecrawl_completed",
+		ArticleID:    article.ID,
+		FeedName:     feed.Title,
+		CategoryName: topicextraction.FeedCategoryName(feed),
+		ForceRetag:   true,
+		Reason:       "manual_firecrawl_completed",
 	})
 
 	c.JSON(http.StatusOK, gin.H{

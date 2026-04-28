@@ -1,14 +1,13 @@
 package ws
 
 import (
-	"encoding/json"
-	"log"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"my-robot-backend/internal/platform/logging"
 )
 
 var upgrader = websocket.Upgrader{
@@ -33,18 +32,6 @@ type Client struct {
 	hub  *Hub
 	conn *websocket.Conn
 	send chan []byte
-}
-
-// SummaryProgressMessage 总结进度消息
-type SummaryProgressMessage struct {
-	Type       string      `json:"type"` // "progress"
-	BatchID    string      `json:"batch_id"`
-	Status     string      `json:"status"` // pending/processing/completed
-	TotalJobs  int         `json:"total_jobs"`
-	Completed  int         `json:"completed_jobs"`
-	Failed     int         `json:"failed_jobs"`
-	CurrentJob *JobUpdate  `json:"current_job,omitempty"`
-	Jobs       []JobUpdate `json:"jobs,omitempty"` // 所有任务列表
 }
 
 // JobUpdate 单个任务更新
@@ -81,6 +68,59 @@ type FirecrawlArticleProgress struct {
 	Error  string `json:"error,omitempty"`
 }
 
+// TagCompletedMessage 标签完成通知消息
+type TagCompletedMessage struct {
+	Type      string             `json:"type"` // "tag_completed"
+	ArticleID uint               `json:"article_id"`
+	JobID     uint               `json:"job_id"`
+	Tags      []TagCompletedItem `json:"tags"`
+}
+
+// TagCompletedItem 单个标签信息
+type TagCompletedItem struct {
+	Slug     string  `json:"slug"`
+	Label    string  `json:"label"`
+	Category string  `json:"category"`
+	Score    float64 `json:"score"`
+	Icon     string  `json:"icon"`
+}
+
+// TagFailedMessage 标签任务失败通知消息
+type TagFailedMessage struct {
+	Type      string `json:"type"` // "tag_failed"
+	ArticleID uint   `json:"article_id"`
+	JobID     uint   `json:"job_id"`
+	Error     string `json:"error"`
+}
+
+// AutoRefreshCompleteMessage Auto-refresh 完成通知消息
+type AutoRefreshCompleteMessage struct {
+	Type            string  `json:"type"`
+	TriggeredFeeds  int     `json:"triggered_feeds"`
+	StaleResetFeeds int     `json:"stale_reset_feeds"`
+	DurationSeconds float64 `json:"duration_seconds"`
+	Timestamp       string  `json:"timestamp"`
+}
+
+// OrganizeProgressMessage 标签整理进度消息
+type OrganizeProgressMessage struct {
+	Type             string             `json:"type"`
+	Status           string             `json:"status"`
+	TotalUnclassified int               `json:"total_unclassified"`
+	Processed         int               `json:"processed"`
+	CurrentGroup      *OrganizeGroupInfo `json:"current_group,omitempty"`
+	Groups            []OrganizeGroupInfo `json:"groups,omitempty"`
+	Category          string             `json:"category,omitempty"`
+}
+
+// OrganizeGroupInfo 单个整理分组信息
+type OrganizeGroupInfo struct {
+	NewLabel       string  `json:"new_label"`
+	CandidateCount int     `json:"candidate_count"`
+	Action         string  `json:"action"`
+	Similarity     float64 `json:"similarity,omitempty"`
+}
+
 var hubInstance *Hub
 var hubOnce sync.Once
 
@@ -106,7 +146,7 @@ func (h *Hub) run() {
 			h.mu.Lock()
 			h.clients[client] = true
 			h.mu.Unlock()
-			log.Printf("WebSocket客户端已连接，当前连接数: %d", len(h.clients))
+			logging.Infof("WebSocket客户端已连接，当前连接数: %d", len(h.clients))
 
 		case client := <-h.unregister:
 			h.mu.Lock()
@@ -115,7 +155,7 @@ func (h *Hub) run() {
 				close(client.send)
 			}
 			h.mu.Unlock()
-			log.Printf("WebSocket客户端已断开，当前连接数: %d", len(h.clients))
+			logging.Infof("WebSocket客户端已断开，当前连接数: %d", len(h.clients))
 
 		case message := <-h.broadcast:
 			h.mu.RLock()
@@ -141,28 +181,12 @@ func (h *Hub) run() {
 	}
 }
 
-// BroadcastProgress 广播进度更新
-func (h *Hub) BroadcastProgress(msg *SummaryProgressMessage) {
-	data, err := json.Marshal(msg)
-	if err != nil {
-		log.Printf("序列化进度消息失败: %v", err)
-		return
-	}
-
-	select {
-	case h.broadcast <- data:
-	default:
-		// 广播通道满，丢弃消息
-		log.Printf("广播通道已满，丢弃消息")
-	}
-}
-
 // BroadcastRaw 广播原始JSON数据
 func (h *Hub) BroadcastRaw(data []byte) {
 	select {
 	case h.broadcast <- data:
 	default:
-		log.Printf("广播通道已满，丢弃消息")
+		logging.Warnf("广播通道已满，丢弃消息")
 	}
 }
 
@@ -170,7 +194,7 @@ func (h *Hub) BroadcastRaw(data []byte) {
 func HandleWebSocket(c *gin.Context) {
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
-		log.Printf("WebSocket升级失败: %v", err)
+		logging.Warnf("WebSocket升级失败: %v", err)
 		return
 	}
 
@@ -205,7 +229,7 @@ func (c *Client) readPump() {
 		_, _, err := c.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("WebSocket读取错误: %v", err)
+				logging.Warnf("WebSocket读取错误: %v", err)
 			}
 			break
 		}
@@ -230,7 +254,7 @@ func (c *Client) writePump() {
 
 			c.conn.SetWriteDeadline(getDeadline())
 			if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
-				log.Printf("WebSocket写入失败: %v", err)
+				logging.Warnf("WebSocket写入失败: %v", err)
 				return
 			}
 		}

@@ -3,12 +3,17 @@ server:
   mode: "debug"
 
 database:
-  driver: "sqlite"
-  dsn: "rss_reader.db"
+  driver: "postgres"
+  dsn: "host=127.0.0.1 user=postgres password=postgres dbname=rss_reader port=5432 sslmode=disable TimeZone=Asia/Shanghai"
+  postgres:
+    max_idle_conns: 5
+    max_open_conns: 25
+    conn_max_lifetime_minutes: 60
+    conn_max_idle_time_minutes: 10
 
 cors:
   origins:
-    - "http://localhost:3001"
+    - "http://localhost:3000"
     - "http://localhost:3000"
   methods:
     - "GET"

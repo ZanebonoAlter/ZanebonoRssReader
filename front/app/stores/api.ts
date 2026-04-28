@@ -1,9 +1,8 @@
-import type { Category, RssFeed, Article } from '~/types'
+import type { Category, RssFeed, Article, BulkUpdateArticlesData } from '~/types'
 import { useCategoriesApi } from '~/api/categories'
 import { useFeedsApi } from '~/api/feeds'
 import { useArticlesApi } from '~/api/articles'
 import { useOpmlApi } from '~/api/opml'
-import { useSummariesApi } from '~/api/summaries'
 import { normalizeArticle } from '~/features/articles/utils/normalizeArticle'
 
 export const useApiStore = defineStore('api', () => {
@@ -221,6 +220,35 @@ export const useApiStore = defineStore('api', () => {
   const articles = ref<Article[]>([])
   const totalArticles = ref(0)
 
+  function syncFeedUnreadCount(feedId: string, updateCount: (current: number) => number) {
+    const seen = new Set<RssFeed>()
+
+    for (const collection of [feeds.value, allFeeds.value]) {
+      const feed = collection.find(item => item.id === feedId)
+      if (!feed || seen.has(feed)) {
+        continue
+      }
+
+      feed.unreadCount = updateCount(feed.unreadCount ?? 0)
+      seen.add(feed)
+    }
+  }
+
+  function clearFeedUnreadCounts(matchFeed: (feed: RssFeed) => boolean) {
+    const seen = new Set<RssFeed>()
+
+    for (const collection of [feeds.value, allFeeds.value]) {
+      for (const feed of collection) {
+        if (!matchFeed(feed) || seen.has(feed)) {
+          continue
+        }
+
+        feed.unreadCount = 0
+        seen.add(feed)
+      }
+    }
+  }
+
   async function fetchArticles(filters: {
     page?: number
     per_page?: number
@@ -263,6 +291,7 @@ export const useApiStore = defineStore('api', () => {
   ) {
     const articlesApi = useArticlesApi()
     const article = articles.value.find((a) => a.id === id)
+    const previousRead = article?.read
     const wasFavorite = article?.favorite
 
     const response = await articlesApi.updateArticle(Number(id), data)
@@ -272,12 +301,8 @@ export const useApiStore = defineStore('api', () => {
         Object.assign(article, data)
       }
 
-      if (data.read === true && article) {
-        const sourceFeeds = allFeeds.value.length > 0 ? allFeeds.value : feeds.value
-        const feed = sourceFeeds.find((f) => f.id === article.feedId)
-        if (feed && feed.unreadCount && feed.unreadCount > 0) {
-          feed.unreadCount--
-        }
+      if (article && data.read !== undefined && previousRead !== undefined && previousRead !== data.read) {
+        syncFeedUnreadCount(article.feedId, current => (data.read ? Math.max(0, current - 1) : current + 1))
       }
 
       if (data.favorite !== undefined && wasFavorite !== undefined && article) {
@@ -300,23 +325,47 @@ export const useApiStore = defineStore('api', () => {
     return updateArticle(id, { read: true })
   }
 
-  async function markAllAsRead(feedId?: string) {
-    const ids = feedId
-      ? articles.value.filter((a) => a.feedId === feedId).map((a) => Number(a.id))
-      : articles.value.map((a) => Number(a.id))
+  async function markAllAsRead(options?: { feedId?: string; categoryId?: number; uncategorized?: boolean }) {
+    const data: BulkUpdateArticlesData = { read: true }
+    if (options?.feedId) {
+      data.feed_id = Number(options.feedId)
+    } else if (options?.categoryId) {
+      data.category_id = options.categoryId
+    } else if (options?.uncategorized) {
+      data.uncategorized = true
+    }
 
     const articlesApi = useArticlesApi()
-    const response = await articlesApi.bulkUpdateArticles({
-      ids,
-      read: true,
-    })
+    const response = await articlesApi.bulkUpdateArticles(data)
 
     if (response.success) {
       articles.value.forEach((a) => {
-        if (!feedId || a.feedId === feedId) {
+        if (!options) {
           a.read = true
+        } else if (options.feedId && a.feedId === options.feedId) {
+          a.read = true
+        } else if (options.categoryId) {
+          const feed = feeds.value.find(f => f.id === a.feedId)
+          if (feed && Number(feed.category) === options.categoryId) {
+            a.read = true
+          }
+        } else if (options.uncategorized) {
+          const feed = feeds.value.find(f => f.id === a.feedId)
+          if (feed && !feed.category) {
+            a.read = true
+          }
         }
       })
+
+      if (!options) {
+        clearFeedUnreadCounts(() => true)
+      } else if (options.feedId) {
+        clearFeedUnreadCounts(feed => feed.id === options.feedId)
+      } else if (options.categoryId) {
+        clearFeedUnreadCounts(feed => Number(feed.category) === options.categoryId)
+      } else if (options.uncategorized) {
+        clearFeedUnreadCounts(feed => !feed.category)
+      }
     }
 
     return response
@@ -345,63 +394,6 @@ export const useApiStore = defineStore('api', () => {
   async function fetchArticlesStats() {
     const articlesApi = useArticlesApi()
     const response = await articlesApi.getArticlesStats()
-    return response
-  }
-
-  // AI Summaries
-  async function getSummaries(params: { category_id?: number; page?: number; per_page?: number } = {}) {
-    loading.value = true
-    error.value = null
-    const summariesApi = useSummariesApi()
-    const response = await summariesApi.getSummaries(params)
-    loading.value = false
-    return response
-  }
-
-  async function generateSummary(data: {
-    category_id?: number | null
-    time_range?: number
-  }) {
-    loading.value = true
-    error.value = null
-    const summariesApi = useSummariesApi()
-    const response = await summariesApi.generateSummary(data)
-    loading.value = false
-    return response
-  }
-
-  async function deleteSummary(id: number) {
-    loading.value = true
-    error.value = null
-    const summariesApi = useSummariesApi()
-    const response = await summariesApi.deleteSummary(id)
-    loading.value = false
-    return response
-  }
-
-  // Queue Summary
-  async function submitQueueSummary(data: {
-    category_ids?: number[]
-    feed_ids?: number[]
-    time_range?: number
-  }) {
-    loading.value = true
-    error.value = null
-    const summariesApi = useSummariesApi()
-    const response = await summariesApi.submitQueueSummary(data)
-    loading.value = false
-    return response
-  }
-
-  async function getQueueStatus() {
-    const summariesApi = useSummariesApi()
-    const response = await summariesApi.getQueueStatus()
-    return response
-  }
-
-  async function getQueueJob(jobId: string) {
-    const summariesApi = useSummariesApi()
-    const response = await summariesApi.getQueueJob(jobId)
     return response
   }
 
@@ -440,12 +432,6 @@ export const useApiStore = defineStore('api', () => {
     importOpml,
     exportOpml,
     fetchArticlesStats,
-    getSummaries,
-    generateSummary,
-    deleteSummary,
-    submitQueueSummary,
-    getQueueStatus,
-    getQueueJob,
     initialize,
   }
 })

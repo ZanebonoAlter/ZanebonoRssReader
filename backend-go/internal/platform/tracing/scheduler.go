@@ -2,10 +2,10 @@ package tracing
 
 import (
 	"context"
-	"log"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
+	"my-robot-backend/internal/platform/logging"
 )
 
 func TraceSchedulerTick(schedulerName, trigger string, fn func(ctx context.Context)) {
@@ -21,7 +21,7 @@ func TraceSchedulerTick(schedulerName, trigger string, fn func(ctx context.Conte
 	defer span.End()
 
 	if !span.IsRecording() {
-		log.Printf("[tracing] scheduler %q tick: tracing not recording", schedulerName)
+		logging.Infof("[tracing] scheduler %q tick: tracing not recording", schedulerName)
 	}
 
 	fn(ctx)

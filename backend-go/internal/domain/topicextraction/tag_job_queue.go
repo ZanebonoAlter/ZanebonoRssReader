@@ -31,13 +31,17 @@ func (q *TagJobQueue) Enqueue(req TagJobRequest) error {
 	now := time.Now()
 
 	return q.db.Transaction(func(tx *gorm.DB) error {
-		var existing models.TagJob
+		var existing []models.TagJob
 		err := tx.Where("article_id = ? AND status IN ?", req.ArticleID, []string{string(models.JobStatusPending), string(models.JobStatusLeased)}).
 			Order("id DESC").
-			First(&existing).Error
-		if err == nil {
+			Limit(1).
+			Find(&existing).Error
+		if err != nil {
+			return err
+		}
+		if len(existing) > 0 {
 			updates := map[string]any{}
-			if req.ForceRetag && !existing.ForceRetag {
+			if req.ForceRetag && !existing[0].ForceRetag {
 				updates["force_retag"] = true
 			}
 			if req.FeedName != "" {
@@ -52,10 +56,7 @@ func (q *TagJobQueue) Enqueue(req TagJobRequest) error {
 			if len(updates) == 0 {
 				return nil
 			}
-			return tx.Model(&existing).Updates(updates).Error
-		}
-		if err != nil && err != gorm.ErrRecordNotFound {
-			return err
+			return tx.Model(&existing[0]).Updates(updates).Error
 		}
 
 		job := models.TagJob{
@@ -88,6 +89,15 @@ func (q *TagJobQueue) Claim(limit int, lease time.Duration) ([]models.TagJob, er
 				"status":           string(models.JobStatusPending),
 				"leased_at":        nil,
 				"lease_expires_at": nil,
+			}).Error; err != nil {
+			return err
+		}
+
+		if err := tx.Model(&models.TagJob{}).
+			Where("status = ? AND attempt_count >= max_attempts", string(models.JobStatusPending)).
+			Updates(map[string]any{
+				"status":       string(models.JobStatusFailed),
+				"available_at": now,
 			}).Error; err != nil {
 			return err
 		}

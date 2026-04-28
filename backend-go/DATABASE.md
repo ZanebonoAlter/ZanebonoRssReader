@@ -7,15 +7,14 @@
 **自动执行时机：**
 - 每次启动服务器时（`InitDB()` 函数会自动调用 `EnsureTables()`）
 
-**支持的表（共8张）：**
+**支持的表（共7张）：**
 1. `categories` - 分类表
 2. `feeds` - 订阅源表
 3. `articles` - 文章表
-4. `ai_summaries` - AI 摘要表
-5. `scheduler_tasks` - 定时任务表
-6. `ai_settings` - AI 设置表
-7. `reading_behaviors` - 阅读行为表
-8. `user_preferences` - 用户偏好表
+4. `scheduler_tasks` - 定时任务表
+5. `ai_settings` - AI 设置表
+6. `reading_behaviors` - 阅读行为表
+7. `user_preferences` - 用户偏好表
 
 ## 工作原理
 

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Icon } from '@iconify/vue'
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useArticlesApi } from '~/api/articles'
 import {
   useTopicGraphApi,
@@ -9,24 +9,83 @@ import {
   type TopicGraphDetailPayload,
   type TopicGraphFilters,
   type TopicGraphType,
+  type TopicKind,
   type TopicsByCategoryPayload,
 } from '~/api/topicGraph'
 import type { Article } from '~/types'
-import type { TimelineDigest, TimelineDigestSelection, PendingArticle } from '~/types/timeline'
+import type { TimelineDigest, TimelineDigestSelection, PendingArticle, TimelineAggregationGroup, TimelineAggregationMode, TimelineAggregationArticle } from '~/types/timeline'
 import ArticleContentView from '~/features/articles/components/ArticleContentView.vue'
 import { useApiStore } from '~/stores/api'
-import DigestDetail from '../../digest/components/DigestDetail.vue'
 import { normalizeArticle } from '../../articles/utils/normalizeArticle'
-import type { DigestPreviewSummary } from '~/api/digest'
 import FeedCategoryFilter from '~/features/topic-graph/components/FeedCategoryFilter.vue'
 import TopicGraphCanvas from '~/features/topic-graph/components/TopicGraphCanvas.client.vue'
 import TopicGraphFooterPanels from '~/features/topic-graph/components/TopicGraphFooterPanels.vue'
 import TopicGraphHeader from '~/features/topic-graph/components/TopicGraphHeader.vue'
 import TopicGraphSidebar from '~/features/topic-graph/components/TopicGraphSidebar.vue'
 import TopicTimeline from '~/features/topic-graph/components/TopicTimeline.vue'
+import NarrativePanel from '~/features/topic-graph/components/NarrativePanel.vue'
+import TagHierarchy from '~/features/topic-graph/components/TagHierarchy.vue'
 import { buildDisplayedTopicGraph, collectRelatedTopicSlugs } from '~/features/topic-graph/utils/buildDisplayedTopicGraph'
 import { buildTopicGraphViewModel } from '~/features/topic-graph/utils/buildTopicGraphViewModel'
 import { normalizeTopicCategory } from '~/features/topic-graph/utils/normalizeTopicCategory'
+
+// Timeline panel drag state
+const timelinePanelRef = ref<HTMLDivElement | null>(null)
+const isDragging = ref(false)
+const dragOffset = ref({ x: 0, y: 0 })
+const timelinePosition = ref({ x: 0, y: 0 })
+const initialRect = ref({ left: 0, top: 0 })
+let initialPositionSet = false
+
+function handleTimelineDragStart(event: MouseEvent) {
+  const target = event.target as HTMLElement
+  if (target.closest('button')) {
+    return
+  }
+  
+  const rect = timelinePanelRef.value?.getBoundingClientRect()
+  if (!rect) return
+  
+  if (!initialPositionSet) {
+    initialRect.value = { left: rect.left, top: rect.top }
+    initialPositionSet = true
+  }
+  
+  isDragging.value = true
+  dragOffset.value = {
+    x: event.clientX - rect.left,
+    y: event.clientY - rect.top,
+  }
+  event.preventDefault()
+  document.addEventListener('mousemove', handleTimelineDrag)
+  document.addEventListener('mouseup', handleTimelineDragEnd)
+}
+
+function handleTimelineDrag(event: MouseEvent) {
+  if (!isDragging.value) return
+  timelinePosition.value = {
+    x: event.clientX - dragOffset.value.x - initialRect.value.left,
+    y: event.clientY - dragOffset.value.y - initialRect.value.top,
+  }
+}
+
+function handleTimelineDragEnd() {
+  isDragging.value = false
+  document.removeEventListener('mousemove', handleTimelineDrag)
+  document.removeEventListener('mouseup', handleTimelineDragEnd)
+}
+
+function resetTimelinePanelPosition() {
+  timelinePosition.value = { x: 0, y: 0 }
+  initialPositionSet = false
+  initialRect.value = { left: 0, top: 0 }
+}
+
+onBeforeUnmount(() => {
+  document.removeEventListener('mousemove', handleTimelineDrag)
+  document.removeEventListener('mouseup', handleTimelineDragEnd)
+})
+
 
 const topicGraphApi = useTopicGraphApi()
 const articlesApi = useArticlesApi()
@@ -74,6 +133,30 @@ const selectedHotspotTag = ref<{ slug: string; label: string; category: TopicCat
 const pendingArticles = ref<PendingArticle[]>([])
 const selectedPendingNode = ref(false)
 const loadingPendingArticles = ref(false)
+
+// Timeline aggregation state
+const aggregationMode = ref<TimelineAggregationMode>('day')
+const aggregatedArticles = ref<TimelineAggregationArticle[]>([])
+const loadingAggregatedArticles = ref(false)
+const selectedGroupKey = ref<string | null>(null)
+
+// Abstract tag node tracking (for sidebar detail panel)
+const abstractNodeSlug = ref<string | null>(null)
+const abstractNodeLabel = ref<string | null>(null)
+const selectedChildTagSlug = ref<string | null>(null)
+
+// Timeline floating panel state
+const timelineOpen = ref(false)
+
+watch(timelineOpen, (open) => {
+  if (!open) {
+    resetTimelinePanelPosition()
+    isDragging.value = false
+  }
+})
+
+// Active view tab state (graph / hierarchy)
+const activeTab = ref<'graph' | 'hierarchy' | 'narrative'>('graph')
 
 const viewModel = computed(() => graphPayload.value
   ? buildTopicGraphViewModel(graphPayload.value)
@@ -195,8 +278,46 @@ function filterTopics(topics: any[], query: string) {
   )
 }
 
-function sortTopicsByFrequency<T extends { score: number }>(topics: T[]) {
-  return [...topics].sort((left, right) => right.score - left.score)
+function isDefaultVisibleTopic(topic: { is_low_quality?: boolean; is_abstract?: boolean }) {
+  return topic.is_abstract || !topic.is_low_quality
+}
+
+function sortTopicsByFrequency<T extends { score: number; quality_score?: number; is_low_quality?: boolean }>(topics: T[]) {
+  return [...topics].sort((left, right) => {
+    // 低质量标签排在底部
+    const leftLowQuality = left.is_low_quality ? 1 : 0
+    const rightLowQuality = right.is_low_quality ? 1 : 0
+    if (leftLowQuality !== rightLowQuality) {
+      return leftLowQuality - rightLowQuality
+    }
+
+    const leftQuality = left.quality_score ?? left.score ?? 0
+    const rightQuality = right.quality_score ?? right.score ?? 0
+    if (rightQuality === leftQuality) {
+      return (right.score ?? 0) - (left.score ?? 0)
+    }
+    return rightQuality - leftQuality
+  })
+}
+
+function buildCategoryTopicState(category: TopicCategory, query: string, showAll: boolean) {
+  const categoryTopics = category === 'event'
+    ? hotspotData.value?.events
+    : category === 'person'
+      ? hotspotData.value?.people
+      : hotspotData.value?.keywords
+  const sourceTopics = sortTopicsByFrequency(categoryTopics || buildFallbackTopics(category))
+  const filteredTopics = filterTopics(sourceTopics, query || '')
+  const displayTopics = showAll ? filteredTopics : filteredTopics.slice(0, 8)
+
+  return {
+    topics: filteredTopics,
+    filteredTopics,
+    displayTopics,
+    hasMore: filteredTopics.length > displayTopics.length,
+    hiddenLowQualityCount: filteredTopics.filter(topic => topic.is_low_quality && !topic.is_abstract).length,
+    showAll,
+  }
 }
 
 function buildFallbackTopics(category: TopicCategory) {
@@ -247,46 +368,35 @@ const hotspotCategories = computed(() => ([
     label: '事件',
     icon: 'mdi:calendar-alert-outline',
     headerClass: 'topic-category-header--event',
-    topics: sortTopicsByFrequency(hotspotData.value?.events || buildFallbackTopics('event')),
-    filteredTopics: filterTopics(sortTopicsByFrequency(hotspotData.value?.events || buildFallbackTopics('event')), hotspotSearchQueries.value.event || ''),
-    displayTopics: hotspotShowAll.value.event 
-      ? filterTopics(sortTopicsByFrequency(hotspotData.value?.events || buildFallbackTopics('event')), hotspotSearchQueries.value.event || '')
-      : filterTopics(sortTopicsByFrequency(hotspotData.value?.events || buildFallbackTopics('event')), hotspotSearchQueries.value.event || '').slice(0, 8),
-    hasMore: filterTopics(sortTopicsByFrequency(hotspotData.value?.events || buildFallbackTopics('event')), hotspotSearchQueries.value.event || '').length > 8,
-    showAll: hotspotShowAll.value.event,
+    ...buildCategoryTopicState('event', hotspotSearchQueries.value.event || '', !!hotspotShowAll.value.event),
   },
   {
     key: 'person',
     label: '人物',
     icon: 'mdi:account-voice-outline',
     headerClass: 'topic-category-header--person',
-    topics: sortTopicsByFrequency(hotspotData.value?.people || buildFallbackTopics('person')),
-    filteredTopics: filterTopics(sortTopicsByFrequency(hotspotData.value?.people || buildFallbackTopics('person')), hotspotSearchQueries.value.person || ''),
-    displayTopics: hotspotShowAll.value.person
-      ? filterTopics(sortTopicsByFrequency(hotspotData.value?.people || buildFallbackTopics('person')), hotspotSearchQueries.value.person || '')
-      : filterTopics(sortTopicsByFrequency(hotspotData.value?.people || buildFallbackTopics('person')), hotspotSearchQueries.value.person || '').slice(0, 8),
-    hasMore: filterTopics(sortTopicsByFrequency(hotspotData.value?.people || buildFallbackTopics('person')), hotspotSearchQueries.value.person || '').length > 8,
-    showAll: hotspotShowAll.value.person,
+    ...buildCategoryTopicState('person', hotspotSearchQueries.value.person || '', !!hotspotShowAll.value.person),
   },
   {
     key: 'keyword',
     label: '关键词',
     icon: 'mdi:key-variant',
     headerClass: 'topic-category-header--keyword',
-    topics: sortTopicsByFrequency(hotspotData.value?.keywords || buildFallbackTopics('keyword')),
-    filteredTopics: filterTopics(sortTopicsByFrequency(hotspotData.value?.keywords || buildFallbackTopics('keyword')), hotspotSearchQueries.value.keyword || ''),
-    displayTopics: hotspotShowAll.value.keyword
-      ? filterTopics(sortTopicsByFrequency(hotspotData.value?.keywords || buildFallbackTopics('keyword')), hotspotSearchQueries.value.keyword || '')
-      : filterTopics(sortTopicsByFrequency(hotspotData.value?.keywords || buildFallbackTopics('keyword')), hotspotSearchQueries.value.keyword || '').slice(0, 8),
-    hasMore: filterTopics(sortTopicsByFrequency(hotspotData.value?.keywords || buildFallbackTopics('keyword')), hotspotSearchQueries.value.keyword || '').length > 8,
-    showAll: hotspotShowAll.value.keyword,
+    ...buildCategoryTopicState('keyword', hotspotSearchQueries.value.keyword || '', !!hotspotShowAll.value.keyword),
   },
 ]))
 const defaultGraphTopicSlugs = computed(() => {
   const slugs = new Set<string>()
+  const lowQualitySlugs = new Set<string>()
+
+  viewModel.value.topTopics.forEach((topic) => {
+    if (topic.is_low_quality && topic.slug) {
+      lowQualitySlugs.add(topic.slug)
+    }
+  })
 
   viewModel.value.graph.nodes.forEach((node) => {
-    if (node.kind === 'topic' && node.slug) {
+    if (node.kind === 'topic' && node.slug && !lowQualitySlugs.has(node.slug)) {
       slugs.add(node.slug)
     }
   })
@@ -351,7 +461,7 @@ const hotspotTimelineItems = computed((): TimelineDigest[] => {
       feedIcon: digest.feed_icon,
       categoryName: digest.category_name,
       articleCount: digest.article_count,
-      tags: digest.aggregated_tags.map(tag => ({
+      tags: (digest.aggregated_tags || []).map(tag => ({
         slug: tag.slug,
         label: tag.label,
         category: normalizeTopicCategory(tag.category, tag.kind),
@@ -414,34 +524,6 @@ const previewDigest = computed(() => {
   if (!previewDigestId.value) return null
   return effectiveTimelineItems.value.find(item => item.id === previewDigestId.value) || null
 })
-const previewDigestSummary = computed<DigestPreviewSummary | null>(() => {
-  if (!previewDigest.value) return null
-
-  const summarySource = detail.value?.summaries.find(item => String(item.id) === previewDigest.value?.id)
-  const hotspotSource = hotspotDigests.value.find(item => String(item.id) === previewDigest.value?.id)
-
-  return {
-    id: Number(previewDigest.value.id),
-    feed_id: null,
-    feed_name: previewDigest.value.feedName,
-    feed_icon: 'mdi:rss',
-    feed_color: summarySource?.feed_color || hotspotSource?.feed_color || '#3b6b87',
-    category_id: 0,
-    category_name: previewDigest.value.categoryName,
-    summary_text: previewDigest.value.summary,
-    article_count: previewDigest.value.articleCount,
-    article_ids: previewDigest.value.articles.map(article => article.id),
-    topics: [],
-    aggregated_tags: previewDigest.value.tags.map(tag => ({
-      slug: tag.slug,
-      label: tag.label,
-      category: tag.category,
-      score: 0,
-      article_count: 0,
-    })),
-    created_at: previewDigest.value.createdAt,
-  }
-})
 function buildCurrentFilters(): TopicGraphFilters | undefined {
   if (selectedFilterFeedId.value) return { feedId: selectedFilterFeedId.value }
   if (selectedFilterCategoryId.value && selectedFilterCategoryId.value !== '__uncategorized__') {
@@ -465,6 +547,7 @@ const selectedTopicInfo = computed(() => {
       slug: detail.value.topic.slug,
       label: detail.value.topic.label,
       category: normalizeTopicCategory(detail.value.topic.category, detail.value.topic.kind),
+      description: detail.value.topic.description,
     }
   }
 
@@ -478,6 +561,7 @@ const selectedTopicInfo = computed(() => {
       slug: topic.slug,
       label: topic.label,
       category: normalizeTopicCategory(topic.category, topic.kind),
+      description: topic.description,
     }
 })
 
@@ -523,9 +607,19 @@ async function loadGraph() {
     expandedTopicSlugs.value = []
 
     if (selectedTopicSlug.value) {
+      const firstTopic = response.data.top_topics[0]
+      selectedHotspotTag.value = {
+        slug: selectedTopicSlug.value,
+        label: firstTopic?.label || selectedTopicSlug.value,
+        category: selectedCategory.value || 'keyword',
+      }
       void loadTopicDetail(selectedTopicSlug.value)
+      void loadHotspotDigests(selectedTopicSlug.value)
+      void loadPendingArticles(selectedTopicSlug.value)
     } else {
       detail.value = null
+      selectedHotspotTag.value = null
+      hotspotDigests.value = []
     }
 
     // Load hotspot data in parallel
@@ -550,7 +644,7 @@ async function loadTopicDetail(slug: string) {
   loadingDetail.value = true
 
   try {
-    const response = await topicGraphApi.getTopicDetail(slug, selectedType.value, selectedDate.value, buildCurrentFilters())
+    const response = await topicGraphApi.getTopicDetail(slug, undefined, undefined, buildCurrentFilters())
     if (response.success && response.data) {
       detail.value = response.data
       selectedCategory.value = normalizeTopicCategory(response.data.topic.category, response.data.topic.kind)
@@ -589,17 +683,31 @@ async function handleTagSelect(slug: string, category: TopicCategory) {
     tagLabel = foundTag.label
   }
 
+  // Check if this is an abstract tag
+  const isAbstract = foundTag?.is_abstract ?? false
+  const childSlugs = foundTag?.child_slugs ?? []
+  abstractNodeSlug.value = isAbstract ? slug : null
+  abstractNodeLabel.value = isAbstract ? tagLabel : null
+
   // Update selected hotspot tag
   selectedHotspotTag.value = { slug, label: tagLabel, category }
 
   // Reset pending node selection when selecting a new tag
   selectedPendingNode.value = false
 
-  // Load digests for this tag (reverse trace: tag -> articles -> digests)
-  await loadHotspotDigests(slug)
+  // For abstract tags, load digests for all child tags
+  if (isAbstract && childSlugs.length > 0) {
+    await loadAbstractTagDigests(childSlugs)
+  } else {
+    // Load digests for this tag (reverse trace: tag -> articles -> digests)
+    await loadHotspotDigests(slug)
+  }
 
   // Load pending articles for this tag
   void loadPendingArticles(slug)
+
+  // Load aggregated articles for timeline
+  void loadAggregatedArticles(slug)
 
   // Also load topic detail for the sidebar
   void loadTopicDetail(slug)
@@ -610,8 +718,8 @@ async function loadHotspotDigests(tagSlug: string) {
   try {
     const response = await topicGraphApi.getDigestsByArticleTag(
       tagSlug,
-      selectedType.value,
-      selectedDate.value,
+      undefined,
+      undefined,
       20
     )
     if (response.success && response.data) {
@@ -628,13 +736,131 @@ async function loadHotspotDigests(tagSlug: string) {
   }
 }
 
+async function loadAbstractTagDigests(childSlugs: string[]) {
+  loadingHotspotDigests.value = true
+  try {
+    const results = await Promise.all(
+      childSlugs.map(slug =>
+        topicGraphApi.getDigestsByArticleTag(slug, undefined, undefined, 20)
+      )
+    )
+    const seenIds = new Set<number>()
+    const merged: HotspotDigestCard[] = []
+    for (const response of results) {
+      if (!response.success || !response.data) continue
+      for (const digest of response.data.digests || []) {
+        if (!seenIds.has(digest.id)) {
+          seenIds.add(digest.id)
+          merged.push(digest)
+        }
+      }
+    }
+    merged.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    hotspotDigests.value = merged
+  } catch (error) {
+    console.error('Failed to load abstract tag digests:', error)
+    hotspotDigests.value = []
+  } finally {
+    loadingHotspotDigests.value = false
+  }
+}
+
+async function handleChildTagSelect(childSlug: string, childLabel: string) {
+  selectedChildTagSlug.value = childSlug
+
+  // Update selectedHotspotTag to child tag for proper filtering
+  selectedHotspotTag.value = {
+    slug: childSlug,
+    label: childLabel,
+    category: 'keyword',
+  }
+
+  // Load digests for the child tag (not the abstract parent)
+  await loadHotspotDigests(childSlug)
+
+  // Open timeline panel if not already open
+  if (!timelineOpen.value) {
+    timelineOpen.value = true
+  }
+
+  // Load pending articles for the child tag
+  void loadPendingArticles(childSlug)
+
+  // Load aggregated articles for timeline
+  void loadAggregatedArticles(childSlug)
+
+  // Load topic detail for the sidebar
+  void loadTopicDetail(childSlug)
+
+  // Ensure the child tag is shown in the graph
+  ensureTopicShownInGraph(childSlug)
+  expandRelatedTopics(childSlug)
+  graphFocusRequestKey.value += 1
+
+  // Reset pending node selection
+  selectedPendingNode.value = false
+}
+
+function handleNarrativeTagSelect(tag: { id: number; slug: string; label: string; category: string; kind?: string }) {
+  const category = normalizeTopicCategory(tag.category as TopicCategory, tag.kind as TopicKind | undefined)
+  handleTagSelect(tag.slug, category)
+}
+
+async function handleAbstractTagSelect(abstractSlug: string) {
+  selectedChildTagSlug.value = null
+
+  // Find abstract tag info
+  const allTags = [
+    ...(hotspotData.value?.events || []),
+    ...(hotspotData.value?.people || []),
+    ...(hotspotData.value?.keywords || []),
+  ]
+  const abstractTag = allTags.find(t => t.slug === abstractSlug)
+  const abstractLabel = abstractTag?.label || abstractSlug
+  const childSlugs = abstractTag?.child_slugs || []
+
+  // Update selectedHotspotTag to abstract tag
+  selectedHotspotTag.value = {
+    slug: abstractSlug,
+    label: abstractLabel,
+    category: abstractTag ? normalizeTopicCategory(abstractTag.category, abstractTag.kind) : 'keyword',
+  }
+
+  // Load digests for all child tags (aggregate view)
+  if (childSlugs.length > 0) {
+    await loadAbstractTagDigests(childSlugs)
+  } else {
+    await loadHotspotDigests(abstractSlug)
+  }
+
+  // Open timeline panel if not already open
+  if (!timelineOpen.value) {
+    timelineOpen.value = true
+  }
+
+  // Load pending articles for the abstract tag
+  void loadPendingArticles(abstractSlug)
+
+  // Load aggregated articles for timeline
+  void loadAggregatedArticles(abstractSlug)
+
+  // Load topic detail for the sidebar
+  void loadTopicDetail(abstractSlug)
+
+  // Ensure the abstract tag is shown in the graph
+  ensureTopicShownInGraph(abstractSlug)
+  expandRelatedTopics(abstractSlug)
+  graphFocusRequestKey.value += 1
+
+  // Reset pending node selection
+  selectedPendingNode.value = false
+}
+
 async function loadPendingArticles(tagSlug: string) {
   loadingPendingArticles.value = true
   try {
     const response = await topicGraphApi.getPendingArticlesByTag(
-      tagSlug,
-      selectedType.value,
-      selectedDate.value
+      tagSlug
     )
     if (response.success && response.data) {
       pendingArticles.value = (response.data.articles || []).map(article => ({
@@ -657,13 +883,162 @@ async function loadPendingArticles(tagSlug: string) {
   }
 }
 
+async function loadAggregatedArticles(tagSlug: string) {
+  loadingAggregatedArticles.value = true
+  try {
+    const isAbstract = hotspotData.value && [
+      ...hotspotData.value.events,
+      ...hotspotData.value.people,
+      ...hotspotData.value.keywords,
+    ].find(t => t.slug === tagSlug)?.is_abstract
+
+    const childSlugs = hotspotData.value && [
+      ...hotspotData.value.events,
+      ...hotspotData.value.people,
+      ...hotspotData.value.keywords,
+    ].find(t => t.slug === tagSlug)?.child_slugs
+
+    const slugs = (isAbstract && childSlugs?.length) ? childSlugs : [tagSlug]
+
+    const allArticles: TimelineAggregationArticle[] = []
+    const seenIds = new Set<string>()
+
+    for (const slug of slugs) {
+      const response = await topicGraphApi.getTopicArticles({
+        slug,
+        page: 1,
+        pageSize: 100,
+      })
+      if (response.success && response.data) {
+        for (const article of response.data.articles) {
+          if (!seenIds.has(article.id)) {
+            seenIds.add(article.id)
+            allArticles.push({
+              id: article.id,
+              title: article.title,
+              link: article.link,
+              pubDate: article.pub_date,
+              feedName: article.feed_name,
+              feedIcon: article.image_url || '',
+              tags: (article.tags || []).map(t => ({
+                slug: t.slug,
+                label: t.label,
+                category: t.category,
+              })),
+            })
+          }
+        }
+      }
+    }
+
+    allArticles.sort((a, b) => new Date(b.pubDate).getTime() - new Date(a.pubDate).getTime())
+    aggregatedArticles.value = allArticles
+  } catch (error) {
+    console.error('Failed to load aggregated articles:', error)
+    aggregatedArticles.value = []
+  } finally {
+    loadingAggregatedArticles.value = false
+  }
+}
+
+const timelineAggregationGroups = computed((): TimelineAggregationGroup[] => {
+  if (!aggregatedArticles.value.length) return []
+
+  const groups: TimelineAggregationGroup[] = []
+  const groupMap = new Map<string, TimelineAggregationArticle[]>()
+
+  for (const article of aggregatedArticles.value) {
+    const date = new Date(article.pubDate)
+    if (Number.isNaN(date.getTime())) continue
+
+    let key: string
+    let startDate: Date
+    let endDate: Date
+    let label: string
+
+    if (aggregationMode.value === 'hour') {
+      const hour = date.getHours()
+      key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}-${hour}`
+      startDate = new Date(date.getFullYear(), date.getMonth(), date.getDate(), hour, 0, 0)
+      endDate = new Date(date.getFullYear(), date.getMonth(), date.getDate(), hour + 1, 0, 0)
+      const startFmt = `${String(hour).padStart(2, '0')}:00`
+      const endFmt = `${String(hour + 1).padStart(2, '0')}:00`
+      label = `${startFmt} - ${endFmt}`
+    } else {
+      key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+      startDate = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0)
+      endDate = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1, 0, 0, 0)
+      label = new Intl.DateTimeFormat('zh-CN', {
+        month: 'short',
+        day: 'numeric',
+        weekday: 'short',
+      }).format(startDate)
+    }
+
+    if (!groupMap.has(key)) {
+      groupMap.set(key, [])
+    }
+    groupMap.get(key)!.push(article)
+  }
+
+  const sortedKeys = Array.from(groupMap.keys()).sort((a, b) => b.localeCompare(a))
+
+  for (const key of sortedKeys) {
+    const articles = groupMap.get(key)!
+    if (!articles.length) continue
+    const first = articles[0]!
+    const date = new Date(first.pubDate)
+
+    let startDate: Date
+    let endDate: Date
+
+    if (aggregationMode.value === 'hour') {
+      const hour = date.getHours()
+      startDate = new Date(date.getFullYear(), date.getMonth(), date.getDate(), hour, 0, 0)
+      endDate = new Date(date.getFullYear(), date.getMonth(), date.getDate(), hour + 1, 0, 0)
+    } else {
+      startDate = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0)
+      endDate = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1, 0, 0, 0)
+    }
+
+    groups.push({
+      key,
+      label: '',
+      startDate,
+      endDate,
+      articles,
+    })
+  }
+
+  return groups
+})
+
+const totalAggregatedCount = computed(() => aggregatedArticles.value.length)
+
+function handleTimelineGroupSelect(groupKey: string) {
+  selectedGroupKey.value = groupKey
+  selectedPendingNode.value = false
+  selectedDigestId.value = null
+}
+
+function handleAggregationModeChange(mode: TimelineAggregationMode) {
+  aggregationMode.value = mode
+  selectedGroupKey.value = null
+}
+
+const selectedGroupArticles = computed((): TimelineAggregationArticle[] => {
+  if (!selectedGroupKey.value) return aggregatedArticles.value
+  const group = timelineAggregationGroups.value.find(g => g.key === selectedGroupKey.value)
+  return group?.articles || []
+})
+
 function handleSelectPending() {
   selectedPendingNode.value = true
   selectedDigestId.value = null
   previewDigestId.value = null
 }
 
-function handleNodeClick(node: { slug?: string; kind: string; category?: TopicCategory; label?: string }) {
+function handleNodeClick(node: { slug?: string; kind: string; category?: TopicCategory; label?: string; isAbstract?: boolean }) {
   if (node.kind !== 'topic' || !node.slug) return
 
   ensureTopicShownInGraph(node.slug)
@@ -673,6 +1048,10 @@ function handleNodeClick(node: { slug?: string; kind: string; category?: TopicCa
   if (node.category) {
     selectedCategory.value = node.category
   }
+
+  // Track whether this is an abstract tag node
+  abstractNodeSlug.value = node.isAbstract ? node.slug : null
+  abstractNodeLabel.value = node.isAbstract ? (node.label || node.slug) : null
 
   // Set hotspot tag state for the clicked node and load its digests
   selectedHotspotTag.value = {
@@ -690,6 +1069,9 @@ function handleNodeClick(node: { slug?: string; kind: string; category?: TopicCa
   // Load pending articles for this node
   void loadPendingArticles(node.slug)
 
+  // Load aggregated articles for timeline
+  void loadAggregatedArticles(node.slug)
+
   void loadTopicDetail(node.slug)
 }
 
@@ -705,11 +1087,13 @@ function handleKeywordHighlight(keywordSlug: string | null) {
 
 function handleDigestSelect(digestId: string) {
   selectedDigestId.value = digestId
+  selectedPendingNode.value = false
 }
 
 function handlePreviewDigest(digestId: string) {
   selectedDigestId.value = digestId
   previewDigestId.value = digestId
+  selectedPendingNode.value = false
 }
 
 function closeDigestPreview() {
@@ -729,7 +1113,7 @@ async function openArticlePreview(articleId: number) {
 
     selectedPreviewArticle.value = normalizeArticle(response.data)
 
-    if (detail.value) {
+    if (detail.value?.summaries) {
       const ids = detail.value.summaries.flatMap(summary => summary.articles.map(article => article.id))
       const uniqueIds = Array.from(new Set(ids))
       const articleResponses = await Promise.all(uniqueIds.slice(0, 12).map(id => articlesApi.getArticle(id)))
@@ -750,7 +1134,11 @@ function closeArticlePreview() {
 }
 
 async function handleArticleFavorite(articleId: string) {
-  const response = await apiStore.toggleFavorite(articleId)
+  const currentFavorite = selectedPreviewArticle.value?.id === articleId
+    ? selectedPreviewArticle.value.favorite
+    : previewArticles.value.find(a => a.id === articleId)?.favorite
+
+  const response = await articlesApi.updateArticle(Number(articleId), { favorite: !currentFavorite })
   if (!response.success) return
 
   const target = previewArticles.value.find(article => article.id === articleId)
@@ -778,20 +1166,18 @@ function handleArticleUpdate(articleId: string, updates: Partial<Article>) {
 }
 
 watch(selectedType, () => {
+  resetTimelinePanelPosition()
   void loadGraph()
 })
 
 watch(selectedDate, () => {
+  resetTimelinePanelPosition()
   void loadGraph()
 })
 
 watch([selectedFilterCategoryId, selectedFilterFeedId], () => {
   void loadGraph()
 })
-
-watch([selectedFilterCategoryId, selectedFilterFeedId], () => {
-  void loadGraph()
- })
 
 watch(effectiveTimelineItems, (items) => {
   if (!items.length) {
@@ -807,6 +1193,17 @@ watch(effectiveTimelineItems, (items) => {
     selectedPendingNode.value = false
   }
 }, { immediate: true })
+
+watch(timelineAggregationGroups, (groups) => {
+  if (!groups.length) {
+    selectedGroupKey.value = null
+    return
+  }
+  const currentExists = selectedGroupKey.value && groups.some(g => g.key === selectedGroupKey.value)
+  if (!currentExists) {
+    selectedGroupKey.value = groups[0]?.key || null
+  }
+})
 
 await loadGraph()
 </script>
@@ -849,9 +1246,43 @@ await loadGraph()
                   @update:selected-feed-id="selectedFilterFeedId = $event"
                 />
 
+
+                <!-- View tabs -->
+                <div class="mt-4 flex gap-1.5">
+                  <button
+                    type="button"
+                    class="th-tab-btn"
+                    :class="{ 'th-tab-btn--active': activeTab === 'graph' }"
+                    @click="activeTab = 'graph'"
+                  >
+                    <Icon icon="mdi:graph-outline" width="14" />
+                    <span>图谱</span>
+                  </button>
+                  <button
+                    type="button"
+                    class="th-tab-btn"
+                    :class="{ 'th-tab-btn--active': activeTab === 'hierarchy' }"
+                    @click="activeTab = 'hierarchy'"
+                  >
+                    <Icon icon="mdi:file-tree-outline" width="14" />
+                    <span>标签层级</span>
+                  </button>
+                  <button
+                    type="button"
+                    class="th-tab-btn"
+                    :class="{ 'th-tab-btn--active': activeTab === 'narrative' }"
+                    @click="activeTab = 'narrative'"
+                  >
+                    <Icon icon="mdi:book-open-page-variant-outline" width="14" />
+                    <span>叙事</span>
+                  </button>
+                </div>
+
               </aside>
 
               <div class="space-y-4">
+                <!-- Graph view (default) -->
+                <template v-if="activeTab === 'graph'">
                 <TopicGraphCanvas
                   :nodes="displayedGraph.nodes"
                   :edges="displayedGraph.edges"
@@ -931,11 +1362,15 @@ await loadGraph()
                                 class="topic-dropdown-item"
                                 :class="{
                                   'topic-dropdown-item--active': selectedTopicSlug === topic.slug,
+                                  'topic-dropdown-item--abstract': topic.is_abstract,
                                 }"
                                 @click="handleTagSelect(topic.slug, normalizeTopicCategory(topic.category, topic.kind)); hotspotDropdownOpen[category.key] = false"
                               >
-                                <Icon v-if="topic.icon" :icon="topic.icon" width="14" />
+                                <Icon v-if="topic.is_abstract" icon="mdi:tag-group" width="14" class="text-amber-400/80" />
+                                <Icon v-else-if="topic.icon" :icon="topic.icon" width="14" />
                                 <span>{{ topic.label }}</span>
+                                <span v-if="topic.is_abstract" class="ml-1 text-[10px] text-amber-400/60">({{ topic.child_slugs?.length ?? 0 }})</span>
+                                <span v-else-if="topic.is_low_quality" class="ml-1 text-[10px] text-white/35">低质量</span>
                               </button>
                               <button
                                 type="button"
@@ -955,7 +1390,7 @@ await loadGraph()
                             @click="toggleShowAll(category.key)"
                           >
                             <Icon :icon="category.showAll ? 'mdi:chevron-up' : 'mdi:chevron-down'" width="16" />
-                            {{ category.showAll ? '收起' : `显示全部 (${category.filteredTopics.length})` }}
+                            {{ category.showAll ? '恢复默认筛选' : `显示全部标签 (${category.filteredTopics.length})` }}
                           </button>
                         </div>
 
@@ -989,11 +1424,15 @@ await loadGraph()
                               'topic-badge--person': normalizeTopicCategory(topic.category, topic.kind) === 'person',
                               'topic-badge--keyword': normalizeTopicCategory(topic.category, topic.kind) === 'keyword',
                               'topic-badge--active': selectedTopicSlug === topic.slug,
+                              'topic-badge--abstract': topic.is_abstract,
                             }"
                             @click="handleTagSelect(topic.slug, normalizeTopicCategory(topic.category, topic.kind))"
                           >
-                            <Icon v-if="topic.icon" :icon="topic.icon" width="14" />
+                            <Icon v-if="topic.is_abstract" icon="mdi:tag-group" width="14" class="text-amber-400/80" />
+                            <Icon v-else-if="topic.icon" :icon="topic.icon" width="14" />
                             {{ topic.label }}
+                            <span v-if="topic.is_abstract" class="ml-1 text-[10px] text-amber-400/60">({{ topic.child_slugs?.length ?? 0 }})</span>
+                            <span v-else-if="topic.is_low_quality" class="ml-1 text-[10px] text-white/35">低质量</span>
                           </button>
                           <button
                             type="button"
@@ -1019,6 +1458,29 @@ await loadGraph()
                 </section>
 
                 <TopicGraphFooterPanels :detail="detail" />
+                </template>
+
+                <!-- Hierarchy view -->
+                <template v-else-if="activeTab === 'hierarchy'">
+                  <article class="rounded-[30px] p-4 md:p-5 border border-[rgba(255,255,255,0.08)] bg-[rgba(11,18,24,0.4)] backdrop-blur-xl">
+                    <TagHierarchy
+                      :feed-id="selectedFilterFeedId"
+                      :category-id="selectedFilterCategoryId"
+                      :anchor-date="selectedDate"
+                      @select-tag="handleTagSelect"
+                    />
+                  </article>
+                </template>
+
+                <!-- Narrative view -->
+                <template v-else-if="activeTab === 'narrative'">
+                  <article class="rounded-[30px] p-4 md:p-5 border border-[rgba(255,255,255,0.08)] bg-[rgba(11,18,24,0.4)] backdrop-blur-xl">
+                    <NarrativePanel
+                      :date="selectedDate"
+                      @select-tag="handleNarrativeTagSelect"
+                    />
+                  </article>
+                </template>
               </div>
             </div>
           </article>
@@ -1027,20 +1489,17 @@ await loadGraph()
             {{ notice }}
           </p>
 
-          <!-- Timeline Section -->
-          <article class="topic-timeline-shell rounded-[34px] p-4 md:p-5">
-            <TopicTimeline
-              :selected-topic="selectedTopicInfo"
-              :items="effectiveTimelineItems"
-              :active-digest-id="selectedDigestId"
-              :pending-article-count="pendingArticles.length"
-              :selected-pending-node="selectedPendingNode"
-              @select-digest="handleDigestSelect"
-              @preview-digest="handlePreviewDigest"
-              @open-article="openArticlePreview"
-              @select-pending="handleSelectPending"
-            />
-          </article>
+          <!-- Timeline floating trigger -->
+          <button
+            type="button"
+            class="timeline-fab"
+            :class="{ 'timeline-fab--active': timelineOpen }"
+            @click="timelineOpen = !timelineOpen"
+          >
+            <Icon icon="mdi:timeline-clock-outline" width="18" />
+            <span class="timeline-fab__label">时间线</span>
+            <span v-if="totalAggregatedCount" class="timeline-fab__badge">{{ totalAggregatedCount }}</span>
+          </button>
         </div>
 
         <div class="topic-reading-rail" data-testid="topic-graph-sidebar-region">
@@ -1054,36 +1513,66 @@ await loadGraph()
             :selected-tag-slug="selectedHotspotTag?.slug"
             :pending-articles="selectedPendingNode ? pendingArticles : []"
             :selected-pending-node="selectedPendingNode"
+            :abstract-node-slug="abstractNodeSlug"
+            :abstract-node-label="abstractNodeLabel"
+            :timeline-group-articles="selectedGroupArticles"
+            :timeline-group-key="selectedGroupKey"
             @open-article="openArticlePreview"
             @highlight-keyword="handleKeywordHighlight"
+            @select-child-tag="handleChildTagSelect"
+            @select-abstract-tag="handleAbstractTagSelect"
           />
         </div>
       </section>
     </div>
 
+    <!-- Timeline floating panel -->
     <Teleport to="body">
-      <div
-        v-if="previewDigest"
-        class="topic-digest-modal"
-        data-testid="topic-graph-digest-preview"
-        @click.self="closeDigestPreview"
-      >
-        <div class="topic-digest-modal__panel topic-digest-modal__panel--detail">
-          <button
-            class="topic-digest-modal__close btn-ghost min-h-11 min-w-11 px-0"
-            type="button"
-            aria-label="关闭日报弹窗"
-            @click="closeDigestPreview"
+      <Transition name="timeline-slide">
+        <div
+          v-if="timelineOpen"
+          ref="timelinePanelRef"
+          class="timeline-float-panel"
+          :class="{ 'timeline-float-panel--dragging': isDragging }"
+          :style="{
+            transform: timelinePosition.x || timelinePosition.y
+              ? `translate(${timelinePosition.x}px, ${timelinePosition.y}px)`
+              : 'none',
+          }"
+        >
+          <header
+            class="timeline-float-panel__header"
+            @mousedown="handleTimelineDragStart"
           >
-            <Icon icon="mdi:close" width="18" />
-          </button>
-
-          <DigestDetail
-            :summary="previewDigestSummary"
-            active-type-label="日报"
-          />
+            <div class="flex items-center gap-2">
+              <Icon icon="mdi:drag-horizontal-variant" width="16" class="text-white/40 cursor-grab" />
+              <Icon icon="mdi:timeline-clock-outline" width="16" class="text-[rgba(240,138,75,0.8)]" />
+              <span class="font-serif text-sm text-white">时间线</span>
+              <span v-if="totalAggregatedCount" class="text-xs text-white/40">{{ totalAggregatedCount }} 篇</span>
+            </div>
+            <button
+              type="button"
+              class="btn-ghost min-h-8 min-w-8 px-0"
+              @mousedown.stop
+              @click="timelineOpen = false"
+            >
+              <Icon icon="mdi:close" width="16" />
+            </button>
+          </header>
+          <div class="timeline-float-panel__body">
+            <TopicTimeline
+              :selected-topic="selectedTopicInfo"
+              :groups="timelineAggregationGroups"
+              :active-group-key="selectedGroupKey"
+              :aggregation-mode="aggregationMode"
+              :total-count="totalAggregatedCount"
+              @select-group="handleTimelineGroupSelect"
+              @open-article="openArticlePreview"
+              @update:aggregation-mode="handleAggregationModeChange"
+            />
+          </div>
         </div>
-      </div>
+      </Transition>
     </Teleport>
 
     <Teleport to="body">
@@ -1378,6 +1867,12 @@ await loadGraph()
   box-shadow: 0 12px 28px rgba(4, 8, 14, 0.24);
 }
 
+.topic-badge--abstract {
+  border-color: rgba(251, 191, 36, 0.55);
+  background: rgba(251, 191, 36, 0.12);
+  font-weight: 500;
+}
+
 .topic-category-column {
   position: relative;
   z-index: 5;
@@ -1571,6 +2066,11 @@ await loadGraph()
   color: rgba(255, 235, 220, 0.95) !important;
 }
 
+.topic-dropdown-item--abstract {
+  background: rgba(251, 191, 36, 0.08);
+  font-weight: 500;
+}
+
 .topic-graph-toggle,
 .topic-badge-toggle {
   display: inline-flex;
@@ -1698,6 +2198,31 @@ await loadGraph()
   color: rgba(255, 255, 255, 0.6);
 }
 
+.th-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  background: none;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 0.7rem;
+  padding: 0.28rem 0.7rem;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.th-tab-btn:hover {
+  border-color: rgba(255, 255, 255, 0.2);
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.th-tab-btn--active {
+  border-color: rgba(240, 138, 75, 0.45);
+  background: rgba(240, 138, 75, 0.1);
+  color: rgba(255, 220, 200, 0.88);
+}
+
 .topic-count {
   margin-left: 0.5rem;
   padding: 0.15rem 0.5rem;
@@ -1705,5 +2230,116 @@ await loadGraph()
   background: rgba(255, 255, 255, 0.08);
   color: rgba(255, 255, 255, 0.5);
   font-size: 0.7rem;
+}
+
+/* Timeline floating action button */
+.timeline-fab {
+  position: fixed;
+  bottom: 1.5rem;
+  right: 1.5rem;
+  z-index: 60;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  border: 1px solid rgba(240, 138, 75, 0.35);
+  border-radius: 999px;
+  background: linear-gradient(135deg, rgba(20, 29, 40, 0.92), rgba(12, 18, 26, 0.96));
+  color: rgba(255, 220, 200, 0.9);
+  font-size: 0.78rem;
+  padding: 0.55rem 1rem;
+  cursor: pointer;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(240, 138, 75, 0.08);
+  backdrop-filter: blur(16px);
+  transition: all 0.2s ease;
+}
+
+.timeline-fab:hover {
+  transform: translateY(-2px);
+  border-color: rgba(240, 138, 75, 0.55);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(240, 138, 75, 0.15);
+}
+
+.timeline-fab--active {
+  border-color: rgba(240, 138, 75, 0.6);
+  background: linear-gradient(135deg, rgba(240, 138, 75, 0.18), rgba(20, 29, 40, 0.94));
+}
+
+.timeline-fab__label {
+  white-space: nowrap;
+}
+
+.timeline-fab__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.2rem;
+  height: 1.2rem;
+  border-radius: 999px;
+  background: rgba(240, 138, 75, 0.25);
+  color: rgba(255, 220, 200, 0.95);
+  font-size: 0.65rem;
+  padding: 0 0.3rem;
+}
+
+/* Timeline floating panel */
+.timeline-float-panel {
+  position: fixed;
+  bottom: 4.5rem;
+  right: 1.5rem;
+  z-index: 75;
+  display: flex;
+  flex-direction: column;
+  width: min(520px, calc(100vw - 3rem));
+  max-height: 65vh;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 1.25rem;
+  background: linear-gradient(180deg, rgba(17, 27, 38, 0.97), rgba(9, 15, 23, 0.99));
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(20px);
+  overflow: hidden;
+  transition: box-shadow 0.2s ease;
+}
+
+.timeline-float-panel--dragging {
+  box-shadow: 0 32px 100px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(240, 138, 75, 0.2);
+}
+
+.timeline-float-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  flex-shrink: 0;
+}
+
+.timeline-float-panel__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0.75rem 1rem 1rem;
+}
+
+.timeline-float-panel__body::-webkit-scrollbar {
+  width: 4px;
+}
+.timeline-float-panel__body::-webkit-scrollbar-track {
+  background: transparent;
+}
+.timeline-float-panel__body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 2px;
+}
+
+/* Slide transition */
+.timeline-slide-enter-active,
+.timeline-slide-leave-active {
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.timeline-slide-enter-from,
+.timeline-slide-leave-to {
+  opacity: 0;
+  transform: translateY(20px) scale(0.96);
 }
 </style>

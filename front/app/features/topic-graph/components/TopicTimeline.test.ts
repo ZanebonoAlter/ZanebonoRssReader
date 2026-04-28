@@ -2,22 +2,25 @@ import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
 import TopicTimeline from './TopicTimeline.vue'
 import type { TopicCategory } from '~/api/topicGraph'
-import type { TimelineDigest, TimelineFilters } from '~/types/timeline'
+import type { TimelineAggregationGroup } from '~/types/timeline'
 
-function createMockItem(overrides: Partial<TimelineDigest> = {}): TimelineDigest {
+function createMockGroup(overrides: Partial<TimelineAggregationGroup> = {}): TimelineAggregationGroup {
+  const startDate = new Date('2026-03-14T08:00:00+08:00')
+  const endDate = new Date('2026-03-15T08:00:00+08:00')
   return {
-    id: 'digest-1',
-    title: 'AI Agent 日报',
-    summary: '整理当天话题与来源文章。',
-    createdAt: '2026-03-14T08:30:00+08:00',
-    feedName: 'OpenAI Blog',
-    categoryName: 'AI',
-    articleCount: 2,
-    tags: [
-      { slug: 'ai-agent', label: 'AI Agent', category: 'keyword' },
-    ],
+    key: '2026-03-14',
+    label: '3月14日 周六',
+    startDate,
+    endDate,
     articles: [
-      { id: 1, title: 'Source 1', link: 'https://example.com/1' },
+      {
+        id: '1',
+        title: 'Source 1',
+        link: 'https://example.com/1',
+        pubDate: '2026-03-14T08:30:00+08:00',
+        feedName: 'OpenAI Blog',
+        tags: [{ slug: 'ai-agent', label: 'AI Agent', category: 'keyword' }],
+      },
     ],
     ...overrides,
   }
@@ -32,25 +35,20 @@ function createMockTopic(overrides: { slug?: string; label?: string; category?: 
   }
 }
 
-const defaultFilters: TimelineFilters = {
-  dateRange: null,
-  sources: [],
-}
-
 describe('TopicTimeline', () => {
-  it('renders digest items', () => {
+  it('renders aggregation groups', () => {
     const wrapper = mount(TopicTimeline, {
       global: {
         stubs: {
           TimelineHeader: true,
           TimelineItem: true,
-          AIAnalysisPanel: true,
         },
       },
       props: {
         selectedTopic: createMockTopic(),
-        items: [createMockItem(), createMockItem({ id: 'digest-2' })],
-        filters: defaultFilters,
+        groups: [createMockGroup(), createMockGroup({ key: '2026-03-13' })],
+        aggregationMode: 'day',
+        totalCount: 2,
       },
     })
 
@@ -64,67 +62,42 @@ describe('TopicTimeline', () => {
       global: {
         stubs: {
           TimelineHeader: true,
-          AIAnalysisPanel: true,
         },
       },
       props: {
         selectedTopic: null,
-        items: [],
-        filters: defaultFilters,
+        groups: [],
+        aggregationMode: 'day',
+        totalCount: 0,
       },
     })
 
     expect(wrapper.find('.timeline-empty').text()).toContain('请先选择')
   })
 
-  it('shows empty state when no digest items', () => {
+  it('shows empty state when no groups', () => {
     const wrapper = mount(TopicTimeline, {
       global: {
         stubs: {
           TimelineHeader: true,
-          AIAnalysisPanel: true,
         },
       },
       props: {
         selectedTopic: createMockTopic(),
-        items: [],
-        filters: defaultFilters,
+        groups: [],
+        aggregationMode: 'day',
+        totalCount: 0,
       },
     })
 
-    expect(wrapper.find('.timeline-empty').text()).toContain('没有日报')
-  })
-
-  it('emits filter-change from header', async () => {
-    const TimelineHeaderStub = {
-      template: '<button @click="$emit(\'filter-change\', { dateRange: \'today\', sources: [] })">Change</button>',
-      emits: ['filter-change'],
-    }
-
-    const wrapper = mount(TopicTimeline, {
-      global: {
-        stubs: {
-          TimelineHeader: TimelineHeaderStub,
-          TimelineItem: true,
-          AIAnalysisPanel: true,
-        },
-      },
-      props: {
-        selectedTopic: createMockTopic(),
-        items: [createMockItem()],
-        filters: defaultFilters,
-      },
-    })
-
-    await wrapper.find('button').trigger('click')
-    expect(wrapper.emitted('filter-change')).toEqual([[{ dateRange: 'today', sources: [] }]])
+    expect(wrapper.find('.timeline-empty').text()).toContain('还没有关联文章')
   })
 
   it('emits open-article from timeline item', async () => {
     const TimelineItemStub = {
-      template: '<button @click="$emit(\'open-article\', 12)">Open</button>',
-      props: ['item', 'isFirst', 'isLast'],
-      emits: ['open-article'],
+      template: '<button @click="$emit(\'openArticle\', 12)">Open</button>',
+      props: ['group', 'isFirst', 'isLast', 'aggregationMode'],
+      emits: ['openArticle'],
     }
 
     const wrapper = mount(TopicTimeline, {
@@ -132,13 +105,13 @@ describe('TopicTimeline', () => {
         stubs: {
           TimelineHeader: true,
           TimelineItem: TimelineItemStub,
-          AIAnalysisPanel: true,
         },
       },
       props: {
         selectedTopic: createMockTopic(),
-        items: [createMockItem()],
-        filters: defaultFilters,
+        groups: [createMockGroup()],
+        aggregationMode: 'day',
+        totalCount: 1,
       },
     })
 
@@ -146,10 +119,10 @@ describe('TopicTimeline', () => {
     expect(wrapper.emitted('open-article')).toEqual([[12]])
   })
 
-  it('emits select-digest from timeline item', async () => {
+  it('emits select-group from timeline item', async () => {
     const TimelineItemStub = {
-      template: '<button @click="$emit(\'select\', \'digest-1\')">Select</button>',
-      props: ['item', 'isFirst', 'isLast', 'isActive'],
+      template: '<button @click="$emit(\'select\', \'2026-03-14\')">Select</button>',
+      props: ['group', 'isFirst', 'isLast', 'isActive', 'aggregationMode'],
       emits: ['select'],
     }
 
@@ -158,45 +131,43 @@ describe('TopicTimeline', () => {
         stubs: {
           TimelineHeader: true,
           TimelineItem: TimelineItemStub,
-          AIAnalysisPanel: true,
         },
       },
       props: {
         selectedTopic: createMockTopic(),
-        items: [createMockItem()],
-        filters: defaultFilters,
-        activeDigestId: 'digest-1',
+        groups: [createMockGroup()],
+        aggregationMode: 'day',
+        totalCount: 1,
+        activeGroupKey: '2026-03-14',
       },
     })
 
     await wrapper.find('button').trigger('click')
-    expect(wrapper.emitted('select-digest')).toEqual([['digest-1']])
+    expect(wrapper.emitted('select-group')).toEqual([['2026-03-14']])
   })
 
-  it('emits preview-digest from timeline item', async () => {
-    const TimelineItemStub = {
-      template: '<button @click="$emit(\'preview-digest\', \'digest-1\')">Preview</button>',
-      props: ['item', 'isFirst', 'isLast', 'isActive'],
-      emits: ['preview-digest'],
+  it('emits update:aggregationMode from header', async () => {
+    const TimelineHeaderStub = {
+      template: '<button @click="$emit(\'update:aggregationMode\', \'hour\')">Toggle</button>',
+      props: ['topic', 'totalCount', 'aggregationMode'],
+      emits: ['update:aggregationMode'],
     }
 
     const wrapper = mount(TopicTimeline, {
       global: {
         stubs: {
-          TimelineHeader: true,
-          TimelineItem: TimelineItemStub,
-          AIAnalysisPanel: true,
+          TimelineHeader: TimelineHeaderStub,
         },
       },
       props: {
         selectedTopic: createMockTopic(),
-        items: [createMockItem()],
-        filters: defaultFilters,
-        activeDigestId: 'digest-1',
+        groups: [createMockGroup()],
+        aggregationMode: 'day',
+        totalCount: 1,
       },
     })
 
     await wrapper.find('button').trigger('click')
-    expect(wrapper.emitted('preview-digest')).toEqual([['digest-1']])
+    expect(wrapper.emitted('update:aggregationMode')).toEqual([['hour']])
   })
 })

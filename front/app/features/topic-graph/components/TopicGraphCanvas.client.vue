@@ -142,18 +142,8 @@ function applyHighlightStyles() {
   const graph = graphInstance.value
   const hasFocusSelection = focusHighlightActive.value
 
-  graph
-    .nodeOpacity((node: TopicGraphSceneNode) => {
-      if (!hasFocusSelection) {
-        if (!props.activeNodeId) return 0.9
-        return getNodeEmphasis(node.id) === 'peripheral' ? 0.18 : 0.92
-      }
-
-      const emphasis = getNodeEmphasis(node.id)
-      if (emphasis === 'trunk') return 0.98
-      if (emphasis === 'branch') return 0.74
-      return 0.16
-    })
+graph
+    .nodeOpacity(() => 0.98)
     .linkOpacity((link: TopicGraphSceneEdge) => {
       return resolveTopicGraphLinkOpacity(link, {
         linkDisplayMode: linkDisplayMode.value,
@@ -263,12 +253,8 @@ function buildNodeObject(node: TopicGraphSceneNode) {
     radius *= 0.6 // Peripheral nodes shrink
   }
 
-  // Opacity based on emphasis
-  let opacity = 0.72
-  if (isTrunk) opacity = 0.98
-  else if (isNeighborHighlighted) opacity = 0.72
-  else if (isBranch) opacity = 0.62
-  else if (isPeripheral) opacity = 0.14
+// Opacity: quality-aware for topic nodes
+  const opacity = node.opacity ?? 0.98
 
   const sphere = new THREE.Mesh(
     new THREE.SphereGeometry(radius, 24, 24),
@@ -279,6 +265,30 @@ function buildNodeObject(node: TopicGraphSceneNode) {
     }),
   )
   group.add(sphere)
+
+  // Abstract tag glow: emissive halo using lighter version of accent color
+  if (node.isAbstract) {
+    const glowColor = lightenColor(node.accent, 0.35)
+    const abstractHalo = new THREE.Mesh(
+      new THREE.SphereGeometry(radius * 1.6, 24, 24),
+      new THREE.MeshBasicMaterial({
+        color: glowColor,
+        transparent: true,
+        opacity: 0.18,
+      }),
+    )
+    group.add(abstractHalo)
+
+    const abstractOuterGlow = new THREE.Mesh(
+      new THREE.SphereGeometry(radius * 2.1, 24, 24),
+      new THREE.MeshBasicMaterial({
+        color: glowColor,
+        transparent: true,
+        opacity: 0.08,
+      }),
+    )
+    group.add(abstractOuterGlow)
+  }
 
   // Trunk gets a strong, pulsing-like halo
   if (isTrunk || isNeighborHighlighted) {
@@ -315,22 +325,15 @@ function buildNodeObject(node: TopicGraphSceneNode) {
     }
   }
 
-  // Labels: Always show for trunk and branch, or if featured (when no active node)
-  const showLabel = isTrunk
-    || isNeighborHighlighted
-    || (props.activeNodeId && isBranch)
-    || (!props.activeNodeId && isFeatured)
-  
-  if (showLabel) {
-    const label = new SpriteText(compactLabel(node.label, isTrunk ? 40 : 20))
-    label.color = isTrunk ? '#ffffff' : (isBranch ? '#f3efe7' : 'rgba(248,244,236,0.58)')
-    label.textHeight = isTrunk ? 9 : (isBranch ? 5.1 : 4.6)
-    label.backgroundColor = isTrunk ? 'rgba(15,24,33,0.78)' : 'rgba(15,24,33,0.34)'
-    label.padding = isTrunk ? 4 : 2
-    label.borderRadius = 10
-    label.position.set(0, radius + (isTrunk ? 12 : 8), 0)
-    group.add(label)
-  }
+// Labels: Always show for all nodes, style varies by emphasis
+  const label = new SpriteText(compactLabel(node.label, isTrunk ? 40 : 20))
+  label.color = '#ffffff'
+  label.textHeight = isTrunk ? 9 : (isBranch ? 5.1 : 4.6)
+  label.backgroundColor = isTrunk ? 'rgba(15,24,33,0.78)' : 'rgba(15,24,33,0.34)'
+  label.padding = isTrunk ? 4 : 2
+  label.borderRadius = 10
+  label.position.set(0, radius + (isTrunk ? 12 : 8), 0)
+  group.add(label)
 
   return group
 }
@@ -418,11 +421,25 @@ function compactLabel(label: string, maxLength: number) {
   return label.length > maxLength ? `${label.slice(0, maxLength)}…` : label
 }
 
+function lightenColor(hex: string, amount: number): string {
+  const color = hex.replace('#', '')
+  const r = Math.min(255, parseInt(color.slice(0, 2), 16) + Math.round(255 * amount))
+  const g = Math.min(255, parseInt(color.slice(2, 4), 16) + Math.round(255 * amount))
+  const b = Math.min(255, parseInt(color.slice(4, 6), 16) + Math.round(255 * amount))
+  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`
+}
+
 function cancelFocusAnimation() {
   if (focusAnimationFrame.value === null) return
 
   cancelAnimationFrame(focusAnimationFrame.value)
   focusAnimationFrame.value = null
+  
+  // Re-enable controls if they were disabled during animation
+  const controls = graphInstance.value?.controls?.()
+  if (controls && !controls.enabled) {
+    controls.enabled = true
+  }
 }
 
 function resolveGraphNode(nodeId: string) {
@@ -479,9 +496,13 @@ async function focusActiveNode() {
     }
   }
 
-  cancelFocusAnimation()
+cancelFocusAnimation()
 
   if (camera?.position && controls?.target?.set && typeof controls.update === 'function') {
+    // Disable controls during animation to prevent interference
+    const wasEnabled = controls.enabled
+    controls.enabled = false
+
     const startCameraPosition = {
       x: camera.position.x,
       y: camera.position.y,
@@ -527,9 +548,10 @@ async function focusActiveNode() {
         return
       }
 
-      const finalNode = resolveGraphNode(nodeId) || currentNode
+const finalNode = resolveGraphNode(nodeId) || currentNode
       controls.target.set(finalNode.x ?? currentLookAt.x, finalNode.y ?? currentLookAt.y, finalNode.z ?? currentLookAt.z)
       controls.update()
+      controls.enabled = wasEnabled
       focusAnimationFrame.value = null
     }
 

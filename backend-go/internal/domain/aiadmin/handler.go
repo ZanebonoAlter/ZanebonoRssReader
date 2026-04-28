@@ -21,6 +21,7 @@ type UpsertProviderRequest struct {
 	TimeoutSeconds int      `json:"timeout_seconds"`
 	MaxTokens      *int     `json:"max_tokens"`
 	Temperature    *float64 `json:"temperature"`
+	EnableThinking *bool    `json:"enable_thinking"`
 	Metadata       string   `json:"metadata"`
 }
 
@@ -51,6 +52,7 @@ func ListProviders(c *gin.Context) {
 			"timeout_seconds":    provider.TimeoutSeconds,
 			"max_tokens":         provider.MaxTokens,
 			"temperature":        provider.Temperature,
+			"enable_thinking":    provider.EnableThinking,
 			"metadata":           provider.Metadata,
 			"api_key_configured": strings.TrimSpace(provider.APIKey) != "",
 		})
@@ -75,6 +77,7 @@ func UpsertProvider(c *gin.Context) {
 		TimeoutSeconds: req.TimeoutSeconds,
 		MaxTokens:      req.MaxTokens,
 		Temperature:    req.Temperature,
+		EnableThinking: req.EnableThinking != nil && *req.EnableThinking,
 		Metadata:       req.Metadata,
 		Enabled:        req.Enabled == nil || *req.Enabled,
 	}
@@ -118,6 +121,9 @@ func UpdateProvider(c *gin.Context) {
 	provider.MaxTokens = req.MaxTokens
 	provider.Temperature = req.Temperature
 	provider.Metadata = req.Metadata
+	if req.EnableThinking != nil {
+		provider.EnableThinking = *req.EnableThinking
+	}
 	if req.Enabled != nil {
 		provider.Enabled = *req.Enabled
 	}

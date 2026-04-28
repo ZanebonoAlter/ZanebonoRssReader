@@ -12,6 +12,7 @@ import (
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/domain/topicextraction"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/logging"
 )
 
 type FeedService struct {
@@ -51,6 +52,7 @@ func (s *FeedService) RefreshFeed(ctx context.Context, feedID uint) (err error) 
 	feed.Title = parsed.Title
 	feed.Description = parsed.Description
 	feed.LastUpdated = &now
+	feed.LastRefreshAt = &now
 	feed.RefreshStatus = "success"
 	feed.RefreshError = ""
 
@@ -72,19 +74,22 @@ func (s *FeedService) RefreshFeed(ctx context.Context, feedID uint) (err error) 
 		}
 	}
 
+	var existingTitles []string
+	database.DB.Model(&models.Article{}).
+		Where("feed_id = ?", feed.ID).
+		Pluck("title", &existingTitles)
+	titleSet := make(map[string]bool, len(existingTitles))
+	for _, t := range existingTitles {
+		titleSet[t] = true
+	}
+
 	articlesAdded := 0
 	for _, entry := range parsed.Entries {
 		if entry.Link == "" {
 			continue
 		}
 
-		var existingArticle models.Article
-		err := database.DB.Where("feed_id = ? AND title = ?", feed.ID, entry.Title).First(&existingArticle).Error
-		if err == nil {
-			continue
-		}
-
-		if err != gorm.ErrRecordNotFound {
+		if titleSet[entry.Title] {
 			continue
 		}
 
@@ -99,8 +104,10 @@ func (s *FeedService) RefreshFeed(ctx context.Context, feedID uint) (err error) 
 			continue
 		}
 
+		titleSet[entry.Title] = true
+
 		if err := s.enqueueArticleProcessing(feed, article); err != nil {
-			return err
+			logging.Errorf("Error enqueueing processing for article %d (feed %d): %v", article.ID, feed.ID, err)
 		}
 
 		articlesAdded++
@@ -109,7 +116,7 @@ func (s *FeedService) RefreshFeed(ctx context.Context, feedID uint) (err error) 
 		}
 	}
 
-	s.cleanupOldArticles(&feed)
+	s.CleanupOldArticles(&feed)
 
 	if err := database.DB.Save(&feed).Error; err != nil {
 		return err
@@ -124,9 +131,10 @@ func (s *FeedService) enqueueArticleProcessing(feed models.Feed, article models.
 	}
 
 	return topicextraction.NewTagJobQueue(database.DB).Enqueue(topicextraction.TagJobRequest{
-		ArticleID: article.ID,
-		FeedName:  feed.Title,
-		Reason:    "article_created",
+		ArticleID:    article.ID,
+		FeedName:     feed.Title,
+		CategoryName: topicextraction.FeedCategoryName(feed),
+		Reason:       "article_created",
 	})
 }
 
@@ -138,29 +146,62 @@ func (s *FeedService) updateFeedError(feed *models.Feed, err error) {
 	database.DB.Save(feed)
 }
 
-func (s *FeedService) cleanupOldArticles(feed *models.Feed) {
-	var articles []models.Article
-	if err := database.DB.Omit("tag_count").Where("feed_id = ?", feed.ID).Order("pub_date DESC").Find(&articles).Error; err != nil {
+func (s *FeedService) CleanupOldArticles(feed *models.Feed) {
+	maxArticles := feed.MaxArticles
+	if maxArticles <= 0 {
+		maxArticles = 100
+	}
+
+	var articleCount int64
+	database.DB.Model(&models.Article{}).Where("feed_id = ?", feed.ID).Count(&articleCount)
+
+	logging.Infof("[cleanup] feed %d: max=%d, current=%d", feed.ID, maxArticles, articleCount)
+
+	if int(articleCount) <= maxArticles {
+		logging.Infof("[cleanup] feed %d: skip, article count within limit", feed.ID)
 		return
 	}
 
-	if len(articles) <= feed.MaxArticles {
-		return
+	var allArticles []struct {
+		ID              uint
+		Favorite        bool
+		FirecrawlStatus string
+		SummaryStatus   string
+	}
+	database.DB.Model(&models.Article{}).
+		Select("id, favorite, firecrawl_status, summary_status").
+		Where("feed_id = ?", feed.ID).
+		Order("pub_date DESC").
+		Find(&allArticles)
+
+	keepIDs := make([]uint, 0)
+	candidates := make([]uint, 0)
+
+	for _, a := range allArticles {
+		if a.Favorite {
+			keepIDs = append(keepIDs, a.ID)
+		} else {
+			candidates = append(candidates, a.ID)
+		}
 	}
 
-	articlesToDelete := len(articles) - feed.MaxArticles
-	for i := len(articles) - 1; i >= 0 && articlesToDelete > 0; i-- {
-		article := articles[i]
-		if article.Favorite {
-			continue
-		}
+	logging.Infof("[cleanup] feed %d: keep=%d (favorite), candidates=%d", feed.ID, len(keepIDs), len(candidates))
 
-		if article.FirecrawlStatus == "pending" || article.FirecrawlStatus == "processing" || article.SummaryStatus == "incomplete" || article.SummaryStatus == "pending" {
-			continue
+	remaining := maxArticles - len(keepIDs)
+	if len(candidates) > 0 {
+		toDelete := candidates
+		if remaining > 0 && len(candidates) > remaining {
+			keepFromCandidates := candidates[:remaining]
+			keepIDs = append(keepIDs, keepFromCandidates...)
+			toDelete = candidates[remaining:]
 		}
-
-		database.DB.Delete(&article)
-		articlesToDelete--
+		if len(toDelete) > 0 {
+			logging.Infof("[cleanup] feed %d: deleting %d articles, IDs=%v", feed.ID, len(toDelete), toDelete)
+			database.DB.Where("article_id IN (SELECT id FROM articles WHERE feed_id = ? AND id IN ?)", feed.ID, toDelete).Delete(&models.ReadingBehavior{})
+			database.DB.Where("feed_id = ? AND id IN ?", feed.ID, toDelete).Delete(&models.Article{})
+		} else {
+			logging.Infof("[cleanup] feed %d: no articles to delete", feed.ID)
+		}
 	}
 }
 
@@ -170,15 +211,16 @@ func (s *FeedService) FetchFeedPreview(feedURL string) (title, description strin
 
 func (s *FeedService) buildArticleFromEntry(feed models.Feed, entry ParsedEntry) models.Article {
 	article := models.Article{
-		FeedID:        feed.ID,
-		Title:         entry.Title,
-		Description:   entry.Description,
-		Content:       entry.Content,
-		Link:          entry.Link,
-		ImageURL:      entry.ImageURL,
-		PubDate:       entry.PubDate,
-		Author:        entry.Author,
-		SummaryStatus: "complete",
+		FeedID:          feed.ID,
+		Title:           entry.Title,
+		Description:     entry.Description,
+		Content:         entry.Content,
+		Link:            entry.Link,
+		ImageURL:        entry.ImageURL,
+		PubDate:         entry.PubDate,
+		Author:          entry.Author,
+		SummaryStatus:   "complete",
+		FirecrawlStatus: "complete",
 	}
 
 	if feed.FirecrawlEnabled {
@@ -186,6 +228,8 @@ func (s *FeedService) buildArticleFromEntry(feed models.Feed, entry ParsedEntry)
 		if feed.ArticleSummaryEnabled {
 			article.SummaryStatus = "incomplete"
 		}
+	} else if feed.ArticleSummaryEnabled {
+		article.SummaryStatus = "pending"
 	}
 
 	return article

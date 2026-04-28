@@ -11,7 +11,7 @@ export function isContentCompletionScheduler(name: string): boolean {
 }
 
 export function isHotScheduler(name: string): boolean {
-  return name === 'auto_refresh' || name === 'auto_summary' || isContentCompletionScheduler(name) || name === 'firecrawl'
+  return name === 'auto_refresh' || isContentCompletionScheduler(name) || name === 'firecrawl'
 }
 
 export function getSchedulerDisplayName(name: string): string {
@@ -21,8 +21,8 @@ export function getSchedulerDisplayName(name: string): string {
 
   const names: Record<string, string> = {
     'auto_refresh': '后台刷新',
-    'auto_summary': '自动总结',
     'firecrawl': '全文爬取',
+    'tag_hierarchy_cleanup': '标签清理',
   }
 
   return names[name] || name
@@ -35,8 +35,8 @@ export function getSchedulerIcon(name: string): string {
 
   const icons: Record<string, string> = {
     'auto_refresh': 'mdi:refresh',
-    'auto_summary': 'mdi:brain',
     'firecrawl': 'mdi:spider-web',
+    'tag_hierarchy_cleanup': 'mdi:tag-remove-outline',
   }
 
   return icons[name] || 'mdi:cog'
@@ -49,8 +49,8 @@ export function getSchedulerColor(name: string): string {
 
   const colors: Record<string, string> = {
     'auto_refresh': 'from-blue-500 to-cyan-500',
-    'auto_summary': 'from-ink-500 to-amber-500',
     'firecrawl': 'from-rose-500 to-orange-500',
+    'tag_hierarchy_cleanup': 'from-violet-500 to-purple-600',
   }
 
   return colors[name] || 'from-gray-500 to-gray-600'

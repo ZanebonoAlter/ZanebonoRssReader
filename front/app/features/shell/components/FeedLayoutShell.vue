@@ -8,9 +8,10 @@ import ArticleContent from '~/features/articles/components/ArticleContentView.vu
 import { normalizeArticle } from '../../articles/utils/normalizeArticle'
 import { useGlobalAutoRefresh } from '~/features/feeds/composables/useAutoRefresh'
 import { useArticlePagination } from '~/features/articles/composables/useArticlePagination'
-import AISummariesList from '~/features/summaries/components/AISummariesListView.vue'
-import AISummaryDetail from '~/features/summaries/components/AISummaryDetailView.vue'
 import { SIDEBAR_DEFAULT_WIDTH, MAX_POLLING_TIME, REFRESH_POLLING_INTERVAL } from '~/utils/constants'
+import type { WatchedTag } from '~/api/watchedTags'
+import type { Article } from '~/types/article'
+import type { ArticleFilters } from '~/types/article'
 
 const apiStore = useApiStore()
 const feedsStore = useFeedsStore()
@@ -37,9 +38,7 @@ const sidebarCollapsed = ref(false)
 const sidebarWidth = ref(SIDEBAR_DEFAULT_WIDTH)
 const selectedCategory = ref<string | null>(null)
 const selectedFeed = ref<string | null>(null)
-const selectedArticle = ref<any>(null)
-const showAISummaries = ref(false)
-const selectedSummary = ref<any>(null)
+const selectedArticle = ref<Article | null>(null)
 
 const showAddFeedDialog = ref(false)
 const showAddCategoryDialog = ref(false)
@@ -55,6 +54,9 @@ const showRefreshMessage = ref(false)
 
 const globalUnreadCount = ref(0)
 
+const watchedTags = ref<WatchedTag[]>([])
+const selectedWatchedTagId = ref<string | null>(null)
+
 const editingCategory = computed(() =>
   editCategoryId.value ? feedsStore.categories.find(c => c.id === editCategoryId.value) : null
 )
@@ -69,10 +71,19 @@ async function fetchGlobalUnreadCount() {
   }
 }
 
+async function loadWatchedTags() {
+  const { useWatchedTagsApi } = await import('~/api/watchedTags')
+  const api = useWatchedTagsApi()
+  const res = await api.listWatchedTags()
+  if (res.success && res.data) {
+    watchedTags.value = res.data as WatchedTag[]
+  }
+}
+
 async function fetchFeeds() {
   if (selectedCategory.value === 'uncategorized') {
     await apiStore.fetchFeeds({ uncategorized: true, per_page: 10000 })
-  } else if (selectedCategory.value && selectedCategory.value !== 'favorites' && selectedCategory.value !== 'ai-summaries') {
+  } else if (selectedCategory.value && selectedCategory.value !== 'favorites') {
     await apiStore.fetchFeeds({ category_id: parseInt(selectedCategory.value), per_page: 10000 })
   } else {
     await apiStore.fetchFeeds({ per_page: 10000 })
@@ -80,14 +91,22 @@ async function fetchFeeds() {
 }
 
 function buildArticleFilters() {
-  const filters: any = {}
-  if (selectedFeed.value) {
+	const filters: ArticleFilters = {}
+  if (selectedCategory.value === 'watched-tags') {
+    if (selectedWatchedTagId.value) {
+      filters.watched_tag_ids = selectedWatchedTagId.value
+      filters.sort_by = 'date'
+    } else {
+      filters.watched_tags = true
+      filters.sort_by = 'relevance'
+    }
+  } else if (selectedFeed.value) {
     filters.feed_id = parseInt(selectedFeed.value)
   } else if (selectedCategory.value === 'uncategorized') {
     filters.uncategorized = true
   } else if (selectedCategory.value === 'favorites') {
     filters.favorite = true
-  } else if (selectedCategory.value && selectedCategory.value !== 'ai-summaries') {
+  } else if (selectedCategory.value && selectedCategory.value !== 'favorites') {
     filters.category_id = parseInt(selectedCategory.value)
   }
   if (startDate.value) {
@@ -107,6 +126,7 @@ onMounted(async () => {
   await fetchFeeds()
   await loadArticles()
   await fetchGlobalUnreadCount()
+  await loadWatchedTags()
 })
 
 onUnmounted(() => {
@@ -172,8 +192,7 @@ function handleDateFilterClear() {
 const handleCategoryClick = async (categoryId: string) => {
   selectedCategory.value = categoryId
   selectedFeed.value = null
-  showAISummaries.value = false
-  selectedSummary.value = null
+  selectedWatchedTagId.value = null
   startDate.value = ''
   endDate.value = ''
 
@@ -184,8 +203,7 @@ const handleCategoryClick = async (categoryId: string) => {
 
 async function handleFeedClick(feedId: string) {
   selectedFeed.value = feedId
-  showAISummaries.value = false
-  selectedSummary.value = null
+  selectedWatchedTagId.value = null
   startDate.value = ''
   endDate.value = ''
 
@@ -214,8 +232,7 @@ async function handleFeedClick(feedId: string) {
 async function handleFavoritesClick() {
   selectedCategory.value = 'favorites'
   selectedFeed.value = null
-  showAISummaries.value = false
-  selectedSummary.value = null
+  selectedWatchedTagId.value = null
   startDate.value = ''
   endDate.value = ''
 
@@ -225,8 +242,7 @@ async function handleFavoritesClick() {
 async function handleAllArticlesClick() {
   selectedCategory.value = null
   selectedFeed.value = null
-  showAISummaries.value = false
-  selectedSummary.value = null
+  selectedWatchedTagId.value = null
   startDate.value = ''
   endDate.value = ''
 
@@ -234,31 +250,31 @@ async function handleAllArticlesClick() {
   await loadArticles()
 }
 
-function handleAISummariesClick() {
-  selectedCategory.value = 'ai-summaries'
-  selectedFeed.value = null
-  showAISummaries.value = true
-  selectedSummary.value = null
-}
-
-function handleDigestClick() {
-  selectedCategory.value = 'digest'
-  selectedFeed.value = null
-  showAISummaries.value = false
-  selectedSummary.value = null
-  navigateTo('/digest')
-}
-
 function handleTopicGraphClick() {
   selectedCategory.value = 'topic-graph'
   selectedFeed.value = null
-  showAISummaries.value = false
-  selectedSummary.value = null
+  selectedWatchedTagId.value = null
   navigateTo('/topics')
 }
 
-function handleSummarySelect(summary: any) {
-  selectedSummary.value = summary
+async function handleWatchedTagsClick() {
+  selectedCategory.value = 'watched-tags'
+  selectedFeed.value = null
+  selectedWatchedTagId.value = null
+  startDate.value = ''
+  endDate.value = ''
+  await loadWatchedTags()
+  await loadArticles()
+}
+
+async function handleWatchedTagClick(tagId: string) {
+  selectedCategory.value = 'watched-tags'
+  selectedFeed.value = null
+  selectedWatchedTagId.value = tagId
+  startDate.value = ''
+  endDate.value = ''
+  await loadWatchedTags()
+  await loadArticles()
 }
 
 const refreshPollingInterval = ref<ReturnType<typeof setTimeout> | null>(null)
@@ -365,13 +381,15 @@ async function handleRefresh() {
 
 async function handleMarkAllRead() {
   if (selectedFeed.value) {
-    await apiStore.markAllAsRead(selectedFeed.value)
+    await apiStore.markAllAsRead({ feedId: selectedFeed.value })
   } else if (selectedCategory.value) {
-    const feedIds = feedsStore.feeds
-      .filter(f => f.category === selectedCategory.value)
-      .map(f => f.id)
-    for (const feedId of feedIds) {
-      await apiStore.markAllAsRead(feedId)
+    if (selectedCategory.value === 'uncategorized') {
+      await apiStore.markAllAsRead({ uncategorized: true })
+    } else {
+      const categoryId = parseInt(selectedCategory.value)
+      if (categoryId > 0) {
+        await apiStore.markAllAsRead({ categoryId })
+      }
     }
   } else {
     await apiStore.markAllAsRead()
@@ -444,22 +462,23 @@ import '~/components/FeedLayout.css'
         :selected-category="selectedCategory"
         :selected-feed="selectedFeed"
         :global-unread-count="globalUnreadCount"
+        :watched-tags="watchedTags"
+        :selected-watched-tag-id="selectedWatchedTagId"
         @toggle-sidebar="toggleSidebar"
         @category-click="handleCategoryClick"
         @feed-click="handleFeedClick"
         @favorites-click="handleFavoritesClick"
-        @ai-summaries-click="handleAISummariesClick"
-        @digest-click="handleDigestClick"
         @topic-graph-click="handleTopicGraphClick"
         @all-articles-click="handleAllArticlesClick"
         @edit-category="handleEditCategory"
         @edit-feed="handleEditFeed"
         @delete-category="handleDeleteCategory"
+        @watched-tags-click="handleWatchedTagsClick"
+        @watched-tag-click="handleWatchedTagClick"
       />
 
 <!-- 文章列表 -->
       <LayoutArticleListPanel
-        v-if="!showAISummaries"
         :articles="articles"
         :selected-category="selectedCategory"
         :selected-feed="selectedFeed"
@@ -476,30 +495,14 @@ import '~/components/FeedLayout.css'
         @date-filter-clear="handleDateFilterClear"
       />
 
-      <!-- AI 总结列表 -->
-      <AISummariesList
-        v-else
-        :category-id="null"
-        @select="handleSummarySelect"
-      />
-
-<!-- 文章内容 / AI 总结详情 -->
-      <div v-if="!showAISummaries && !selectedSummary" class="content-panel">
+<!-- 文章内容 -->
+      <div class="content-panel">
         <ArticleContent
           :article="selectedArticle"
           :articles="articles"
           @favorite="handleArticleFavorite"
           @navigate="handleArticleClick"
           @article-update="handleArticleUpdate"
-        />
-      </div>
-
-      <!-- AI 总结详情 -->
-      <div v-else class="content-panel">
-        <AISummaryDetail
-          :key="selectedSummary?.id || 'empty'"
-          :summary="selectedSummary"
-          @close="selectedSummary = null"
         />
       </div>
     </div>

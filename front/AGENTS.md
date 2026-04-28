@@ -83,7 +83,7 @@ export const useApiStore = defineStore('api', () => {
 ```bash
 cd front
 pnpm install
-pnpm dev          # http://localhost:3001
+pnpm dev          # http://localhost:3000
 pnpm build        # Production build
 pnpm exec nuxi typecheck
 pnpm test:unit

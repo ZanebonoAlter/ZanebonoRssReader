@@ -18,7 +18,7 @@
 - Go 1.21
 - Gin
 - GORM
-- SQLite
+- PostgreSQL + pgvector
 - Viper
 - Gorilla WebSocket
 - robfig/cron
@@ -38,10 +38,11 @@
 ```text
 backend-go/
 ├── cmd/
-│   ├── migrate-digest/
+│   ├── migrate-db/
+│   ├── migrate-embedding-queue/
 │   ├── migrate-tags/
 │   ├── server/
-│   └── test-digest/
+│   └── test-embedding/
 ├── configs/
 ├── internal/
 │   ├── app/
@@ -51,11 +52,10 @@ backend-go/
 │   │   ├── articles/
 │   │   ├── categories/
 │   │   ├── contentprocessing/
-│   │   ├── digest/
 │   │   ├── feeds/
 │   │   ├── models/
+│   │   ├── narrative/
 │   │   ├── preferences/
-│   │   ├── summaries/
 │   │   ├── topicanalysis/
 │   │   ├── topicextraction/
 │   │   ├── topicgraph/
@@ -67,8 +67,10 @@ backend-go/
 │       ├── aisettings/
 │       ├── config/
 │       ├── database/
+│       ├── logging/
 │       ├── middleware/
 │       ├── opennotebook/
+│       ├── tracing/
 │       └── ws/
 ```
 
@@ -77,9 +79,10 @@ backend-go/
 ### `cmd/`
 
 - `server/`：HTTP 服务真实入口
-- `migrate-digest/`：digest 配置/表迁移命令
 - `migrate-tags/`：主题标签相关迁移命令
-- `test-digest/`：digest 联调入口
+- `migrate-db/`：数据库迁移命令
+- `migrate-embedding-queue/`：embedding 队列迁移命令
+- `test-embedding/`：embedding 联调入口
 
 ### `internal/app/`
 
@@ -96,7 +99,8 @@ backend-go/
 这是共享基础设施层，不承载具体业务语义。
 
 - `config/`：读取 `configs/config.yaml`
-- `database/`：初始化 SQLite、建表、索引、字段补丁
+- `database/`：初始化 PostgreSQL、建表、索引、字段补丁
+- `logging/`：轻量日志门面，负责把 info/warn 与 error/fatal/panic 分流到 stdout / stderr
 - `middleware/`：Gin 中间件，例如 CORS
 - `ws/`：WebSocket hub，给前端推送异步任务状态
 - `ai/`：AI 调用封装
@@ -112,26 +116,27 @@ backend-go/
 - `categories/`：分类 CRUD
 - `feeds/`：订阅 CRUD、刷新、OPML、RSS 解析
 - `articles/`：文章列表、详情、状态更新、统计
-- `summaries/`：摘要列表、单篇摘要、自动摘要配置、摘要队列
 - `preferences/`：阅读行为记录与偏好分析
 - `contentprocessing/`：内容补全、Firecrawl 配置与抓取、文章正文处理
-- `digest/`：digest 配置、预览、手动运行、导出、定时调度
 - `topictypes/`：主题图谱共享类型和窗口工具
 - `topicextraction/`：摘要/文章标签提取
-- `topicanalysis/`：主题分析任务与分析结果 API
+- `topicanalysis/`：主题分析任务与分析结果 API、embedding 向量化、标签合并、关注标签、抽象标签
 - `topicgraph/`：主题图谱、主题详情、主题相关文章查询
 - `models/`：共享 GORM 模型和部分格式化 helper
+- `narrative/`：叙事摘要生成、按日期查询、历史版本
 
 ### `internal/jobs/`
 
 这里是调度外壳，不放完整业务，只负责定时触发和运行状态记录。
 
 - `auto_refresh.go`：扫描到点 feed 并异步触发刷新
-- `auto_summary.go`：按 feed 聚合近时间窗文章并生成 `ai_summaries`
 - `content_completion.go`：对 `firecrawl completed + summary incomplete` 的文章做内容补全
 - `firecrawl.go`：轮询待抓取文章并执行 Firecrawl
+- `tag_quality_score.go`：每小时重算 `topic_tags.quality_score`，支持统一 scheduler 状态查询和手动触发
 - `preference_update.go`：阅读偏好更新任务
-- `handler.go`：部分 scheduler 状态查询与手动触发 API
+- `blocked_article_recovery.go`：恢复因 Firecrawl 配置变更等原因阻塞的文章
+- `narrative_summary.go`：基于活跃主题标签生成每日叙事摘要
+- `handler.go`：scheduler 状态查询与手动触发 API
 
 ## 当前主要子系统
 
@@ -145,20 +150,10 @@ backend-go/
 
 ### AI 与内容增强
 
-这部分不再只是一个“AI 摘要开关”，而是三层叠加：
+这部分不再只是一个"AI 摘要开关"，而是两层叠加：
 
 - `platform/airouter`：管理 provider 和 capability route
 - `domain/contentprocessing`：正文抓取、内容补全、Firecrawl 配置
-- `domain/summaries` + `jobs/auto_summary.go`：按订阅批量生成摘要
-
-### Digest
-
-digest 现在已经是正式子系统，不是边角工具。
-
-- 支持 daily / weekly 两类时间窗
-- 支持配置查询、预览、手动执行、定时执行
-- 支持 Feishu、Obsidian、Open Notebook 三条输出链路
-- digest 配置更新后会尝试热重载 `DigestScheduler`
 
 ### 主题图谱
 
@@ -166,8 +161,14 @@ digest 现在已经是正式子系统，不是边角工具。
 
 - `topictypes`：共享类型和窗口解析
 - `topicextraction`：从摘要/文章提取 topic tag
-- `topicanalysis`：生成并查询 topic analysis
+- `topicanalysis`：生成并查询 topic analysis，同时承担 embedding 向量化、标签合并、关注标签、抽象标签管理
 - `topicgraph`：返回图谱节点边、详情、相关文章、相关 digest
+
+当前 `topicanalysis` 里的抽象标签整理链路有三层保护，避免重复抽象标签和错误扁平化：
+
+- `processAbstractJudgment` 在创建新 abstract tag 前，会先用临时 semantic embedding 做 shortlist，再让 LLM 判断是否应复用已有同概念 abstract tag
+- `MatchAbstractTagHierarchy` 会遍历多个高相似 abstract 候选；高相似时优先判断“合并还是上下位关系”，而不是默认继续嵌套
+- 新建或复用 abstract tag 并挂上子标签后，会异步执行 `adoptNarrowerAbstractChildren`，主动把更窄的已有 abstract tag 收养进来；如果候选已经有更具体的中间父节点，则保留中间层，只补更宽的父子关系
 
 依赖方向大致是：
 
@@ -175,9 +176,18 @@ digest 现在已经是正式子系统，不是边角工具。
 topictypes
     ↑
     ├── topicgraph
-    ├── topicanalysis
+    ├── topicanalysis (含 embedding、tag merge、watched tags、abstract tags)
     └── topicextraction -> topicanalysis
 ```
+
+### 叙事摘要
+
+叙事摘要（`narrative/`）基于活跃主题标签生成每日叙事摘要。
+
+- `NarrativeService` 负责采集活跃标签相关文章，调用 AI 生成叙事
+- `NarrativeSummaryScheduler` 每天（86400 秒）定时触发
+- 支持按日期查询叙事列表、单条叙事详情树、叙事历史版本
+- 前端通过 `/api/narratives` 接口消费
 
 ## 数据模型重点
 
@@ -209,10 +219,9 @@ topictypes
 
 - `ai_settings`：兼容旧配置存储
 - `ai_providers` / `ai_routes` / `ai_route_providers`：AI 路由配置
-- `ai_summaries`：按 feed/分类聚合后的摘要
 - `scheduler_tasks`：scheduler 最近执行状态、耗时、错误、结果摘要
-- `digest_configs`：digest 配置
 - 主题图谱相关模型：`topic_tags`、`topic_tag_analyses`、`topic_tag_embeddings` 等
+  - `topic_tags.quality_score`：按频率、共现、来源分散度、语义默认分得到的客观质量分，普通标签先算，抽象标签再按 child 加权平均
 
 ## 真实 API 面
 
@@ -222,18 +231,22 @@ topictypes
 - `/api/feeds`
 - `/api/articles`
 - `/api/ai`
-- `/api/summaries`
 - `/api/schedulers`
 - `/api/reading-behavior`
 - `/api/user-preferences`
 - `/api/content-completion`
 - `/api/firecrawl`
 - `/api/topic-graph`
-- `/api/digest`
 - `/api/import-opml` / `/api/export-opml`
 - `/ws`
 
-其中 `topic-graph` 组下面还挂了 `analysis` 子路由，AI 管理则已经扩展到 provider 和 route 级别，而不是只有“摘要设置”一个入口。
+其中 `topic-graph` 组下面还挂了 `analysis` 子路由，AI 管理则已经扩展到 provider 和 route 级别，而不是只有"摘要设置"一个入口。
+
+此外还有以下独立注册的路由组：
+
+- `/api/topic-tags`：关注标签、标签合并预览、抽象标签管理（由 `topicanalysis` 包注册）
+- `/api/embedding`：embedding 配置与队列管理（由 `topicanalysis` 包注册）
+- `/api/narratives`：叙事摘要列表、详情、历史（由 `narrative` 包注册）
 
 ## 具体数据链路示例
 
@@ -278,59 +291,19 @@ topictypes
 
 这条链路说明：运行时对外现在用 `content_completion` 作为规范 scheduler 名字，但仍兼容旧别名 `ai_summary`；它对应的是“文章级内容补全”，不是 `ai_summaries` 表里的 feed 聚合摘要。
 
-### 用例 3：自动摘要 -> 主题标签 -> 主题分析
-
-场景：某个 feed 开启了 `ai_summary_enabled`，系统按时间窗自动生成订阅摘要。
-
-链路：
-
-1. `jobs.AutoSummaryScheduler` 扫描 `ai_summary_enabled = true` 的 feed
-2. 按 `time_range` 取最近文章，并按最多 20 篇分 batch
-3. `summaries.NewAISummaryPromptBuilder` 结合偏好服务组装 prompt
-4. 通过 `airouter` 调用 summary capability 对应 provider
-5. 结果写入 `ai_summaries`
-6. 新摘要写入后调用：
-   - `topicextraction.TagSummary(&aiSummary)`
-   - `topicextraction.BackfillArticleTags(batch, feedName, categoryName)`（仅兜底补齐 article tags）
-7. topic extraction 产出的标签会继续驱动 `topicanalysis` 的分析任务
-8. 前端再通过 `/api/topic-graph/*` 和 `/api/topic-graph/analysis/*` 读取图谱和分析结果
-
-这条链路把“摘要生成”和“主题图谱”真正串起来了：图谱并不是独立系统，而是建立在摘要和文章标签结果之上的展示与分析层。
-
-### 用例 4：digest 预览 / 手动运行 / 定时输出
-
-场景：用户查看日报预览、手动执行日报，或者等系统到了定时点自动推送。
-
-链路：
-
-1. `/api/digest/preview/:type` 调用 `digest.buildPreview`
-2. `DigestGenerator` 按 daily / weekly 时间窗聚合 `ai_summaries`
-3. 后端组装：
-   - 分类视图数据
-   - markdown 预览正文
-   - 默认选中的分类和 summary
-   - 每条 digest summary 对应 article 的 `aggregated_tags` 索引
-4. `/api/digest/run/:type` 会在预览结果基础上继续执行输出：
-   - Feishu 推送
-   - Obsidian 导出
-   - Open Notebook 总结
-5. `DigestScheduler` 则按 `digest_configs` 中的 daily / weekly 配置走同一类生成逻辑
-6. `/api/schedulers/status` 已经会带上 digest 的统一状态视图，`/api/digest/status` 仍保留 digest 专用状态，`/api/digest/config` 和 `/api/digest/open-notebook/config` 返回配置状态
-
-这条链路的重点是：digest 不是简单拼 markdown，而是一个“聚合 + 预览 + 多出口分发”的完整运行链。
-
-补充：digest 不再被视为“单独打 tag 的对象”，topic graph 和 digest 页里展示的 digest tags 来自其覆盖 article 的 `article_topic_tags` 聚合结果；标准文章详情接口 `/api/articles/:id` 也会直接返回 article tags，供前端通用展示。
-
 ### Article 打标签时机
 
 文章标签现在按以下规则运行：
 
 1. 普通 refresh 新文章：入库后立即打标签（feed 未开启 Firecrawl 时）
 2. 若 feed 开启了 `Firecrawl`：refresh 阶段先不打标签
-   - Firecrawl 抓取完成后，由 Firecrawl scheduler 调用 `RetagArticle` 重新打标签
-   - 若 feed 同时开启了 `自动补全`（`article_summary_enabled`），则由 ContentCompletion scheduler 在生成 `AIContentSummary` 后调用 `RetagArticle`
-3. `auto_summary` / `summary_queue` 阶段：只做兜底补齐，只处理当前没有 article tags 的文章
-4. 前端文章详情支持手动打标签 / 重新打标签，接口为 `POST /api/articles/:article_id/tags`
+	- Firecrawl 抓取完成后，写入 `tag_jobs` 队列，由 `TagQueue` worker 异步执行重新打标签
+	- 若 feed 同时开启了 `自动补全`（`article_summary_enabled`），则由 ContentCompletion scheduler 在生成 `AIContentSummary` 后同样 enqueue `tag_jobs`
+3. 前端文章详情支持手动打标签 / 重新打标签，接口为 `POST /api/articles/:article_id/tags`
+	- 手动接口现在只 enqueue 队列并返回 `job_id`
+	- `TagQueue` 完成后通过 WebSocket 广播 `tag_completed`
+	- LLM 提示词明确要求最多返回 `8` 个标签，并按优先级从高到低排序；后端在写入 `article_topic_tags` 前也会只保留前 `8` 个，作为兜底
+4. `TagQueue.Start()` 首次启动失败时不会阻塞应用；它会后台按 30 秒间隔重试最多 10 次
 
 当前正文提取优先级为：
 
@@ -338,8 +311,6 @@ topictypes
 - `FirecrawlContent`
 - `Content`
 - `Description`
-
-因此完整补全链路的文章会优先基于 AI 整理稿或 Firecrawl 全文得到标签，而 summary 阶段不再承担文章打标签主流程。
 
 ## 当前边界上的真实问题
 
@@ -357,4 +328,4 @@ topictypes
 - 再看 `backend-go/cmd/server/main.go`
 - 再看 `backend-go/internal/app/router.go`
 - 再看 `backend-go/internal/app/runtime.go`
-- 再按用例追具体域：`feeds` -> `contentprocessing` -> `summaries` -> `digest` -> `topic*`
+- 再按用例追具体域：`feeds` -> `contentprocessing` -> `topic*` -> `narrative`

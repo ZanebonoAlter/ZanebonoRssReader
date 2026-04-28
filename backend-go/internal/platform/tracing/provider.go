@@ -3,7 +3,6 @@ package tracing
 import (
 	"context"
 	"fmt"
-	"log"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
@@ -12,6 +11,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"gorm.io/gorm"
+	"my-robot-backend/internal/platform/logging"
 )
 
 func InitTracerProvider(db *gorm.DB, cfg Config) (*sdktrace.TracerProvider, error) {
@@ -40,7 +40,7 @@ func InitTracerProvider(db *gorm.DB, cfg Config) (*sdktrace.TracerProvider, erro
 	if cfg.Debug {
 		stdoutExporter, err := stdouttrace.New(stdouttrace.WithPrettyPrint())
 		if err != nil {
-			log.Printf("[tracing] warning: failed to create stdout exporter: %v", err)
+			logging.Infof("[tracing] warning: failed to create stdout exporter: %v", err)
 		} else {
 			spanProcessors = append(spanProcessors, sdktrace.NewSimpleSpanProcessor(stdoutExporter))
 		}
@@ -61,6 +61,6 @@ func InitTracerProvider(db *gorm.DB, cfg Config) (*sdktrace.TracerProvider, erro
 		propagation.Baggage{},
 	))
 
-	log.Println("[tracing] TracerProvider initialized successfully")
+	logging.Infof("[tracing] TracerProvider initialized successfully")
 	return tp, nil
 }

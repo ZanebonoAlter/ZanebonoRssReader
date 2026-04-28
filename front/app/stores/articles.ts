@@ -80,10 +80,22 @@ export const useArticlesStore = defineStore('articles', () => {
     }
   }
 
-  function markAllAsRead(feedId?: string) {
+  function markAllAsRead(options?: { feedId?: string; categoryId?: number; uncategorized?: boolean }) {
     apiStore.articles.forEach((article) => {
-      if (!feedId || article.feedId === feedId) {
+      if (!options) {
         article.read = true
+      } else if (options.feedId && article.feedId === options.feedId) {
+        article.read = true
+      } else if (options.categoryId) {
+        const feed = apiStore.feeds.find(f => f.id === article.feedId)
+        if (feed && Number(feed.category) === options.categoryId) {
+          article.read = true
+        }
+      } else if (options.uncategorized) {
+        const feed = apiStore.feeds.find(f => f.id === article.feedId)
+        if (feed && !feed.category) {
+          article.read = true
+        }
       }
     })
   }

@@ -4,17 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/robfig/cron/v3"
-	"my-robot-backend/internal/app/runtimeinfo"
 	"my-robot-backend/internal/domain/feeds"
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/logging"
 	"my-robot-backend/internal/platform/tracing"
+	"my-robot-backend/internal/platform/ws"
 )
 
 type AutoRefreshScheduler struct {
@@ -35,8 +35,11 @@ type AutoRefreshRunSummary struct {
 	DueFeeds               int    `json:"due_feeds"`
 	TriggeredFeeds         int    `json:"triggered_feeds"`
 	AlreadyRefreshingFeeds int    `json:"already_refreshing_feeds"`
+	StaleResetFeeds        int    `json:"stale_reset_feeds"`
 	Reason                 string `json:"reason"`
 }
+
+const staleRefreshingTimeout = 5 * time.Minute
 
 func NewAutoRefreshScheduler(checkInterval int) *AutoRefreshScheduler {
 	feedService := feeds.NewFeedService()
@@ -61,7 +64,7 @@ func (s *AutoRefreshScheduler) Start() error {
 
 	s.cron.Start()
 	s.isRunning = true
-	log.Printf("Auto-refresh scheduler started with interval: %v", s.checkInterval)
+	logging.Infof("Auto-refresh scheduler started with interval: %v", s.checkInterval)
 	s.initSchedulerTask()
 
 	return nil
@@ -74,7 +77,7 @@ func (s *AutoRefreshScheduler) Stop() {
 
 	s.cron.Stop()
 	s.isRunning = false
-	log.Println("Auto-refresh scheduler stopped")
+	logging.Infoln("Auto-refresh scheduler stopped")
 }
 
 func (s *AutoRefreshScheduler) UpdateInterval(interval int) error {
@@ -135,7 +138,7 @@ func (s *AutoRefreshScheduler) ResetStats() error {
 func (s *AutoRefreshScheduler) checkAndRefreshFeeds() {
 	tracing.TraceSchedulerTick("auto_refresh", "cron", func(ctx context.Context) {
 		if !s.executionMutex.TryLock() {
-			log.Println("Auto-refresh scheduler already running, skipping this cycle")
+			logging.Infoln("Auto-refresh scheduler already running, skipping this cycle")
 			return
 		}
 		s.isExecuting = true
@@ -159,7 +162,7 @@ func (s *AutoRefreshScheduler) runRefreshCycle(triggerSource string) (*AutoRefre
 
 	var feeds []models.Feed
 	if err := database.DB.Where("refresh_interval > 0").Find(&feeds).Error; err != nil {
-		log.Printf("Error querying feeds: %v", err)
+		logging.Errorf("Error querying feeds: %v", err)
 		summary.Reason = "query_failed"
 		summary.FinishedAt = time.Now().Format(time.RFC3339)
 		s.updateSchedulerStatus("idle", err.Error(), &startTime, summary)
@@ -168,7 +171,8 @@ func (s *AutoRefreshScheduler) runRefreshCycle(triggerSource string) (*AutoRefre
 	summary.ScannedFeeds = len(feeds)
 
 	now := time.Now()
-	var refreshWG sync.WaitGroup
+	summary.StaleResetFeeds = s.resetStaleRefreshingFeeds(now)
+
 	for _, feed := range feeds {
 		if !s.needsRefresh(&feed, now) {
 			continue
@@ -180,23 +184,24 @@ func (s *AutoRefreshScheduler) runRefreshCycle(triggerSource string) (*AutoRefre
 			continue
 		}
 
-		s.markFeedRefreshing(feed.ID, now)
-		refreshWG.Add(1)
+		s.markFeedRefreshing(feed.ID)
 		go func(feedID uint) {
-			defer refreshWG.Done()
 			s.refreshFeedAsync(context.Background(), feedID)
 		}(feed.ID)
 		summary.TriggeredFeeds++
 	}
 
 	if summary.TriggeredFeeds > 0 {
-		go s.triggerAutoSummaryAfterRefreshes(&refreshWG)
+		go s.broadcastRefreshCompletion(startTime, summary)
 	}
 
 	summary.FinishedAt = time.Now().Format(time.RFC3339)
 	summary.Reason = autoRefreshReason(summary)
 	if summary.TriggeredFeeds > 0 {
-		log.Printf("Auto-refresh: triggered %d feed(s)", summary.TriggeredFeeds)
+		logging.Infof("Auto-refresh: triggered %d feed(s)", summary.TriggeredFeeds)
+	}
+	if summary.StaleResetFeeds > 0 {
+		logging.Infof("Auto-refresh: reset %d stale feed(s)", summary.StaleResetFeeds)
 	}
 
 	s.updateSchedulerStatus("idle", "", &startTime, summary)
@@ -215,39 +220,56 @@ func (s *AutoRefreshScheduler) needsRefresh(feed *models.Feed, now time.Time) bo
 }
 
 func (s *AutoRefreshScheduler) refreshFeedAsync(ctx context.Context, feedID uint) {
+	defer func() {
+		if r := recover(); r != nil {
+			logging.Errorf("PANIC in refreshFeedAsync for feed %d: %v", feedID, r)
+			s.resetFeedStatus(feedID, fmt.Sprintf("panic: %v", r))
+		}
+	}()
+
 	if err := s.refreshFeed(ctx, feedID); err != nil {
-		log.Printf("Error refreshing feed %d: %v", feedID, err)
+		logging.Errorf("Error refreshing feed %d: %v", feedID, err)
+		s.resetFeedStatus(feedID, err.Error())
 	}
 }
 
-func (s *AutoRefreshScheduler) triggerAutoSummaryAfterRefreshes(wg *sync.WaitGroup) {
-	wg.Wait()
+func (s *AutoRefreshScheduler) resetFeedStatus(feedID uint, errMsg string) {
+	now := time.Now().In(time.FixedZone("CST", 8*3600))
+	database.DB.Model(&models.Feed{}).Where("id = ? AND refresh_status = ?", feedID, "refreshing").Updates(map[string]interface{}{
+		"refresh_status":  "error",
+		"refresh_error":   errMsg,
+		"last_refresh_at": &now,
+	})
+}
 
-	if runtimeinfo.AutoSummarySchedulerInterface == nil {
-		return
+func (s *AutoRefreshScheduler) broadcastRefreshCompletion(startTime time.Time, summary *AutoRefreshRunSummary) {
+	duration := time.Since(startTime).Seconds()
+	msg := ws.AutoRefreshCompleteMessage{
+		Type:            "auto_refresh_complete",
+		TriggeredFeeds:  summary.TriggeredFeeds,
+		StaleResetFeeds: summary.StaleResetFeeds,
+		DurationSeconds: duration,
+		Timestamp:       time.Now().Format(time.RFC3339),
 	}
-
-	triggerable, ok := runtimeinfo.AutoSummarySchedulerInterface.(interface{ TriggerNow() map[string]interface{} })
-	if !ok {
-		return
-	}
-
-	result := triggerable.TriggerNow()
-	if accepted, ok := result["accepted"].(bool); ok && !accepted {
-		log.Printf("Auto-summary trigger after refresh was skipped: %v", result["reason"])
+	data, err := json.Marshal(msg)
+	if err != nil {
+		logging.Warnf("Auto-refresh completion message marshal failed: %v", err)
+	} else {
+		ws.GetHub().BroadcastRaw(data)
 	}
 }
 
-func (s *AutoRefreshScheduler) GetStatus() map[string]interface{} {
+func (s *AutoRefreshScheduler) GetStatus() SchedulerStatusResponse {
 	entries := s.cron.Entries()
 
-	var nextRun time.Time
+	var nextRun int64
 	if len(entries) > 0 {
-		nextRun = entries[0].Next
+		nextRun = entries[0].Next.Unix()
 	}
 
-	status := map[string]interface{}{
-		"status": func() string {
+	status := SchedulerStatusResponse{
+		Name: "Auto Refresh",
+		Status: func() string {
 			if s.isExecuting {
 				return "running"
 			}
@@ -256,17 +278,15 @@ func (s *AutoRefreshScheduler) GetStatus() map[string]interface{} {
 			}
 			return "stopped"
 		}(),
-		"check_interval": int(s.checkInterval.Seconds()),
-		"next_run":       nextRun.Format(time.RFC3339),
-		"is_executing":   s.isExecuting,
+		CheckInterval: int64(s.checkInterval.Seconds()),
+		NextRun:       nextRun,
+		IsExecuting:   s.isExecuting,
 	}
 
 	var task models.SchedulerTask
 	if err := database.DB.Where("name = ?", "auto_refresh").First(&task).Error; err == nil {
-		status["database_state"] = task.ToDict()
-		status["next_run"] = task.NextExecutionTime
-		if summary := parseAutoRefreshRunSummary(task); summary != nil {
-			status["last_run_summary"] = summary
+		if task.NextExecutionTime != nil {
+			status.NextRun = task.NextExecutionTime.Unix()
 		}
 	}
 
@@ -308,10 +328,15 @@ func (s *AutoRefreshScheduler) TriggerNow() map[string]interface{} {
 	message := "手动扫描完成，没有 feed 到点。"
 	if summary.TriggeredFeeds > 0 {
 		message = fmt.Sprintf("手动扫描完成，已触发 %d 个 feed 刷新。", summary.TriggeredFeeds)
+		if summary.StaleResetFeeds > 0 {
+			message += fmt.Sprintf(" 重置了 %d 个卡住的 feed。", summary.StaleResetFeeds)
+		}
 	} else if summary.AlreadyRefreshingFeeds > 0 {
 		message = "手动扫描完成，但到点的 feed 已在刷新中。"
 	} else if summary.ScannedFeeds == 0 {
 		message = "当前没有开启自动刷新的 feed。"
+	} else if summary.StaleResetFeeds > 0 {
+		message = fmt.Sprintf("手动扫描完成，重置了 %d 个卡住的 feed。", summary.StaleResetFeeds)
 	}
 
 	return map[string]interface{}{
@@ -336,7 +361,7 @@ func (s *AutoRefreshScheduler) initSchedulerTask() {
 			"next_execution_time": &nextRun,
 		}
 
-		if task.Status == "" || task.Status == "success" || task.Status == "failed" {
+		if task.Status == "" || task.Status == "success" || task.Status == "failed" || task.Status == "running" {
 			updates["status"] = "idle"
 			updates["last_error"] = ""
 		}
@@ -355,11 +380,48 @@ func (s *AutoRefreshScheduler) initSchedulerTask() {
 	database.DB.Create(&task)
 }
 
-func (s *AutoRefreshScheduler) markFeedRefreshing(feedID uint, now time.Time) {
+func (s *AutoRefreshScheduler) resetStaleRefreshingFeeds(now time.Time) int {
+	cutoff := now.Add(-staleRefreshingTimeout)
+
+	// First, query the stale feeds to log details
+	var staleFeeds []models.Feed
+	if err := database.DB.Model(&models.Feed{}).
+		Where("refresh_status = ? AND last_refresh_at < ?", "refreshing", cutoff).
+		Find(&staleFeeds).Error; err != nil {
+		logging.Errorf("Error querying stale feeds: %v", err)
+		return 0
+	}
+
+	// Log each stale feed's details
+	for _, feed := range staleFeeds {
+		if feed.LastRefreshAt != nil {
+			staleDuration := now.Sub(*feed.LastRefreshAt)
+			logging.Warnf("Feed %d stuck for %.1f minutes, resetting", feed.ID, staleDuration.Minutes())
+		}
+	}
+
+	// Then perform the batch update
+	if len(staleFeeds) == 0 {
+		return 0
+	}
+
+	result := database.DB.Model(&models.Feed{}).
+		Where("refresh_status = ? AND last_refresh_at < ?", "refreshing", cutoff).
+		Updates(map[string]interface{}{
+			"refresh_status": "idle",
+			"refresh_error":  "stale refreshing state reset after 5 minutes",
+		})
+	count := int(result.RowsAffected)
+	if count > 0 {
+		logging.Infof("Auto-refresh: reset %d stale refreshing feed(s) (stuck > %v)", count, staleRefreshingTimeout)
+	}
+	return count
+}
+
+func (s *AutoRefreshScheduler) markFeedRefreshing(feedID uint) {
 	database.DB.Model(&models.Feed{}).Where("id = ?", feedID).Updates(map[string]interface{}{
-		"refresh_status":  "refreshing",
-		"last_refresh_at": &now,
-		"refresh_error":   "",
+		"refresh_status": "refreshing",
+		"refresh_error":  "",
 	})
 }
 
@@ -367,6 +429,10 @@ func autoRefreshReason(summary *AutoRefreshRunSummary) string {
 	switch {
 	case summary.ScannedFeeds == 0:
 		return "no_feeds_enabled"
+	case summary.StaleResetFeeds > 0 && summary.TriggeredFeeds > 0:
+		return "stale_reset_and_feeds_triggered"
+	case summary.StaleResetFeeds > 0:
+		return "stale_reset"
 	case summary.TriggeredFeeds > 0:
 		return "feeds_triggered"
 	case summary.DueFeeds == 0:

@@ -1,5 +1,7 @@
 package topictypes
 
+import "time"
+
 type ExtractionInput struct {
 	Title        string
 	Summary      string
@@ -12,17 +14,22 @@ type ExtractionInput struct {
 // TopicTag represents a tag extracted from AI summaries
 // Used for API responses and internal processing
 type TopicTag struct {
-	ID        uint     `json:"id,omitempty"`
-	Label     string   `json:"label"`
-	Slug      string   `json:"slug"`
-	Category  string   `json:"category"`          // event, person, keyword
-	Icon      string   `json:"icon,omitempty"`    // Iconify icon id
-	Aliases   []string `json:"aliases,omitempty"` // Alternative names
-	Score     float64  `json:"score"`
-	IsNew     bool     `json:"is_new,omitempty"`     // True if newly created
-	MatchedTo uint     `json:"matched_to,omitempty"` // ID of existing tag if matched
-	Kind      string   `json:"kind,omitempty"`       // Legacy: maps to Category for backward compat
-	FeedCount int      `json:"feed_count,omitempty"` // Distinct feed count referencing this tag
+	ID           uint     `json:"id,omitempty"`
+	Label        string   `json:"label"`
+	Slug         string   `json:"slug"`
+	Category     string   `json:"category"`              // event, person, keyword
+	Icon         string   `json:"icon,omitempty"`        // Iconify icon id
+	Aliases      []string `json:"aliases,omitempty"`     // Alternative names
+	Description  string   `json:"description,omitempty"` // LLM-generated tag description
+	Score        float64  `json:"score"`
+	IsNew        bool     `json:"is_new,omitempty"`      // True if newly created
+	MatchedTo    uint     `json:"matched_to,omitempty"`  // ID of existing tag if matched
+	Kind         string   `json:"kind,omitempty"`        // Legacy: maps to Category for backward compat
+	FeedCount    int      `json:"feed_count,omitempty"`  // Distinct feed count referencing this tag
+	IsAbstract   bool     `json:"is_abstract,omitempty"` // True if this is an abstract (parent) tag
+	ChildSlugs   []string `json:"child_slugs,omitempty"` // Slugs of child tags (only for abstract tags)
+	QualityScore float64  `json:"quality_score,omitempty"`
+	IsLowQuality bool     `json:"is_low_quality,omitempty"`
 }
 
 type AggregatedTopicTag struct {
@@ -42,8 +49,9 @@ type ExtractedTag struct {
 	Label      string   `json:"label"`
 	Category   string   `json:"category"`   // event, person, keyword
 	Confidence float64  `json:"confidence"` // 0-1 confidence score
-	Aliases    []string `json:"aliases,omitempty"`
-	Evidence   string   `json:"evidence,omitempty"` // Why this tag was extracted
+	Aliases     []string `json:"aliases,omitempty"`
+	Evidence    string   `json:"evidence,omitempty"`
+	Description string   `json:"description,omitempty"`
 }
 
 // TagResolutionRequest is sent to AI for ambiguous tag matching
@@ -86,6 +94,7 @@ type GraphNode struct {
 	Color        string  `json:"color,omitempty"`
 	FeedName     string  `json:"feed_name,omitempty"`
 	CategoryName string  `json:"category_name,omitempty"`
+	IsAbstract   bool    `json:"is_abstract,omitempty"`
 }
 
 // GraphEdge represents an edge in the topic graph
@@ -97,27 +106,25 @@ type GraphEdge struct {
 	Weight float64 `json:"weight"`
 }
 
-// TopicSummaryCard represents a summary card with tags
-type TopicSummaryCard struct {
-	ID             uint                 `json:"id"`
-	Title          string               `json:"title"`
-	Summary        string               `json:"summary"`
-	FeedName       string               `json:"feed_name"`
-	FeedIcon       string               `json:"feed_icon"`
-	FeedColor      string               `json:"feed_color"`
-	CategoryName   string               `json:"category_name"`
-	ArticleCount   int                  `json:"article_count"`
-	CreatedAt      string               `json:"created_at"`
-	Topics         []TopicTag           `json:"topics"`
-	AggregatedTags []AggregatedTopicTag `json:"aggregated_tags"`
-	Articles       []TopicArticleCard   `json:"articles"`
-}
-
 // TopicArticleCard represents an article in a topic context
 type TopicArticleCard struct {
-	ID    uint   `json:"id"`
-	Title string `json:"title"`
-	Link  string `json:"link"`
+	ID       uint              `json:"id"`
+	Title    string            `json:"title"`
+	Link     string            `json:"link"`
+	PubDate  *time.Time        `json:"pub_date,omitempty"`
+	FeedName string            `json:"feed_name,omitempty"`
+	FeedID   uint              `json:"feed_id"`
+	ImageURL string            `json:"image_url,omitempty"`
+	Summary  string            `json:"summary,omitempty"`
+	Content  string            `json:"content,omitempty"`
+	Tags     []TopicTagSummary `json:"tags"`
+}
+
+// TopicTagSummary represents a brief tag reference on an article card
+type TopicTagSummary struct {
+	Slug     string `json:"slug"`
+	Label    string `json:"label"`
+	Category string `json:"category"`
 }
 
 // TopicHistoryPoint represents a point in topic history
@@ -130,12 +137,11 @@ type TopicHistoryPoint struct {
 // TopicDetail represents detailed information about a topic
 type TopicDetail struct {
 	Topic         TopicTag            `json:"topic"`
-	Articles      []TopicArticleCard  `json:"articles"`       // Directly associated articles (new)
-	TotalArticles int64               `json:"total_articles"` // Total count for pagination (new)
-	RelatedTags   []RelatedTag        `json:"related_tags"`   // Related tags for keyword cloud (new)
-	Summaries     []TopicSummaryCard  `json:"summaries"`      // AI summaries (optional, kept for backward compat)
+	Articles      []TopicArticleCard  `json:"articles"`
+	TotalArticles int64               `json:"total_articles"`
+	RelatedTags   []RelatedTag        `json:"related_tags"`
 	History       []TopicHistoryPoint `json:"history"`
-	RelatedTopics []TopicTag          `json:"related_topics"` // Deprecated: use RelatedTags
+	RelatedTopics []TopicTag          `json:"related_topics"`
 	SearchLinks   map[string]string   `json:"search_links"`
 	AppLinks      map[string]string   `json:"app_links"`
 }

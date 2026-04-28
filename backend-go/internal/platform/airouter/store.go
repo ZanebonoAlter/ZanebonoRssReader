@@ -15,10 +15,8 @@ import (
 type Capability string
 
 const (
-	CapabilitySummary            Capability = "summary"
 	CapabilityArticleCompletion  Capability = "article_completion"
 	CapabilityTopicTagging       Capability = "topic_tagging"
-	CapabilityDigestPolish       Capability = "digest_polish"
 	CapabilityOpenNotebook       Capability = "open_notebook"
 	CapabilityEmbedding          Capability = "embedding"
 	DefaultRouteName             string     = "default"
@@ -28,10 +26,8 @@ const (
 )
 
 var defaultCapabilities = []Capability{
-	CapabilitySummary,
 	CapabilityArticleCompletion,
 	CapabilityTopicTagging,
-	CapabilityDigestPolish,
 	CapabilityEmbedding,
 }
 
@@ -120,6 +116,18 @@ func (s *Store) UpsertProvider(provider *models.AIProvider) error {
 	if provider.TimeoutSeconds <= 0 {
 		provider.TimeoutSeconds = 120
 	}
+
+	var existing models.AIProvider
+	err := s.db.Where("name = ?", provider.Name).First(&existing).Error
+	if err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		return s.db.Create(provider).Error
+	}
+
+	provider.ID = existing.ID
+	provider.CreatedAt = existing.CreatedAt
 	return s.db.Save(provider).Error
 }
 
@@ -212,10 +220,15 @@ func (s *Store) ensureDefaultRoute(capability Capability, providerID uint) error
 	}
 
 	link := models.AIRouteProvider{RouteID: route.ID, ProviderID: providerID, Priority: 1, Enabled: true}
-	return s.db.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "route_id"}, {Name: "provider_id"}},
-		DoUpdates: clause.AssignmentColumns([]string{"priority", "enabled", "updated_at"}),
-	}).Create(&link).Error
+	var existing models.AIRouteProvider
+	err = s.db.Where("route_id = ? AND provider_id = ?", route.ID, providerID).First(&existing).Error
+	if err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		return s.db.Create(&link).Error
+	}
+	return s.db.Model(&existing).Update("enabled", true).Error
 }
 
 func (s *Store) LogCall(logEntry *models.AICallLog) {

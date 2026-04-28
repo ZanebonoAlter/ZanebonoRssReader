@@ -38,35 +38,58 @@ func TestBuildArticleFromEntryTracksOnlyRunnableStates(t *testing.T) {
 		Author:      "bot",
 	}
 
-	fullPipelineFeed := models.Feed{ID: 1, FirecrawlEnabled: true, ArticleSummaryEnabled: true}
-	fullPipelineArticle := service.buildArticleFromEntry(fullPipelineFeed, entry)
-	if fullPipelineArticle.FirecrawlStatus != "pending" {
-		t.Fatalf("firecrawl status = %q, want pending", fullPipelineArticle.FirecrawlStatus)
-	}
-	if fullPipelineArticle.SummaryStatus != "incomplete" {
-		t.Fatalf("summary status = %q, want incomplete", fullPipelineArticle.SummaryStatus)
+	tests := []struct {
+		name                  string
+		firecrawlEnabled      bool
+		articleSummaryEnabled bool
+		wantFirecrawlStatus   string
+		wantSummaryStatus     string
+	}{
+		{
+			name:                  "both enabled: summary incomplete, firecrawl pending",
+			firecrawlEnabled:      true,
+			articleSummaryEnabled: true,
+			wantFirecrawlStatus:   "pending",
+			wantSummaryStatus:     "incomplete",
+		},
+		{
+			name:                  "summary only: summary pending, no firecrawl",
+			firecrawlEnabled:      false,
+			articleSummaryEnabled: true,
+			wantFirecrawlStatus:   "",
+			wantSummaryStatus:     "pending",
+		},
+		{
+			name:                  "neither enabled: both default",
+			firecrawlEnabled:      false,
+			articleSummaryEnabled: false,
+			wantFirecrawlStatus:   "",
+			wantSummaryStatus:     "complete",
+		},
+		{
+			name:                  "firecrawl only: summary complete, firecrawl pending",
+			firecrawlEnabled:      true,
+			articleSummaryEnabled: false,
+			wantFirecrawlStatus:   "pending",
+			wantSummaryStatus:     "complete",
+		},
 	}
 
-	manualOnlyFeed := models.Feed{ID: 2, FirecrawlEnabled: false, ArticleSummaryEnabled: true}
-	manualOnlyArticle := service.buildArticleFromEntry(manualOnlyFeed, entry)
-	if manualOnlyArticle.FirecrawlStatus != "" {
-		t.Fatalf("firecrawl status = %q, want empty", manualOnlyArticle.FirecrawlStatus)
-	}
-	if manualOnlyArticle.SummaryStatus != "complete" {
-		t.Fatalf("summary status = %q, want complete", manualOnlyArticle.SummaryStatus)
-	}
-
-	disabledFeed := models.Feed{ID: 3, FirecrawlEnabled: false, ArticleSummaryEnabled: false}
-	disabledArticle := service.buildArticleFromEntry(disabledFeed, entry)
-	if disabledArticle.FirecrawlStatus != "" {
-		t.Fatalf("disabled firecrawl status = %q, want empty", disabledArticle.FirecrawlStatus)
-	}
-	if disabledArticle.SummaryStatus != "complete" {
-		t.Fatalf("disabled summary status = %q, want complete", disabledArticle.SummaryStatus)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			feed := models.Feed{FirecrawlEnabled: tt.firecrawlEnabled, ArticleSummaryEnabled: tt.articleSummaryEnabled}
+			article := service.buildArticleFromEntry(feed, entry)
+			if article.FirecrawlStatus != tt.wantFirecrawlStatus {
+				t.Errorf("firecrawl status = %q, want %q", article.FirecrawlStatus, tt.wantFirecrawlStatus)
+			}
+			if article.SummaryStatus != tt.wantSummaryStatus {
+				t.Errorf("summary status = %q, want %q", article.SummaryStatus, tt.wantSummaryStatus)
+			}
+		})
 	}
 }
 
-func TestCleanupOldArticlesKeepsActiveCompletionArticles(t *testing.T) {
+func TestCleanupOldArticlesDoesNotPreservePendingOrIncompleteArticles(t *testing.T) {
 	setupFeedsTestDB(t)
 
 	service := NewFeedService()
@@ -84,14 +107,14 @@ func TestCleanupOldArticlesKeepsActiveCompletionArticles(t *testing.T) {
 	now := time.Now()
 	articles := []models.Article{
 		{FeedID: feed.ID, Title: "new complete", Link: "https://example.com/new", PubDate: ptrTime(now.Add(-1 * time.Hour)), SummaryStatus: "complete", FirecrawlStatus: "completed"},
-		{FeedID: feed.ID, Title: "middle complete", Link: "https://example.com/middle", PubDate: ptrTime(now.Add(-2 * time.Hour)), SummaryStatus: "complete", FirecrawlStatus: "completed"},
+		{FeedID: feed.ID, Title: "middle pending", Link: "https://example.com/middle", PubDate: ptrTime(now.Add(-2 * time.Hour)), SummaryStatus: "pending", FirecrawlStatus: "pending"},
 		{FeedID: feed.ID, Title: "old incomplete", Link: "https://example.com/old", PubDate: ptrTime(now.Add(-3 * time.Hour)), SummaryStatus: "incomplete", FirecrawlStatus: "completed", FirecrawlContent: "ready"},
 	}
 	if err := database.DB.Create(&articles).Error; err != nil {
 		t.Fatalf("create articles: %v", err)
 	}
 
-	service.cleanupOldArticles(&feed)
+	service.CleanupOldArticles(&feed)
 
 	var remaining []models.Article
 	if err := database.DB.Where("feed_id = ?", feed.ID).Order("pub_date DESC").Find(&remaining).Error; err != nil {
@@ -106,11 +129,11 @@ func TestCleanupOldArticlesKeepsActiveCompletionArticles(t *testing.T) {
 		titles[article.Title] = true
 	}
 
-	if !titles["old incomplete"] {
-		t.Fatalf("expected incomplete article to be preserved, remaining = %#v", titles)
+	if !titles["new complete"] || !titles["middle pending"] {
+		t.Fatalf("expected newest two articles to remain, remaining = %#v", titles)
 	}
-	if titles["middle complete"] {
-		t.Fatalf("expected oldest removable complete article to be deleted, remaining = %#v", titles)
+	if titles["old incomplete"] {
+		t.Fatalf("expected oldest article to be deleted even if incomplete, remaining = %#v", titles)
 	}
 }
 

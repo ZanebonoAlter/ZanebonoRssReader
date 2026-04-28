@@ -61,3 +61,28 @@ export interface PendingArticlesResponse {
   articles: PendingArticle[]
   total: number
 }
+
+export type TimelineAggregationMode = 'day' | 'hour'
+
+export interface TimelineAggregationGroup {
+  key: string
+  label: string
+  startDate: Date
+  endDate: Date
+  articles: TimelineAggregationArticle[]
+}
+
+export interface TimelineAggregationArticle {
+  id: string
+  title: string
+  link: string
+  pubDate: string
+  feedName: string
+  feedIcon?: string
+  feedColor?: string
+  tags: Array<{
+    slug: string
+    label: string
+    category: string
+  }>
+}

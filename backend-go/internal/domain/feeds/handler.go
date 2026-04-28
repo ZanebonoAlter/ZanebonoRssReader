@@ -22,7 +22,6 @@ type CreateFeedRequest struct {
 	Color                 string `json:"color"`
 	MaxArticles           int    `json:"max_articles"`
 	RefreshInterval       int    `json:"refresh_interval"`
-	AISummaryEnabled      bool   `json:"ai_summary_enabled"`
 	ArticleSummaryEnabled bool   `json:"article_summary_enabled"`
 	CompletionOnRefresh   bool   `json:"completion_on_refresh"`
 	MaxCompletionRetries  int    `json:"max_completion_retries"`
@@ -38,7 +37,6 @@ type UpdateFeedRequest struct {
 	Color                 string `json:"color"`
 	MaxArticles           int    `json:"max_articles"`
 	RefreshInterval       int    `json:"refresh_interval"`
-	AISummaryEnabled      bool   `json:"ai_summary_enabled"`
 	ArticleSummaryEnabled *bool  `json:"article_summary_enabled"`
 	CompletionOnRefresh   *bool  `json:"completion_on_refresh"`
 	MaxCompletionRetries  *int   `json:"max_completion_retries"`
@@ -65,36 +63,7 @@ func GetFeeds(c *gin.Context) {
 	query.Count(&total)
 
 	var feeds []models.Feed
-	if perPage >= 10000 {
-		if err := query.Order("title ASC").Find(&feeds).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"success": false,
-				"error":   err.Error(),
-			})
-			return
-		}
-
-		data := make([]map[string]interface{}, len(feeds))
-		for i, feed := range feeds {
-			database.DB.Preload("Articles").First(&feed, feed.ID)
-			data[i] = feed.ToDict(true)
-		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"success": true,
-			"data":    data,
-			"pagination": gin.H{
-				"page":     1,
-				"per_page": len(feeds),
-				"total":    total,
-				"pages":    1,
-			},
-		})
-		return
-	}
-
-	offset := (page - 1) * perPage
-	if err := query.Order("title ASC").Offset(offset).Limit(perPage).Find(&feeds).Error; err != nil {
+	if err := query.Order("title ASC").Find(&feeds).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
 			"error":   err.Error(),
@@ -102,23 +71,78 @@ func GetFeeds(c *gin.Context) {
 		return
 	}
 
-	data := make([]map[string]interface{}, len(feeds))
-	for i, feed := range feeds {
-		database.DB.Preload("Articles").First(&feed, feed.ID)
-		data[i] = feed.ToDict(true)
+	feedIDs := make([]uint, len(feeds))
+	for i, f := range feeds {
+		feedIDs[i] = f.ID
 	}
 
-	pages := int(total) / perPage
-	if int(total)%perPage > 0 {
+	type FeedStatRow struct {
+		FeedID       uint
+		ArticleCount int
+		UnreadCount  int
+	}
+	var statRows []FeedStatRow
+	if len(feedIDs) > 0 {
+		database.DB.Model(&models.Article{}).
+			Select("feed_id, COUNT(*) as article_count, SUM(CASE WHEN NOT read THEN 1 ELSE 0 END) as unread_count").
+			Where("feed_id IN ?", feedIDs).
+			Group("feed_id").
+			Scan(&statRows)
+	}
+
+	statMap := make(map[uint]models.FeedStats, len(statRows))
+	for _, row := range statRows {
+		statMap[row.FeedID] = models.FeedStats{
+			ArticleCount: row.ArticleCount,
+			UnreadCount:  row.UnreadCount,
+		}
+	}
+
+	data := make([]map[string]interface{}, 0, len(feeds))
+	start := 0
+	if perPage < 10000 {
+		start = (page - 1) * perPage
+		if start >= len(feeds) {
+			start = len(feeds)
+		}
+	}
+	end := len(feeds)
+	if perPage < 10000 {
+		end = start + perPage
+		if end > len(feeds) {
+			end = len(feeds)
+		}
+	}
+
+	for i := start; i < end; i++ {
+		stats := statMap[feeds[i].ID]
+		data = append(data, feeds[i].ToDict(&stats))
+	}
+
+	resultPage := page
+	resultPerPage := perPage
+	if perPage >= 10000 {
+		resultPage = 1
+		resultPerPage = len(feeds)
+	}
+	if resultPerPage == 0 {
+		resultPerPage = 1
+	}
+
+	pages := int(total) / resultPerPage
+	if int(total)%resultPerPage > 0 {
 		pages++
+	}
+	if perPage >= 10000 {
+		pages = 1
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data":    data,
 		"pagination": gin.H{
-			"page":     page,
-			"per_page": perPage,
+			"page":     resultPage,
+			"per_page": resultPerPage,
 			"total":    total,
 			"pages":    pages,
 		},
@@ -151,11 +175,16 @@ func GetFeed(c *gin.Context) {
 		return
 	}
 
-	database.DB.Preload("Articles").First(&feed, feed.ID)
+	var stats models.FeedStats
+	database.DB.Model(&models.Article{}).
+		Select("COUNT(*) as article_count, SUM(CASE WHEN NOT read THEN 1 ELSE 0 END) as unread_count").
+		Where("feed_id = ?", feed.ID).
+		Group("feed_id").
+		Scan(&stats)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"data":    feed.ToDict(true),
+		"data":    feed.ToDict(&stats),
 	})
 }
 
@@ -188,7 +217,6 @@ func CreateFeed(c *gin.Context) {
 		Color:                 req.Color,
 		MaxArticles:           req.MaxArticles,
 		RefreshInterval:       req.RefreshInterval,
-		AISummaryEnabled:      req.AISummaryEnabled,
 		ArticleSummaryEnabled: req.ArticleSummaryEnabled,
 		CompletionOnRefresh:   req.CompletionOnRefresh,
 		MaxCompletionRetries:  req.MaxCompletionRetries,
@@ -220,11 +248,9 @@ func CreateFeed(c *gin.Context) {
 		return
 	}
 
-	database.DB.Preload("Articles").First(&feed, feed.ID)
-
 	c.JSON(http.StatusCreated, gin.H{
 		"success": true,
-		"data":    feed.ToDict(true),
+		"data":    feed.ToDict(&models.FeedStats{}),
 		"message": "Feed created successfully",
 	})
 }
@@ -309,10 +335,6 @@ func UpdateFeed(c *gin.Context) {
 	if req.RefreshInterval >= 0 {
 		updates["refresh_interval"] = req.RefreshInterval
 	}
-	// Only update ai_summary_enabled if explicitly provided in request
-	if _, exists := bodyMap["ai_summary_enabled"]; exists {
-		updates["ai_summary_enabled"] = req.AISummaryEnabled
-	}
 	if _, exists := bodyMap["article_summary_enabled"]; exists && req.ArticleSummaryEnabled != nil {
 		updates["article_summary_enabled"] = *req.ArticleSummaryEnabled
 	}
@@ -334,11 +356,23 @@ func UpdateFeed(c *gin.Context) {
 		return
 	}
 
-	database.DB.Preload("Articles").First(&feed, uint(id))
+	// Trigger cleanup if MaxArticles was updated
+	if req.MaxArticles > 0 {
+		database.DB.First(&feed, feed.ID)
+		feed.MaxArticles = req.MaxArticles
+		NewFeedService().CleanupOldArticles(&feed)
+	}
+
+	var stats models.FeedStats
+	database.DB.Model(&models.Article{}).
+		Select("COUNT(*) as article_count, SUM(CASE WHEN NOT read THEN 1 ELSE 0 END) as unread_count").
+		Where("feed_id = ?", feed.ID).
+		Group("feed_id").
+		Scan(&stats)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"data":    feed.ToDict(true),
+		"data":    feed.ToDict(&stats),
 	})
 }
 
@@ -365,6 +399,14 @@ func DeleteFeed(c *gin.Context) {
 				"error":   err.Error(),
 			})
 		}
+		return
+	}
+
+	if err := database.DB.Where("feed_id = ?", feed.ID).Delete(&models.ReadingBehavior{}).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   err.Error(),
+		})
 		return
 	}
 
@@ -474,17 +516,22 @@ func RefreshAllFeeds(c *gin.Context) {
 		return
 	}
 
-	for _, feed := range feeds {
-		now := time.Now()
-		feed.RefreshStatus = "refreshing"
-		feed.LastRefreshAt = &now
-		feed.RefreshError = ""
-		database.DB.Save(&feed)
+	feedIDs := make([]uint, len(feeds))
+	for i, feed := range feeds {
+		feedIDs[i] = feed.ID
 	}
 
-	go func() {
-		refreshAllFeedsWorker()
-	}()
+	now := time.Now()
+	database.DB.Model(&models.Feed{}).Where("id IN ?", feedIDs).
+		Updates(map[string]interface{}{
+			"refresh_status":  "refreshing",
+			"last_refresh_at": &now,
+			"refresh_error":   "",
+		})
+
+	go func(ids []uint) {
+		refreshAllFeedsWorker(ids)
+	}(feedIDs)
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"success": true,
@@ -495,13 +542,10 @@ func RefreshAllFeeds(c *gin.Context) {
 	})
 }
 
-func refreshAllFeedsWorker() {
-	var feeds []models.Feed
-	database.DB.Find(&feeds)
-
+func refreshAllFeedsWorker(feedIDs []uint) {
 	feedService := NewFeedService()
-	for _, feed := range feeds {
-		if err := feedService.RefreshFeed(context.Background(), feed.ID); err != nil {
+	for _, id := range feedIDs {
+		if err := feedService.RefreshFeed(context.Background(), id); err != nil {
 			continue
 		}
 	}

@@ -3,12 +3,13 @@ package jobs
 import (
 	"context"
 	"fmt"
-	"log"
+	"net/http"
 	"sync"
 	"time"
 
 	"my-robot-backend/internal/domain/preferences"
 	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/logging"
 	"my-robot-backend/internal/platform/tracing"
 )
 
@@ -60,13 +61,13 @@ func (s *PreferenceUpdateScheduler) Start() error {
 				s.runUpdate()
 				s.updateNextRun(time.Now().Add(time.Duration(s.checkInterval) * time.Second))
 			case <-s.stopChan:
-				log.Println("Preference update scheduler stopped")
+				logging.Infof("Preference update scheduler stopped")
 				return
 			}
 		}
 	}()
 
-	log.Printf("Preference update scheduler started (interval: %d seconds)", s.checkInterval)
+	logging.Infof("Preference update scheduler started (interval: %d seconds)", s.checkInterval)
 	return nil
 }
 
@@ -103,7 +104,7 @@ func (s *PreferenceUpdateScheduler) runUpdate() {
 			s.mu.Unlock()
 		}()
 
-		log.Println("Running preference update...")
+		logging.Infof("Running preference update...")
 
 		preferenceService := preferences.NewPreferenceService(database.DB)
 		if err := preferenceService.UpdateAllPreferences(); err != nil {
@@ -112,14 +113,14 @@ func (s *PreferenceUpdateScheduler) runUpdate() {
 			s.failedRuns++
 			s.lastError = err.Error()
 			s.mu.Unlock()
-			log.Printf("Preference update failed: %v", err)
+			logging.Errorf("Preference update failed: %v", err)
 		} else {
 			s.mu.Lock()
 			s.totalRuns++
 			s.successRuns++
 			s.lastError = ""
 			s.mu.Unlock()
-			log.Println("Preference update completed successfully")
+			logging.Infof("Preference update completed successfully")
 		}
 	})
 }
@@ -133,12 +134,12 @@ func (s *PreferenceUpdateScheduler) TriggerNow() map[string]interface{} {
 			"started":     false,
 			"reason":      "already_running",
 			"message":     "偏好更新正在执行中，稍后再试。",
-			"status_code": 409,
+			"status_code": http.StatusConflict,
 		}
 	}
 	s.mu.Unlock()
 
-	log.Println("Manual preference update triggered")
+	logging.Infof("Manual preference update triggered")
 	s.runUpdate()
 
 	return map[string]interface{}{
@@ -152,7 +153,7 @@ func (s *PreferenceUpdateScheduler) TriggerManualUpdate() {
 	_ = s.TriggerNow()
 }
 
-func (s *PreferenceUpdateScheduler) GetStatus() map[string]interface{} {
+func (s *PreferenceUpdateScheduler) GetStatus() SchedulerStatusResponse {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -163,16 +164,12 @@ func (s *PreferenceUpdateScheduler) GetStatus() map[string]interface{} {
 		status = "idle"
 	}
 
-	return map[string]interface{}{
-		"status":                status,
-		"check_interval":        s.checkInterval,
-		"is_executing":          s.isExecuting,
-		"next_run":              formatOptionalTime(s.nextRun),
-		"last_execution_time":   formatOptionalTime(s.lastRun),
-		"last_error":            s.lastError,
-		"total_executions":      s.totalRuns,
-		"successful_executions": s.successRuns,
-		"failed_executions":     s.failedRuns,
+	return SchedulerStatusResponse{
+		Name:          "Preference Update",
+		Status:        status,
+		CheckInterval: int64(s.checkInterval),
+		NextRun:       optionalTimeToUnix(s.nextRun),
+		IsExecuting:   s.isExecuting,
 	}
 }
 
@@ -225,4 +222,11 @@ func formatOptionalTime(value *time.Time) string {
 		return ""
 	}
 	return value.Format(time.RFC3339)
+}
+
+func optionalTimeToUnix(value *time.Time) int64 {
+	if value == nil {
+		return 0
+	}
+	return value.Unix()
 }

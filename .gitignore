@@ -6,7 +6,7 @@ dist/
 wheels/
 *.egg-info
 .claude/
-
+data/
 # Virtual environments
 .venv
 testsworkflow/.venv/
@@ -22,9 +22,14 @@ backend-go/bin/server.exe~
 backend-go/bin/test.exe
 backend-go/cmd/server/rss_reader.db
 backend-go/rss_reader_backup.db
+data/*.db
+data/*.db-shm
+data/*.db-wal
 .pytest_cache/
 front/.nuxt/
 front/.output/
 front/node_modules/
 .worktrees/
 .gitnexus
+# Added by code-review-graph
+.code-review-graph/

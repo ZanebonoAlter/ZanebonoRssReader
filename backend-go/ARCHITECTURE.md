@@ -140,7 +140,7 @@ database:
 
 cors:
   origins:
-    - "http://localhost:3001"  # 前端地址
+    - "http://localhost:3000"  # 前端地址
     - "http://localhost:3000"
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
   allow_headers: ["Content-Type", "Authorization"]

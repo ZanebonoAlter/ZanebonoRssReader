@@ -1,19 +1,25 @@
 <script setup lang="ts">
 import { Icon } from '@iconify/vue'
 import type { TopicCategory } from '~/api/topicGraph'
+import type { TimelineAggregationMode } from '~/types/timeline'
 
 interface TopicInfo {
   slug: string
   label: string
   category: TopicCategory
+  description?: string
 }
 
 interface Props {
   topic: TopicInfo | null
   totalCount: number
+  aggregationMode: TimelineAggregationMode
 }
 
 defineProps<Props>()
+const emit = defineEmits<{
+  'update:aggregationMode': [value: TimelineAggregationMode]
+}>()
 
 const categoryLabels: Record<TopicCategory, string> = {
   event: '事件',
@@ -26,14 +32,35 @@ const categoryLabels: Record<TopicCategory, string> = {
   <header class="timeline-header">
     <div class="timeline-header__topic">
       <template v-if="topic">
-        <h2 class="timeline-header__title">{{ topic.label }}</h2>
-        <span class="timeline-header__category" :class="`timeline-header__category--${topic.category}`">
-          {{ categoryLabels[topic.category] }}
-        </span>
-        <span class="timeline-header__count">
-          <Icon icon="mdi:file-document-outline" width="14" />
-          {{ totalCount }} 篇日报
-        </span>
+        <div class="timeline-header__main">
+          <h2 class="timeline-header__title">{{ topic.label }}</h2>
+          <span class="timeline-header__category" :class="`timeline-header__category--${topic.category}`">
+            {{ categoryLabels[topic.category] }}
+          </span>
+          <span class="timeline-header__count">
+            <Icon icon="mdi:file-document-outline" width="14" />
+            {{ totalCount }} 篇日报
+          </span>
+        </div>
+        <div class="timeline-header__agg-toggle">
+          <button
+            class="timeline-header__agg-btn"
+            :class="{ 'timeline-header__agg-btn--active': aggregationMode === 'day' }"
+            @click="emit('update:aggregationMode', 'day')"
+          >
+            <Icon icon="mdi:calendar-today-outline" width="14" />
+            按天
+          </button>
+          <button
+            class="timeline-header__agg-btn"
+            :class="{ 'timeline-header__agg-btn--active': aggregationMode === 'hour' }"
+            @click="emit('update:aggregationMode', 'hour')"
+          >
+            <Icon icon="mdi:clock-outline" width="14" />
+            按小时
+          </button>
+        </div>
+        <p v-if="topic.description" class="timeline-header__description">{{ topic.description }}</p>
       </template>
       <template v-else>
         <h2 class="timeline-header__title timeline-header__title--placeholder">选择题材查看日报</h2>
@@ -52,6 +79,12 @@ const categoryLabels: Record<TopicCategory, string> = {
 }
 
 .timeline-header__topic {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.timeline-header__main {
   display: flex;
   align-items: center;
   gap: 0.75rem;
@@ -108,6 +141,46 @@ const categoryLabels: Record<TopicCategory, string> = {
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+.timeline-header__description {
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.5);
+  margin: 0;
+  padding-left: 0.1rem;
+}
+
+.timeline-header__agg-toggle {
+  display: inline-flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.timeline-header__agg-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.75rem;
+  padding: 0.28rem 0.65rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.4);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-weight: 500;
+
+  &:hover {
+    border-color: rgba(240, 138, 75, 0.4);
+    color: rgba(240, 138, 75, 0.8);
+  }
+
+  &--active {
+    background: rgba(240, 138, 75, 0.15);
+    border-color: rgba(240, 138, 75, 0.5);
+    color: rgba(240, 165, 105, 0.95);
+  }
+}
+
 @media (max-width: 640px) {
   .timeline-header {
     padding: 0.85rem 1rem;
@@ -115,6 +188,10 @@ const categoryLabels: Record<TopicCategory, string> = {
 
   .timeline-header__title {
     font-size: 1.15rem;
+  }
+
+  .timeline-header__description {
+    font-size: 0.78rem;
   }
 }
 </style>

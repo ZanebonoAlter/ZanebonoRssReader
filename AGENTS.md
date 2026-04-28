@@ -8,13 +8,20 @@ Agent guide for coding assistants working in `D:\project\my-robot`.
 - Checked for Cursor rules: no `.cursorrules` and no `.cursor/rules/` directory found.
 - Checked for Copilot rules: no `.github/copilot-instructions.md` found.
 - If new rule files appear later, merge their guidance here before making broad changes.
+- 完成任务后，参考`llm-wiki.md`的指导更新维护本地知识库 `./docs`
+- 和用户沟通使用中文
+- 用户开发环境 windows 
 
 ## Project Snapshot
 - RSS Reader app with a Nuxt 4 frontend and a Go backend.
-- Main features: feed subscriptions, article reading, AI summaries, Firecrawl enrichment, digest export, schedulers.
+- Main features: feed subscriptions, article reading, AI summaries, Firecrawl enrichment, digest export, schedulers, topic graph analysis with vector search.
 - Personal/single-user deployment only; there is no auth system.
 - Frontend API: `http://localhost:5000/api`; WebSocket: `ws://localhost:5000/ws`.
-- Backend persistence is SQLite.
+- **Main branch**: Backend persistence uses PostgreSQL with pgvector extension for vector search.
+- **SQLite support**: Only available in the `sqlite` archive branch, no longer supported in main.
+- Optional Redis for persistent job queues (defaults to in-memory if not configured).
+- Crawl service (default: `http://localhost:11235`) for content completion and full-text scraping.
+- AI configuration (LLM, Firecrawl, Digest) is stored in the database and managed via web UI, no config files needed.
 
 ## Repo Layout
 - `front/`: Nuxt 4, Vue 3, TypeScript, Pinia, Tailwind CSS v4.
@@ -44,10 +51,12 @@ pnpm generate
 pnpm preview
 pnpm exec nuxi typecheck
 pnpm test:unit
+pnpm test:e2e
 ```
 - Single test file: `pnpm test:unit -- app/utils/articleContentSource.test.ts`
 - Single test by name: `pnpm test:unit -- app/utils/articleContentSource.test.ts -t "prefers firecrawl"`
-- No dedicated lint script is configured in `front/package.json`.
+- E2E tests (Playwright): `pnpm test:e2e` (runs all E2E tests), `pnpm test:e2e:ui` for interactive UI mode
+- No dedicated lint/formatting script is configured in `front/package.json`. Match existing code style (no semicolons, UTF-8 encoding).
 - Main quality gates: `pnpm exec nuxi typecheck` and `pnpm build`.
 
 ### Backend Go
@@ -59,10 +68,16 @@ go build ./...
 go test ./...
 go run cmd/migrate-digest/main.go
 go run cmd/test-digest/main.go
+go run cmd/migrate-tags/main.go
+go run cmd/migrate-db/main.go
 ```
 - Single package: `go test ./internal/domain/feeds -v`
 - Single test: `go test ./internal/domain/feeds -run TestBuildArticleFromEntryTracksOnlyRunnableStates -v`
 - Prefer targeted package tests first, then `go test ./...` for broader coverage.
+- Local development requires PostgreSQL with pgvector extension, run via Docker:
+  ```bash
+  docker run -d --name rss-postgres -p 5432:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=rss_reader pgvector/pgvector:pg18-trixie
+  ```
 
 ### Python Integration Tests
 Run from `tests/workflow/`:
@@ -84,12 +99,13 @@ pytest test_*.py -v
 ## Frontend Conventions
 - Use Vue 3 Composition API with `<script setup lang="ts">` for new Vue files.
 - Use TypeScript across frontend code.
-- Keep route pages thin; move business logic into `front/app/features/` or composables.
+- Keep route pages thin in `front/app/pages/` (only for component mounting, no business logic).
+- Move business logic into `front/app/features/` or composables.
 - Put network calls in `front/app/api/`, not directly in components.
 - `useApiStore` is the primary data source; other stores should be derived UI state.
 - Keep shared types in `front/app/types/`.
 - Convert backend numeric IDs to frontend strings at the API/store boundary.
-- Keep `snake_case -> camelCase` mapping in API/store code, never in templates.
+- Keep `snake_case → camelCase` mapping in API/store code, never in templates.
 - Reuse `ApiResponse<T>` for request results.
 
 ### Frontend Imports, Formatting, Naming
@@ -112,7 +128,7 @@ pytest test_*.py -v
 
 ## Backend Go Conventions
 - Keep HTTP routes in `internal/app/router.go`; keep business logic in `internal/domain/*`.
-- Use focused domain packages such as `feeds`, `digest`, `summaries`, and `contentprocessing`.
+- Use focused domain packages such as `feeds`, `digest`, `summaries`, `contentprocessing`, `topicanalysis`, `topicgraph`, and `preferences`.
 - Use PascalCase for exported symbols and lowerCamelCase for private helpers.
 - Keep JSON fields snake_case via struct tags.
 - Use `fmt.Errorf(... %w ...)` when wrapping lower-level errors.
@@ -120,6 +136,7 @@ pytest test_*.py -v
 - Handlers should return `gin.H{"success": bool, "data"|"error"|"message": ...}`.
 - Validate params and request bodies before touching the database.
 - Keep GORM models in `internal/domain/models` and shared infrastructure in `internal/platform/*`.
+- Business logic belongs in domain packages, not in HTTP handlers or job processors.
 
 ### Backend Imports, Formatting, Tests
 - Let `gofmt` format Go files.
@@ -128,6 +145,7 @@ pytest test_*.py -v
 - Use `testing` directly; `testify` is acceptable if a file already uses it.
 - Prefer table tests when many cases share behavior.
 - Keep tests close to code as `*_test.go` files.
+- 使用"my-robot-backend/internal/platform/logging"日志分流
 
 ## UI And Content Direction
 - Preserve the repo's editorial / magazine feel.
@@ -158,11 +176,16 @@ pytest test_*.py -v
 - Frontend-only edits: prefer `pnpm exec nuxi typecheck`, `pnpm test:unit`, or `pnpm build`.
 - Backend-only edits: prefer targeted `go test` first, then `go test ./...` or `go build ./...`.
 - Docs-only edits usually only need consistency checks unless the docs describe changed behavior.
+- Recommended pre-push verification sequence:
+  ```bash
+  cd backend-go && go test ./... && go build ./...
+  cd front && pnpm exec nuxi typecheck && pnpm test:unit && pnpm build
+  ```
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **my-robot** (4257 symbols, 10280 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **my-robot** (13650 symbols, 23972 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
@@ -174,44 +197,12 @@ This project is indexed by GitNexus as **my-robot** (4257 symbols, 10280 relatio
 - When exploring unfamiliar code, use `gitnexus_query({query: "concept"})` to find execution flows instead of grepping. It returns process-grouped results ranked by relevance.
 - When you need full context on a specific symbol — callers, callees, which execution flows it participates in — use `gitnexus_context({name: "symbolName"})`.
 
-## When Debugging
-
-1. `gitnexus_query({query: "<error or symptom>"})` — find execution flows related to the issue
-2. `gitnexus_context({name: "<suspect function>"})` — see all callers, callees, and process participation
-3. `READ gitnexus://repo/my-robot/process/{processName}` — trace the full execution flow step by step
-4. For regressions: `gitnexus_detect_changes({scope: "compare", base_ref: "main"})` — see what your branch changed
-
-## When Refactoring
-
-- **Renaming**: MUST use `gitnexus_rename({symbol_name: "old", new_name: "new", dry_run: true})` first. Review the preview — graph edits are safe, text_search edits need manual review. Then run with `dry_run: false`.
-- **Extracting/Splitting**: MUST run `gitnexus_context({name: "target"})` to see all incoming/outgoing refs, then `gitnexus_impact({target: "target", direction: "upstream"})` to find all external callers before moving code.
-- After any refactor: run `gitnexus_detect_changes({scope: "all"})` to verify only expected files changed.
-
 ## Never Do
 
 - NEVER edit a function, class, or method without first running `gitnexus_impact` on it.
 - NEVER ignore HIGH or CRITICAL risk warnings from impact analysis.
 - NEVER rename symbols with find-and-replace — use `gitnexus_rename` which understands the call graph.
 - NEVER commit changes without running `gitnexus_detect_changes()` to check affected scope.
-
-## Tools Quick Reference
-
-| Tool | When to use | Command |
-|------|-------------|---------|
-| `query` | Find code by concept | `gitnexus_query({query: "auth validation"})` |
-| `context` | 360-degree view of one symbol | `gitnexus_context({name: "validateUser"})` |
-| `impact` | Blast radius before editing | `gitnexus_impact({target: "X", direction: "upstream"})` |
-| `detect_changes` | Pre-commit scope check | `gitnexus_detect_changes({scope: "staged"})` |
-| `rename` | Safe multi-file rename | `gitnexus_rename({symbol_name: "old", new_name: "new", dry_run: true})` |
-| `cypher` | Custom graph queries | `gitnexus_cypher({query: "MATCH ..."})` |
-
-## Impact Risk Levels
-
-| Depth | Meaning | Action |
-|-------|---------|--------|
-| d=1 | WILL BREAK — direct callers/importers | MUST update these |
-| d=2 | LIKELY AFFECTED — indirect deps | Should test |
-| d=3 | MAY NEED TESTING — transitive | Test if critical path |
 
 ## Resources
 
@@ -221,32 +212,6 @@ This project is indexed by GitNexus as **my-robot** (4257 symbols, 10280 relatio
 | `gitnexus://repo/my-robot/clusters` | All functional areas |
 | `gitnexus://repo/my-robot/processes` | All execution flows |
 | `gitnexus://repo/my-robot/process/{name}` | Step-by-step execution trace |
-
-## Self-Check Before Finishing
-
-Before completing any code modification task, verify:
-1. `gitnexus_impact` was run for all modified symbols
-2. No HIGH/CRITICAL risk warnings were ignored
-3. `gitnexus_detect_changes()` confirms changes match expected scope
-4. All d=1 (WILL BREAK) dependents were updated
-
-## Keeping the Index Fresh
-
-After committing code changes, the GitNexus index becomes stale. Re-run analyze to update it:
-
-```bash
-npx gitnexus analyze
-```
-
-If the index previously included embeddings, preserve them by adding `--embeddings`:
-
-```bash
-npx gitnexus analyze --embeddings
-```
-
-To check whether embeddings exist, inspect `.gitnexus/meta.json` — the `stats.embeddings` field shows the count (0 means no embeddings). **Running analyze without `--embeddings` will delete any previously generated embeddings.**
-
-> Claude Code users: A PostToolUse hook handles this automatically after `git commit` and `git merge`.
 
 ## CLI
 
@@ -260,3 +225,119 @@ To check whether embeddings exist, inspect `.gitnexus/meta.json` — the `stats.
 | Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
 
 <!-- gitnexus:end -->
+
+## Browser Automation
+
+Use `agent-browser` for web automation. Run `agent-browser --help` for all commands.
+
+Core workflow:
+
+1. `agent-browser open <url>` - Navigate to page
+2. `agent-browser snapshot -i` - Get interactive elements with refs (@e1, @e2)
+3. `agent-browser click @e1` / `fill @e2 "text"` - Interact using refs
+4. Re-snapshot after page changes
+
+# CLAUDE.md
+
+Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
+
+**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
+
+## 1. Think Before Coding
+
+**Don't assume. Don't hide confusion. Surface tradeoffs.**
+
+Before implementing:
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them - don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
+
+## 2. Simplicity First
+
+**Minimum code that solves the problem. Nothing speculative.**
+
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
+
+Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+
+## 3. Surgical Changes
+
+**Touch only what you must. Clean up only your own mess.**
+
+When editing existing code:
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- If you notice unrelated dead code, mention it - don't delete it.
+
+When your changes create orphans:
+- Remove imports/variables/functions that YOUR changes made unused.
+- Don't remove pre-existing dead code unless asked.
+
+The test: Every changed line should trace directly to the user's request.
+
+## 4. Goal-Driven Execution
+
+**Define success criteria. Loop until verified.**
+
+Transform tasks into verifiable goals:
+- "Add validation" → "Write tests for invalid inputs, then make them pass"
+- "Fix the bug" → "Write a test that reproduces it, then make it pass"
+- "Refactor X" → "Ensure tests pass before and after"
+
+For multi-step tasks, state a brief plan:
+```
+1. [Step] → verify: [check]
+2. [Step] → verify: [check]
+3. [Step] → verify: [check]
+```
+
+Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+
+---
+
+**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+
+<!-- code-review-graph MCP tools -->
+## MCP Tools: code-review-graph
+
+**IMPORTANT: This project has a knowledge graph. ALWAYS use the
+code-review-graph MCP tools BEFORE using Grep/Glob/Read to explore
+the codebase.** The graph is faster, cheaper (fewer tokens), and gives
+you structural context (callers, dependents, test coverage) that file
+scanning cannot.
+
+### When to use graph tools FIRST
+
+- **Exploring code**: `semantic_search_nodes` or `query_graph` instead of Grep
+- **Understanding impact**: `get_impact_radius` instead of manually tracing imports
+- **Code review**: `detect_changes` + `get_review_context` instead of reading entire files
+- **Finding relationships**: `query_graph` with callers_of/callees_of/imports_of/tests_for
+- **Architecture questions**: `get_architecture_overview` + `list_communities`
+
+Fall back to Grep/Glob/Read **only** when the graph doesn't cover what you need.
+
+### Key Tools
+
+| Tool | Use when |
+|------|----------|
+| `detect_changes` | Reviewing code changes — gives risk-scored analysis |
+| `get_review_context` | Need source snippets for review — token-efficient |
+| `get_impact_radius` | Understanding blast radius of a change |
+| `get_affected_flows` | Finding which execution paths are impacted |
+| `query_graph` | Tracing callers, callees, imports, tests, dependencies |
+| `semantic_search_nodes` | Finding functions/classes by name or keyword |
+| `get_architecture_overview` | Understanding high-level codebase structure |
+| `refactor_tool` | Planning renames, finding dead code |
+
+### Workflow
+
+1. The graph auto-updates on file changes (via hooks).
+2. Use `detect_changes` for code review.
+3. Use `get_affected_flows` to understand impact.
+4. Use `query_graph` pattern="tests_for" to check coverage.

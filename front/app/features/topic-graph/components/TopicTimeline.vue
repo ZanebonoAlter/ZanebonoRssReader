@@ -1,52 +1,45 @@
 <script setup lang="ts">
 import { Icon } from '@iconify/vue'
 import type { TopicCategory } from '~/api/topicGraph'
-import type { TimelineDigest } from '~/types/timeline'
+import type { TimelineAggregationGroup, TimelineAggregationMode } from '~/types/timeline'
 import TimelineHeader from './TimelineHeader.vue'
 import TimelineItem from './TimelineItem.vue'
-import TimelinePendingItem from './TimelinePendingItem.vue'
 
 interface TopicInfo {
   slug: string
   label: string
   category: TopicCategory
+  description?: string
 }
 
 interface Props {
   selectedTopic: TopicInfo | null
-  items: TimelineDigest[]
-  activeDigestId?: string | null
-  pendingArticleCount?: number
-  selectedPendingNode?: boolean
+  groups: TimelineAggregationGroup[]
+  activeGroupKey?: string | null
+  aggregationMode: TimelineAggregationMode
+  totalCount: number
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  activeDigestId: null,
-  pendingArticleCount: 0,
-  selectedPendingNode: false,
+  activeGroupKey: null,
 })
 
 const emit = defineEmits<{
   'open-article': [articleId: number]
-  'select-digest': [digestId: string]
-  'preview-digest': [digestId: string]
-  'select-pending': []
+  'select-group': [groupKey: string]
+  'update:aggregationMode': [mode: TimelineAggregationMode]
 }>()
 
 function handleOpenArticle(articleId: number) {
   emit('open-article', articleId)
 }
 
-function handleSelectDigest(digestId: string) {
-  emit('select-digest', digestId)
+function handleSelectGroup(groupKey: string) {
+  emit('select-group', groupKey)
 }
 
-function handlePreviewDigest(digestId: string) {
-  emit('preview-digest', digestId)
-}
-
-function handleSelectPending() {
-  emit('select-pending')
+function handleModeChange(mode: TimelineAggregationMode) {
+  emit('update:aggregationMode', mode)
 }
 </script>
 
@@ -54,39 +47,34 @@ function handleSelectPending() {
   <div class="topic-timeline">
     <TimelineHeader
       :topic="selectedTopic"
-      :total-count="items.length"
+      :total-count="totalCount"
+      :aggregation-mode="aggregationMode"
+      @update:aggregation-mode="handleModeChange"
     />
 
     <div class="timeline-content">
       <div v-if="!selectedTopic" class="timeline-empty">
         <Icon icon="mdi:cursor-default-click" width="32" />
-        <span>请先选择一个题材查看相关日报</span>
+        <span>请先选择一个题材查看相关文章</span>
       </div>
 
       <template v-else>
-        <div v-if="items.length === 0 && props.pendingArticleCount === 0" class="timeline-empty">
+        <div v-if="groups.length === 0" class="timeline-empty">
           <Icon icon="mdi:file-search" width="32" />
-          <span>这个题材在当前窗口里还没有日报</span>
+          <span>这个题材在当前窗口里还没有关联文章</span>
         </div>
 
         <div v-else class="timeline-list">
-          <TimelinePendingItem
-            v-if="props.pendingArticleCount > 0"
-            :count="props.pendingArticleCount"
-            :is-active="props.selectedPendingNode"
-            @select="handleSelectPending"
-          />
           <TimelineItem
-            v-for="(item, index) in items"
-            :key="item.id"
-            :item="item"
+            v-for="(group, index) in groups"
+            :key="group.key"
+            :group="group"
             :is-first="index === 0"
-            :is-last="index === items.length - 1"
-            :is-active="props.activeDigestId === item.id"
-            :highlighted-tag-slugs="selectedTopic ? [selectedTopic.slug] : []"
+            :is-last="index === groups.length - 1"
+            :is-active="activeGroupKey === group.key"
+            :aggregation-mode="aggregationMode"
             @open-article="handleOpenArticle"
-            @select="handleSelectDigest"
-            @preview-digest="handlePreviewDigest"
+            @select="handleSelectGroup"
           />
         </div>
       </template>

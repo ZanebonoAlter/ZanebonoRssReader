@@ -5,15 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"my-robot-backend/internal/domain/topictypes"
 	"regexp"
 	"sort"
 	"strings"
 
-	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/domain/topicanalysis"
+	"my-robot-backend/internal/domain/topictypes"
 	"my-robot-backend/internal/platform/airouter"
-	"my-robot-backend/internal/platform/database"
+	"my-robot-backend/internal/platform/jsonutil"
 )
 
 var errNoAIAvailable = errors.New("no AI provider available for tagging")
@@ -86,10 +85,11 @@ func (te *TagExtractor) extractCandidates(ctx context.Context, input topictypes.
 	systemPrompt := buildExtractionSystemPrompt()
 	userPrompt := buildExtractionUserPrompt(input)
 
-	maxTokens := 600
+	maxTokens := 2048
 	temperature := 0.2
 	metadata := map[string]any{
-		"title": input.Title,
+		"operation": "tag_extraction",
+		"title":     input.Title,
 	}
 	if input.FeedName != "" {
 		metadata["feed_name"] = input.FeedName
@@ -110,6 +110,8 @@ func (te *TagExtractor) extractCandidates(ctx context.Context, input topictypes.
 		Temperature: &temperature,
 		MaxTokens:   &maxTokens,
 		Metadata:    metadata,
+		JSONMode:    true,
+		JSONSchema:  tagExtractionSchema(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("AI extraction failed: %w", err)
@@ -118,147 +120,22 @@ func (te *TagExtractor) extractCandidates(ctx context.Context, input topictypes.
 	return parseExtractedTags(result.Content)
 }
 
-// resolveCandidate resolves a single candidate tag against existing tags
+// resolveCandidate validates and normalizes a single candidate tag.
+// Matching against existing tags is handled by findOrCreateTag downstream,
+// so this function only does validation/normalization — no DB queries.
 func (te *TagExtractor) resolveCandidate(ctx context.Context, candidate topictypes.ExtractedTag, input topictypes.ExtractionInput) (*topictypes.TopicTag, bool, error) {
-	// Validate category
 	category := validateCategory(candidate.Category)
-
-	// Step 1: Check for exact slug match
-	slug := slugify(candidate.Label)
-	var existingTag models.TopicTag
-	err := database.DB.Where("slug = ? AND category = ?", slug, category).First(&existingTag).Error
-	if err == nil {
-		// Exact match - reuse with updated score
-		return &topictypes.TopicTag{
-			Label:     existingTag.Label,
-			Slug:      existingTag.Slug,
-			Category:  existingTag.Category,
-			Icon:      existingTag.Icon,
-			Aliases:   parseAliases(existingTag.Aliases),
-			Score:     candidate.Confidence,
-			IsNew:     false,
-			MatchedTo: existingTag.ID,
-		}, false, nil
+	slug := topictypes.Slugify(candidate.Label)
+	if slug == "" {
+		return nil, true, nil
 	}
-
-	// Step 2: Check for alias match
-	var aliasMatch models.TopicTag
-	aliasMatchErr := database.DB.Where("category = ? AND ? IN (SELECT value FROM json_each(COALESCE(NULLIF(aliases, ''), '[]')))", category, candidate.Label).First(&aliasMatch).Error
-	if aliasMatchErr == nil {
-		return &topictypes.TopicTag{
-			Label:     aliasMatch.Label,
-			Slug:      aliasMatch.Slug,
-			Category:  aliasMatch.Category,
-			Icon:      aliasMatch.Icon,
-			Aliases:   parseAliases(aliasMatch.Aliases),
-			Score:     candidate.Confidence,
-			IsNew:     false,
-			MatchedTo: aliasMatch.ID,
-		}, false, nil
-	}
-
-	// Step 3: Vector similarity matching (if embedding service available)
-	matchResult, err := te.embeddingService.TagMatch(ctx, candidate.Label, category, formatAliases(candidate.Aliases))
-	if err == nil {
-		switch matchResult.MatchType {
-		case "exact":
-			// Already handled above, but just in case
-			return &topictypes.TopicTag{
-				Label:     matchResult.ExistingTag.Label,
-				Slug:      matchResult.ExistingTag.Slug,
-				Category:  matchResult.ExistingTag.Category,
-				Icon:      matchResult.ExistingTag.Icon,
-				Aliases:   parseAliases(matchResult.ExistingTag.Aliases),
-				Score:     candidate.Confidence,
-				IsNew:     false,
-				MatchedTo: matchResult.ExistingTag.ID,
-			}, false, nil
-
-		case "high_similarity":
-			// Auto-reuse
-			return &topictypes.TopicTag{
-				Label:     matchResult.ExistingTag.Label,
-				Slug:      matchResult.ExistingTag.Slug,
-				Category:  matchResult.ExistingTag.Category,
-				Icon:      matchResult.ExistingTag.Icon,
-				Aliases:   parseAliases(matchResult.ExistingTag.Aliases),
-				Score:     candidate.Confidence * matchResult.Similarity,
-				IsNew:     false,
-				MatchedTo: matchResult.ExistingTag.ID,
-			}, false, nil
-
-		case "low_similarity":
-			// Auto-create new tag
-			return &topictypes.TopicTag{
-				Label:    candidate.Label,
-				Slug:     slug,
-				Category: category,
-				Aliases:  candidate.Aliases,
-				Score:    candidate.Confidence,
-				IsNew:    true,
-			}, false, nil
-
-		case "ai_judgment":
-			// Need AI to decide
-			decision, err := te.aiJudgment(ctx, candidate, matchResult.Candidates, input)
-			if err != nil {
-				// On AI failure, default to creating new
-				return &topictypes.TopicTag{
-					Label:    candidate.Label,
-					Slug:     slug,
-					Category: category,
-					Aliases:  candidate.Aliases,
-					Score:    candidate.Confidence,
-					IsNew:    true,
-				}, false, nil
-			}
-
-			if decision.Decision == "reuse" && decision.ReuseTagID > 0 {
-				// Find the tag to reuse
-				for _, c := range matchResult.Candidates {
-					if c.Tag.ID == decision.ReuseTagID {
-						return &topictypes.TopicTag{
-							Label:     c.Tag.Label,
-							Slug:      c.Tag.Slug,
-							Category:  c.Tag.Category,
-							Icon:      c.Tag.Icon,
-							Aliases:   parseAliases(c.Tag.Aliases),
-							Score:     candidate.Confidence * c.Similarity,
-							IsNew:     false,
-							MatchedTo: c.Tag.ID,
-						}, false, nil
-					}
-				}
-			}
-
-			// Create new tag
-			label := candidate.Label
-			if decision.NewLabel != "" {
-				label = decision.NewLabel
-			}
-			cat := category
-			if decision.NewCategory != "" {
-				cat = validateCategory(decision.NewCategory)
-			}
-			return &topictypes.TopicTag{
-				Label:    label,
-				Slug:     slugify(label),
-				Category: cat,
-				Aliases:  candidate.Aliases,
-				Score:    candidate.Confidence,
-				IsNew:    true,
-			}, false, nil
-		}
-	}
-
-	// No embedding service or matching - create new tag
 	return &topictypes.TopicTag{
-		Label:    candidate.Label,
-		Slug:     slug,
-		Category: category,
-		Aliases:  candidate.Aliases,
-		Score:    candidate.Confidence,
-		IsNew:    true,
+		Label:       strings.TrimSpace(candidate.Label),
+		Slug:        slug,
+		Category:    category,
+		Aliases:     candidate.Aliases,
+		Score:       candidate.Confidence,
+		Description: strings.TrimSpace(candidate.Description),
 	}, false, nil
 }
 
@@ -281,6 +158,9 @@ func (te *TagExtractor) aiJudgment(ctx context.Context, candidate topictypes.Ext
 		SimilarTags:    similarInfo,
 		SummaryContext: fmt.Sprintf("标题: %s\n来源: %s", input.Title, input.FeedName),
 	}
+	if input.Summary != "" {
+		req.SummaryContext += fmt.Sprintf("\n摘要: %s", truncateString(input.Summary, 500))
+	}
 
 	systemPrompt := buildResolutionSystemPrompt()
 	userPrompt := buildResolutionUserPrompt(req)
@@ -288,6 +168,7 @@ func (te *TagExtractor) aiJudgment(ctx context.Context, candidate topictypes.Ext
 	maxTokens := 200
 	temperature := 0.1
 	metadata := map[string]any{
+		"operation": "ai_judgment",
 		"candidate": candidate.Label,
 	}
 	if input.FeedName != "" {
@@ -309,6 +190,8 @@ func (te *TagExtractor) aiJudgment(ctx context.Context, candidate topictypes.Ext
 		Temperature: &temperature,
 		MaxTokens:   &maxTokens,
 		Metadata:    metadata,
+		JSONMode:    true,
+		JSONSchema:  tagResolutionSchema(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("AI judgment failed: %w", err)
@@ -347,29 +230,46 @@ func (te *TagExtractor) extractWithHeuristic(input topictypes.ExtractionInput, o
 // Helper functions
 
 func buildExtractionSystemPrompt() string {
-	return `你是一个专业的新闻分析助手，负责从新闻摘要中提取结构化标签。
+	return `你是一个专业的新闻分析助手，负责从新闻摘要中提取有信息量的结构化标签。
 
 标签分为三类：
 1. event（事件）：完整描述的新闻事件名词短语，必须具备语义完整性
    - 正确示例："苹果WWDC 2024发布会"、"央行禁止比特币交易"、"某景区门票涨价风波"
    - 错误示例："3月30"（裸日期）、"禁止交易"（无主体动作）、"门票涨价"（无归属状态）、"北京中关村"（裸地名）、"AI体验活动"（泛化活动名）
-   
+    
 2. person（人物）：具体的个人姓名
    - 正确示例："Sam Altman"、"Elon Musk"
    - 错误示例："CEO"（泛称）、"发言人"（角色而非具体人）
 
-3. keyword（关键词）：其他所有概念，包括组织、产品、技术、地点、主题、泛化活动等
-   - 示例："苹果公司"、"ChatGPT"、"中关村"、"人工智能"、"AI体验活动"
+3. keyword（关键词）：专业术语、技术概念、产品名称、组织机构等有辨识度的实体
+   - 正确示例："Transformer架构"、"RAG检索增强生成"、"PostgreSQL"、"Kubernetes"、"苹果公司"、"ChatGPT"
+   - 错误示例："2026"、"Q3"、"星期二"（时间词）、"公司"（泛称）、"技术"（过于宽泛）、"发展"（无具体含义）
 
 提取规则：
-- 提取3-8个标签
-- event类标签必须是语义完整的名词短语，能独立传达事件内容
-- 拒绝语义片段：不要把裸日期、无主体动作、无归属状态、裸地名、泛化活动名当作event，应归入keyword
-- 无法判断语义完整性时，优先归入keyword类别
-- 标签应该简洁、准确
+- 宁缺毋滥，只提取真正有信息量的标签，不需要每篇都凑数量
+- 必须拒绝以下无意义标签：
+  * 纯年份/日期/时间词（如"2026"、"2024年"、"Q3"、"上半年"）
+  * 过于宽泛的通用词（如"技术"、"发展"、"创新"、"行业"、"未来"、"趋势"、"市场"、"影响"）
+  * 文章中未展开讨论的附带提及词
+	- 优先提取专业术语和技术概念，而非泛化描述词
+	- event类标签必须是语义完整的名词短语，能独立传达事件内容
+	- 拒绝语义片段：不要把裸日期、无主体动作、无归属状态、裸地名、泛化活动名当作event，应归入keyword
+	- 无法判断语义完整性时，优先归入keyword类别
+	- 最多返回 5 个标签，其中 keyword 类最多 3 个
+	- 宁少勿多：如果文章只聚焦一个话题，2-3 个标签就够了
+	- keyword 类标签必须是具有持久辨识度的实体或术语，不接受只在一篇文章出现的临时性描述词。如果一个 keyword 只在单篇文章中有意义，不要提取它
+	- 标签必须按优先级从高到低排序，最重要的标签放前面
+	- 标签应该简洁、准确
 
 每个标签输出格式：
-{"label": "标签名称", "category": "event|person|keyword", "confidence": 0.0-1.0, "aliases": ["别名1"], "evidence": "提取依据"}`
+{"label": "标签名称", "category": "event|person|keyword", "confidence": 0.0-1.0, "aliases": ["别名1"], "evidence": "提取依据", "description": "标签的简短描述（中文，1-2句，客观事实，仅event和keyword需要，person可不填）"}
+
+描述要求（仅 event 和 keyword）：
+- 中文，1-2句话，客观事实
+- 解释标签指代什么，不重复标签名
+- 例如 "ChatGPT" → "OpenAI开发的大型语言模型聊天机器人"
+- 例如 "苹果WWDC 2024" → "苹果公司于2024年6月举办的全球开发者大会"
+- person 标签的 description 可留空，系统会后续单独生成`
 }
 
 func buildExtractionUserPrompt(input topictypes.ExtractionInput) string {
@@ -382,7 +282,7 @@ func buildExtractionUserPrompt(input topictypes.ExtractionInput) string {
 摘要内容:
 %s
 
-请返回JSON数组格式的标签列表。`, input.Title, input.FeedName, input.CategoryName, input.Summary)
+请返回JSON对象格式: {"tags": [标签列表]}。`, input.Title, input.FeedName, input.CategoryName, input.Summary)
 }
 
 func buildResolutionSystemPrompt() string {
@@ -393,6 +293,11 @@ func buildResolutionSystemPrompt() string {
 2. 如果新标签是已有标签的别名，复用已有标签
 3. 如果标签含义明显不同，创建新标签
 4. 如果标签存在细微差异（如版本号、地区），根据上下文判断
+
+对于 event（事件）类别的标签，请特别注意：
+- 同一事件可能有完全不同的表述方式，例如"伊朗维护霍尔木兹权益"和"伊朗袭击霍尔木兹海峡船只"可能是同一事件
+- 重点比较事件的核心主体（谁）和核心行为（做了什么），而非字面文本相似度
+- 如果两个标签指向同一核心事件，即使表述差异很大，也应复用
 
 返回JSON格式：
 {"decision": "reuse|create_new", "reuse_tag_id": 123, "reason": "决策理由", "new_label": "调整后的标签名", "new_category": "event|person|keyword"}`
@@ -419,7 +324,7 @@ func buildResolutionUserPrompt(req topictypes.TagResolutionRequest) string {
 }
 
 func parseExtractedTags(content string) ([]topictypes.ExtractedTag, error) {
-	content = normalizeStructuredResponse(content)
+	content = jsonutil.SanitizeLLMJSON(content)
 
 	var raw []struct {
 		Label      string   `json:"label"`
@@ -427,21 +332,19 @@ func parseExtractedTags(content string) ([]topictypes.ExtractedTag, error) {
 		Confidence float64  `json:"confidence"`
 		Aliases    []string `json:"aliases"`
 		Evidence   string   `json:"evidence"`
+		Description string  `json:"description"`
 	}
+
 	if err := json.Unmarshal([]byte(content), &raw); err != nil {
 		var wrapped struct {
-			Tags []struct {
-				Label      string   `json:"label"`
-				Category   string   `json:"category"`
-				Confidence float64  `json:"confidence"`
-				Aliases    []string `json:"aliases"`
-				Evidence   string   `json:"evidence"`
-			} `json:"tags"`
+			Tags json.RawMessage `json:"tags"`
 		}
 		if wrappedErr := json.Unmarshal([]byte(content), &wrapped); wrappedErr != nil {
 			return nil, fmt.Errorf("failed to parse tags: %w", err)
 		}
-		raw = wrapped.Tags
+		if err := json.Unmarshal(wrapped.Tags, &raw); err != nil {
+			return nil, fmt.Errorf("failed to parse tags.tags: %w", err)
+		}
 	}
 
 	result := make([]topictypes.ExtractedTag, 0, len(raw))
@@ -455,49 +358,20 @@ func parseExtractedTags(content string) ([]topictypes.ExtractedTag, error) {
 			conf = 0.7
 		}
 		result = append(result, topictypes.ExtractedTag{
-			Label:      strings.TrimSpace(t.Label),
-			Category:   cat,
-			Confidence: conf,
-			Aliases:    t.Aliases,
-			Evidence:   t.Evidence,
+			Label:       strings.TrimSpace(t.Label),
+			Category:    cat,
+			Confidence:  conf,
+			Aliases:     t.Aliases,
+			Evidence:    t.Evidence,
+			Description: strings.TrimSpace(t.Description),
 		})
 	}
 
 	return result, nil
 }
 
-func normalizeStructuredResponse(content string) string {
-	content = strings.TrimSpace(content)
-	content = strings.TrimPrefix(content, "```json")
-	content = strings.TrimPrefix(content, "```")
-	content = strings.TrimSuffix(content, "```")
-	content = strings.TrimSpace(content)
-
-	if strings.HasPrefix(content, "[") || strings.HasPrefix(content, "{") {
-		return content
-	}
-
-	arrayStart := strings.Index(content, "[")
-	arrayEnd := strings.LastIndex(content, "]")
-	if arrayStart >= 0 && arrayEnd > arrayStart {
-		return strings.TrimSpace(content[arrayStart : arrayEnd+1])
-	}
-
-	objectStart := strings.Index(content, "{")
-	objectEnd := strings.LastIndex(content, "}")
-	if objectStart >= 0 && objectEnd > objectStart {
-		return strings.TrimSpace(content[objectStart : objectEnd+1])
-	}
-
-	return content
-}
-
 func parseResolutionResponse(content string) (*topictypes.TagResolutionResponse, error) {
-	content = strings.TrimSpace(content)
-	content = strings.TrimPrefix(content, "```json")
-	content = strings.TrimPrefix(content, "```")
-	content = strings.TrimSuffix(content, "```")
-	content = strings.TrimSpace(content)
+	content = jsonutil.SanitizeLLMJSON(content)
 
 	var resp struct {
 		Decision    string `json:"decision"`
@@ -592,4 +466,50 @@ func dedupeTags(tags []topictypes.TopicTag) []topictypes.TopicTag {
 	})
 
 	return result
+}
+
+func tagExtractionSchema() *airouter.JSONSchema {
+	return &airouter.JSONSchema{
+		Type: "object",
+		Properties: map[string]airouter.SchemaProperty{
+			"tags": {
+				Type: "array",
+				Items: &airouter.SchemaProperty{
+					Type: "object",
+					Properties: map[string]airouter.SchemaProperty{
+						"label":      {Type: "string", Description: "标签名称"},
+						"category":   {Type: "string", Description: "event, person 或 keyword"},
+						"confidence": {Type: "number", Description: "置信度 0.0-1.0，仅提取有信息量的标签，宁缺毋滥"},
+						"aliases":    {Type: "array", Items: &airouter.SchemaProperty{Type: "string"}},
+						"evidence":   {Type: "string", Description: "提取依据"},
+						"description": {Type: "string", Description: "标签的简短描述（中文，1-2句，客观事实。仅event和keyword需要，person可留空）"},
+					},
+					Required: []string{"label", "category"},
+				},
+			},
+		},
+		Required: []string{"tags"},
+	}
+}
+
+func tagResolutionSchema() *airouter.JSONSchema {
+	return &airouter.JSONSchema{
+		Type: "object",
+		Properties: map[string]airouter.SchemaProperty{
+			"decision":     {Type: "string", Description: "reuse 或 create_new"},
+			"reuse_tag_id": {Type: "integer", Description: "复用的标签ID"},
+			"reason":       {Type: "string", Description: "决策理由"},
+			"new_label":    {Type: "string", Description: "调整后的标签名"},
+			"new_category": {Type: "string", Description: "event, person 或 keyword"},
+		},
+		Required: []string{"decision", "reason"},
+	}
+}
+
+func truncateString(s string, maxRunes int) string {
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	return string(runes[:maxRunes])
 }
