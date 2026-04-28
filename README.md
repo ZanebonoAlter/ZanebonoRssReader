@@ -2,19 +2,26 @@
 
 # RSS Reader
 
-基于 Go + Nuxt 4 的个人 RSS 阅读器，三栏阅读界面，支持 AI 智能增强、主题图谱与内容汇总。
+基于 Go + Nuxt 4 的个人 RSS 阅读器，三栏阅读界面，支持 AI 智能增强与主题图谱。
+
+你知道的，我一直想追踪一些事件的蛛丝马迹，比如事件之间的关联、事件的时间线发展（比如伊朗战争）
+互联网没有记忆，很多事情会随着时间沉淀在互联网的大海深处，打捞非常困难
+但是对于我们现在来说，使用AI去重、整理、打标签、梳理事件链路是一件相对来说有意义、并且有可行性的事情
+让垃圾信息见ai去吧！你只需要看结果（ps.此情况只针对广告较多但是还是有真金白银的rss）
 
 ![主界面截图](img/image-main.png)
 
 ## ✨ 核心功能
 
 ### 主题图谱
-- 追踪事件之间的关联与时间线演变
-- AI 去重、打标签、梳理事件链路
-- 跨时间段分析、单事件演变、事件聚合
-
+- **图谱可视化**：日/周双视图，事件/人物/关键词三类节点与关联边，支持权重计算与时间窗口切换
 ![主题图谱](img/image-topic.png)
-![主题图谱时间线](img/image-topic-timeline.png)
+- **AI 主题分析**：按标签类型（事件/人物/关键词）生成 AI 分析，含时间线、人物画像、关键词云等
+![category](img/image-category.png)
+- **叙事线追踪**：主题演变状态（新出现/持续/分裂/合并/结束）与时间线回溯
+![story](img/image-story.png)
+
+
 ![主题图谱文章](img/image-topic-article.png)
 
 ### 📰 订阅管理
@@ -40,32 +47,30 @@
 
 ![内容增强状态面板](img/image-improve.png)
 
-### 🧠 AI 总结
-- 批量生成分类/Feed 级 AI 总结
-- 按分类、订阅源、日期过滤
-- WebSocket 实时显示生成进度
-
-![AI 总结界面](img/image-ai-summary.png)
+### ⚙️ 全局配置
+- **AI Provider 路由**：多模型管理，按能力（总结/正文补全/主题提取/嵌入）分配不同 Provider，支持主备与拖拽排序
+![router](img/image-router.png)
+- **Firecrawl 服务**：配置 API 地址、Key、抓取模式、超时与内容长度限制
+![fircrawl](img/image-fircrawl.png)
+- **调度器监控**：查看 AI 总结、Feed 刷新等定时任务状态，支持手动触发与间隔调整
+![fircrawl](img/image-scheduler.png)
+- **队列管理**：实时监控标签打标队列、Embedding 队列的任务状态与失败重试
+![queue](img/image-queue.png)
+- **Feed 级设置**：单独配置每个订阅源的刷新间隔、最大保留文章数、AI 摘要开关
+![queue](img/image-feed-global.png)
 
 ### 📊 阅读偏好
 - 自动追踪阅读行为（打开、关闭、滚动、收藏）
 - 偏好分数计算，优化排序
 - 阅读统计展示
-
-### 📰 Digest 汇总
-- 日报/周报自动生成
-- 飞书机器人推送
-- Obsidian 笔记导出
-- 可配置定时任务
-
-![Digest 界面](img/image-digest.png)
+![queue](img/image-prefrence.png)
 
 ## 🛠 技术栈
 
 | 层级 | 技术 |
 |------|------|
 | 前端 | Nuxt 4 + Vue 3 + TypeScript + Pinia + Tailwind CSS v4 |
-| 后端 | Go + Gin + GORM + SQLite |
+| 后端 | Go + Gin + GORM + Postgres |
 | AI | OpenAI 兼容 API |
 
 ## 🚀 快速开始
@@ -79,9 +84,10 @@
 
 ### Docker Compose（推荐）
 
+咳咳，pg这个版本的我还没改
 ```bash
 cp .env.example .env
-docker compose -f docker-compose.sqlite.yml up --build
+docker compose -f docker-compose.yml up --build
 ```
 
 - 前端默认地址：`http://localhost:3000`
@@ -118,7 +124,7 @@ go run cmd/server/main.go
 ## 📂 项目结构
 
 ```
-my-robot/
+ZanebonoRssReader/
 ├── front/                    # Nuxt 4 前端（Vue 3 + TypeScript + Pinia）
 ├── backend-go/               # Go + Gin 后端（GORM + SQLite）
 ├── docs/                     # 项目文档
@@ -147,7 +153,6 @@ my-robot/
 
 ### 功能说明
 - [内容处理](docs/guides/content-processing.md) — Firecrawl 与 AI 增强流程
-- [Digest 汇总](docs/guides/digest.md) — 日报/周报生成与推送
 - [主题图谱](docs/guides/topic-graph.md) — 主题图谱功能说明
 - [阅读偏好](docs/guides/reading-preferences.md) — 偏好追踪与排序
 
