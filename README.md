@@ -51,7 +51,7 @@
 - **AI Provider 路由**：多模型管理，按能力（总结/正文补全/主题提取/嵌入）分配不同 Provider，支持主备与拖拽排序
 ![router](img/image-router.png)
 - **Firecrawl 服务**：配置 API 地址、Key、抓取模式、超时与内容长度限制
-![fircrawl](img/image-fircrawl.png)
+![fircrawl](img/image-firecrawl.png)
 - **调度器监控**：查看 AI 总结、Feed 刷新等定时任务状态，支持手动触发与间隔调整
 ![fircrawl](img/image-scheduler.png)
 - **队列管理**：实时监控标签打标队列、Embedding 队列的任务状态与失败重试
