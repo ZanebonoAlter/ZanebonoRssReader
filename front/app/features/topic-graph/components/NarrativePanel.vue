@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { Icon } from '@iconify/vue'
 import { ref, computed, watch } from 'vue'
-import { useNarrativeApi, type NarrativeScopeCategory, type BoardTimelineDay, type BoardNarrativeItem } from '~/api/topicGraph'
+import { useNarrativeApi, type NarrativeScopeCategory, type BoardTimelineDay, type BoardNarrativeItem, type TagBrief } from '~/api/topicGraph'
+import { useBoardConceptsApi } from '~/api/boardConcepts'
+import { apiClient } from '~/api/client'
 import NarrativeBoardCanvas from './NarrativeBoardCanvas.client.vue'
 import NarrativeDetailCard from './NarrativeDetailCard.vue'
 
@@ -24,6 +26,7 @@ const emit = defineEmits<{
 }>()
 
 const narrativeApi = useNarrativeApi()
+const boardConceptsApi = useBoardConceptsApi()
 const timelineDaysRange = 7
 const loading = ref(false)
 const error = ref<string | null>(null)
@@ -41,6 +44,16 @@ const scopesLoading = ref(false)
 const boardTimelineDays = ref<BoardTimelineDay[]>([])
 const expandedBoardIds = ref<Set<number>>(new Set())
 
+interface UnclassifiedTag {
+  id: number
+  label: string
+  description: string
+}
+
+const unclassifiedTags = ref<UnclassifiedTag[]>([])
+const unclassifiedLoading = ref(false)
+const showUnclassified = ref(false)
+
 const statusStyle: Record<string, { label: string; dot: string; ring: string; bg: string; border: string }> = {
   emerging:   { label: '新兴', dot: '#34d399', ring: 'rgba(52,211,153,0.25)',  bg: 'rgba(52,211,153,0.08)',  border: 'rgba(52,211,153,0.35)' },
   continuing: { label: '持续', dot: '#60a5fa', ring: 'rgba(96,165,250,0.25)',  bg: 'rgba(96,165,250,0.08)',  border: 'rgba(96,165,250,0.35)' },
@@ -56,6 +69,40 @@ const allBoardNarratives = computed(() => {
   }
   return all
 })
+
+interface ExpandedBoardTags {
+  boardId: number
+  boardName: string
+  eventTags: TagBrief[]
+  abstractTags: TagBrief[]
+}
+
+const expandedBoardsTags = computed(() => {
+  const result: ExpandedBoardTags[] = []
+  for (const day of boardTimelineDays.value) {
+    for (const board of (day.boards ?? [])) {
+      if (expandedBoardIds.value.has(board.id)) {
+        result.push({
+          boardId: board.id,
+          boardName: board.name,
+          eventTags: board.event_tags ?? [],
+          abstractTags: board.abstract_tags ?? [],
+        })
+      }
+    }
+  }
+  return result
+})
+
+const tagCategoryStyle: Record<string, { dot: string; bg: string; border: string }> = {
+  event:   { dot: '#f87171', bg: 'rgba(248,113,113,0.12)',  border: 'rgba(248,113,113,0.3)' },
+  person:  { dot: '#60a5fa', bg: 'rgba(96,165,250,0.12)',   border: 'rgba(96,165,250,0.3)' },
+  keyword: { dot: '#34d399', bg: 'rgba(52,211,153,0.12)',   border: 'rgba(52,211,153,0.3)' },
+}
+
+function onBoardTagClick(tag: TagBrief) {
+  handleDetailTagSelect({ id: tag.id, slug: tag.slug, label: tag.label, category: tag.category, kind: tag.kind })
+}
 
 const selectedNarrative = computed(() => {
   if (selectedId.value === null) return null
@@ -150,6 +197,24 @@ async function loadBoardTimeline() {
   } finally {
     loading.value = false
   }
+  void loadUnclassifiedTags()
+}
+
+async function loadUnclassifiedTags() {
+  unclassifiedLoading.value = true
+  try {
+    const response = await apiClient.get('/narratives/unclassified')
+    if (response.success && response.data) {
+      unclassifiedTags.value = (response.data as UnclassifiedTag[]) || []
+    }
+  } catch {
+    unclassifiedTags.value = []
+  } finally {
+    unclassifiedLoading.value = false
+  }
+  if (unclassifiedTags.value.length > 0) {
+    showUnclassified.value = true
+  }
 }
 
 function switchScope(mode: 'global' | 'category') {
@@ -158,6 +223,7 @@ function switchScope(mode: 'global' | 'category') {
   selectedId.value = null
   hoveredId.value = null
   expandedIds.value = new Set()
+  showUnclassified.value = false
   if (mode === 'category') {
     void loadScopes()
   }
@@ -318,13 +384,14 @@ watch(() => props.date, () => {
 
       <div v-else class="narrative-panel__body">
         <ClientOnly>
-          <NarrativeBoardCanvas
-            :days="boardTimelineDays"
-            :selected-id="selectedId"
-            :expanded-board-ids="expandedBoardIds"
-            @select="handleCanvasSelect"
-            @hover="handleCanvasHover"
-          />
+            <NarrativeBoardCanvas
+              :days="boardTimelineDays"
+              :selected-id="selectedId"
+              :expanded-board-ids="expandedBoardIds"
+              @select="handleCanvasSelect"
+              @hover="handleCanvasHover"
+              @board-toggle="expandedBoardIds = $event"
+            />
 
           <Transition name="detail-slide">
             <NarrativeDetailCard
@@ -339,6 +406,62 @@ watch(() => props.date, () => {
             />
           </Transition>
         </ClientOnly>
+
+        <div v-if="expandedBoardsTags.length > 0" class="narrative-panel__board-tags">
+          <div
+            v-for="bt in expandedBoardsTags"
+            :key="bt.boardId"
+            class="board-tags-group"
+          >
+            <div class="board-tags-group__header">
+              <span class="board-tags-group__name">{{ bt.boardName }}</span>
+              <span class="board-tags-group__count">{{ bt.eventTags.length + bt.abstractTags.length }} 个标签</span>
+            </div>
+            <div class="board-tags-group__chips">
+              <button
+                v-for="tag in bt.eventTags"
+                :key="`e-${tag.id}`"
+                type="button"
+                class="board-tag-chip"
+                :style="{
+                  '--dot': (tagCategoryStyle[tag.category] ?? tagCategoryStyle.keyword!).dot,
+                  '--bg': (tagCategoryStyle[tag.category] ?? tagCategoryStyle.keyword!).bg,
+                  '--border': (tagCategoryStyle[tag.category] ?? tagCategoryStyle.keyword!).border,
+                }"
+                @click="onBoardTagClick(tag)"
+              >
+                <span class="board-tag-chip__dot" />
+                <span class="board-tag-chip__label">{{ tag.label }}</span>
+              </button>
+              <button
+                v-for="tag in bt.abstractTags"
+                :key="`a-${tag.id}`"
+                type="button"
+                class="board-tag-chip board-tag-chip--abstract"
+                @click="onBoardTagClick(tag)"
+              >
+                <Icon icon="mdi:folder-outline" width="10" class="board-tag-chip__icon" />
+                <span class="board-tag-chip__label">{{ tag.label }}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="unclassifiedTags.length > 0" class="narrative-panel__unclassified">
+          <div class="unclassified-header" role="button" tabindex="0" @click="showUnclassified = !showUnclassified" @keydown.enter="showUnclassified = !showUnclassified" @keydown.space.prevent="showUnclassified = !showUnclassified">
+            <Icon :icon="showUnclassified ? 'mdi:chevron-down' : 'mdi:chevron-right'" width="16" class="text-white/40" />
+            <Icon icon="mdi:tag-off-outline" width="18" class="text-white/40" />
+            <span>未归类标签 ({{ unclassifiedTags.length }})</span>
+          </div>
+          <div v-if="showUnclassified" class="unclassified-list">
+            <div v-for="tag in unclassifiedTags" :key="tag.id" class="unclassified-tag-item">
+              <div class="unclassified-tag-info">
+                <span class="unclassified-tag-label">{{ tag.label }}</span>
+                <span v-if="tag.description" class="unclassified-tag-desc">{{ tag.description }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </template>
   </section>
@@ -447,7 +570,136 @@ watch(() => props.date, () => {
 }
 
 .narrative-panel__body {
-  position: relative;
+  margin-top: 1.25rem;
+}
+
+.narrative-panel__board-tags {
+  margin-top: 0.75rem;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.board-tags-group {
+  padding: 0.7rem 0.85rem;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.board-tags-group__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+}
+
+.board-tags-group__name {
+  font-size: 0.78rem;
+  color: rgba(241, 247, 252, 0.7);
+  font-weight: 500;
+}
+
+.board-tags-group__count {
+  font-size: 0.68rem;
+  color: rgba(186, 206, 226, 0.45);
+}
+
+.board-tags-group__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.board-tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 6px;
+  border: 1px solid var(--border, rgba(255,255,255,0.12));
+  background: var(--bg, rgba(255,255,255,0.06));
+  cursor: pointer;
+  transition: all 0.12s ease;
+  font-size: 0.7rem;
+  color: rgba(241, 247, 252, 0.8);
+}
+
+.board-tag-chip:hover {
+  background: var(--bg, rgba(255,255,255,0.12));
+  border-color: var(--dot, rgba(255,255,255,0.3));
+  transform: translateY(-1px);
+}
+
+.board-tag-chip--abstract {
+  border-style: dashed;
+}
+
+.board-tag-chip__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--dot, rgba(255,255,255,0.5));
+  flex-shrink: 0;
+}
+
+.board-tag-chip__icon {
+  color: rgba(186, 206, 226, 0.5);
+  flex-shrink: 0;
+}
+
+.board-tag-chip__label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 10em;
+}
+
+.narrative-panel__unclassified {
+  margin-top: 1rem;
+  padding: 0.8rem;
+  border-radius: 12px;
+  border: 1px dashed rgba(186, 206, 226, 0.15);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.unclassified-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.6rem;
+  font-size: 0.78rem;
+  color: rgba(186, 206, 226, 0.55);
+  cursor: pointer;
+  user-select: none;
+}
+
+.unclassified-header:hover {
+  color: rgba(241, 247, 252, 0.75);
+}
+
+.unclassified-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.unclassified-tag-item {
+  padding: 0.25rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.unclassified-tag-label {
+  font-size: 0.72rem;
+  color: rgba(241, 247, 252, 0.7);
+}
+
+.unclassified-tag-desc {
+  display: block;
+  font-size: 0.65rem;
+  color: rgba(186, 206, 226, 0.4);
+  margin-top: 0.15rem;
 }
 
 .narrative-panel__scope-switcher {

@@ -412,5 +412,56 @@ func postgresMigrations() []Migration {
 				return nil
 			},
 		},
+		{
+			Version:     "20260501_0001",
+			Description: "Create board_concepts table and add board_concept_id + is_system to narrative_boards.",
+			Up: func(db *gorm.DB) error {
+				stmts := []string{
+					`CREATE TABLE IF NOT EXISTS board_concepts (
+						id SERIAL PRIMARY KEY,
+						name VARCHAR(300) NOT NULL,
+						description TEXT,
+						embedding vector(1536),
+						scope_type VARCHAR(20) NOT NULL DEFAULT 'global',
+						scope_category_id INTEGER,
+						is_system BOOLEAN NOT NULL DEFAULT false,
+						is_active BOOLEAN NOT NULL DEFAULT true,
+						display_order INTEGER NOT NULL DEFAULT 0,
+						created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+						updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+					)`,
+					"CREATE INDEX IF NOT EXISTS idx_board_concepts_active ON board_concepts(is_active)",
+					"CREATE INDEX IF NOT EXISTS idx_board_concepts_scope ON board_concepts(scope_type, scope_category_id)",
+					"ALTER TABLE narrative_boards ADD COLUMN IF NOT EXISTS board_concept_id INTEGER REFERENCES board_concepts(id) ON DELETE SET NULL",
+					"ALTER TABLE narrative_boards ADD COLUMN IF NOT EXISTS is_system BOOLEAN NOT NULL DEFAULT false",
+					"CREATE INDEX IF NOT EXISTS idx_narrative_boards_concept_id ON narrative_boards(board_concept_id)",
+				}
+				for _, s := range stmts {
+					if err := db.Exec(s).Error; err != nil {
+						return fmt.Errorf("board_concepts migration: %w", err)
+					}
+				}
+				// Seed narrative board AI settings
+				settingsDefaults := []struct {
+					Key, Value, Description string
+				}{
+					{"narrative_board_embedding_threshold", "0.7", "Embedding cosine similarity threshold for tag-to-board-concept matching"},
+					{"narrative_board_hotspot_threshold", "3", "Minimum abstract tree node count to create a daily hotspot board"},
+				}
+				for _, d := range settingsDefaults {
+					var existing models.AISettings
+					if err := db.Where("key = ?", d.Key).First(&existing).Error; err != nil {
+						if err := db.Create(&models.AISettings{
+							Key:         d.Key,
+							Value:       d.Value,
+							Description: d.Description,
+						}).Error; err != nil {
+							logging.Warnf("Warning: failed to seed ai_settings key %s: %v", d.Key, err)
+						}
+					}
+				}
+				return nil
+			},
+		},
 	}
 }

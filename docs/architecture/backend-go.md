@@ -123,7 +123,29 @@ backend-go/
 - `topicanalysis/`：主题分析任务与分析结果 API、embedding 向量化、标签合并、关注标签、抽象标签
 - `topicgraph/`：主题图谱、主题详情、主题相关文章查询
 - `models/`：共享 GORM 模型和部分格式化 helper
-- `narrative/`：叙事摘要生成、按日期查询、历史版本
+- `narrative/`：叙事摘要生成、Board 管理、BoardConcept 匹配、按日期查询、历史版本
+  - 叙事域完整文件清单：
+    ```
+    narrative/
+    ├── service.go           # 服务编排
+    ├── handler.go           # REST API 路由
+    ├── collector.go         # 数据采集
+    ├── generator.go         # AI 叙事生成
+    ├── board_creation.go    # Board 创建
+    ├── board_generator.go   # Board 级叙事生成
+    ├── board_narrative_generator.go  # Board 叙事生成（概念上下文）
+    ├── board_collector.go   # Board 数据收集
+    ├── board_merge.go       # Board 合并（部分废弃）
+    ├── board_postprocess.go # Board 后处理
+    ├── concept_service.go   # Board Concept CRUD
+    ├── concept_handler.go   # Board Concept REST API
+    ├── concept_embedding.go # 概念 embedding 生成
+    ├── concept_matcher.go   # Embedding 匹配引擎
+    ├── concept_suggestion.go # LLM 冷启动建议
+    ├── watched_narrative.go # 关注标签叙事
+    ├── tag_feedback.go      # 叙事反馈到标签
+    └── *_test.go            # 测试
+    ```
 
 ### `internal/jobs/`
 
@@ -182,12 +204,49 @@ topictypes
 
 ### 叙事摘要
 
-叙事摘要（`narrative/`）基于活跃主题标签生成每日叙事摘要。
+叙事摘要（`narrative/`）基于活跃主题标签和抽象标签树生成每日叙事，支持双轨制 Board 创建。
 
-- `NarrativeService` 负责采集活跃标签相关文章，调用 AI 生成叙事
-- `NarrativeSummaryScheduler` 每天（86400 秒）定时触发
-- 支持按日期查询叙事列表、单条叙事详情树、叙事历史版本
-- 前端通过 `/api/narratives` 接口消费
+叙事系统的核心概念是 Board（板块）和 BoardConcept（板块概念）：
+
+- **Board**（`narrative_boards` 表）：每日生成的叙事分组容器，通过 `scope_type`/`scope_category_id` 控制作用域
+- **BoardConcept**（`board_concepts` 表）：持久化的板块概念实体，跨天存在，通过 embedding 匹配接收小抽象树和未分类 event 标签
+
+#### 双轨制 Board 创建
+
+每日生成时走两条轨道：
+
+- **热点板轨道**：大抽象树（≥6 节点，阈值可配置）→ 自动创建热点 Board（`is_system=true`），支持跨日延续（`prev_board_ids`）
+- **概念板轨道**：小抽象树 + 未分类 event → embedding cosine similarity 匹配 BoardConcept → 创建概念 Board（`board_concept_id` 不为空）
+
+未匹配的标签进入"未归类桶"，超过阈值时触发 LLM 建议新 BoardConcept。
+
+#### 生成流程
+
+`GenerateAndSave(date)` 入口执行以下步骤：
+
+1. `GenerateAndSaveForAllCategories` — 逐分类双轨生成
+2. `GenerateAndSaveGlobal` — 全局 embedding 匹配生成
+3. `runFallbackAssociations` — 关联前日叙事
+4. `DeriveBoardConnections` — 派生 Board 间连接
+5. `runFeedbackFromTodayNarratives` — 叙事反馈到标签
+6. `cleanEmptyBoards` — 清理无叙事关联的空 Board
+
+#### Board Concept 管理
+
+- LLM 冷启动：扫描所有 active abstract tags 建议初始概念列表
+- 用户通过前端 `BoardConceptManager` 审阅/接受/拒绝/手动创建
+- CRUD API：`/api/narratives/board-concepts`
+- 概念 embedding 在创建/更新时自动生成
+
+#### 关联叙事后处理
+
+- 叙事反馈（`tag_feedback.go`）：检查叙事关联的 event 标签对，触发抽象标签创建
+- 关注标签叙事（`watched_narrative.go`）：为关注标签生成维度总结（`period=watched_tag`）
+
+#### 调度
+
+- `NarrativeSummaryScheduler` 按配置间隔运行
+- 手动触发：`POST /api/narratives/regenerate`（JSON body 含 date、scope_type、category_id）
 
 ## 数据模型重点
 
@@ -222,6 +281,10 @@ topictypes
 - `scheduler_tasks`：scheduler 最近执行状态、耗时、错误、结果摘要
 - 主题图谱相关模型：`topic_tags`、`topic_tag_analyses`、`topic_tag_embeddings` 等
   - `topic_tags.quality_score`：按频率、共现、来源分散度、语义默认分得到的客观质量分，普通标签先算，抽象标签再按 child 加权平均
+- 叙事板相关模型：`narrative_boards`、`board_concepts`
+  - `narrative_boards.board_concept_id`：关联持久化概念板
+  - `narrative_boards.is_system`：区分系统生成的热点板和用户概念板
+  - `board_concepts.embedding`：pgvector 向量列，用于概念匹配
 
 ## 真实 API 面
 
@@ -246,7 +309,10 @@ topictypes
 
 - `/api/topic-tags`：关注标签、标签合并预览、抽象标签管理（由 `topicanalysis` 包注册）
 - `/api/embedding`：embedding 配置与队列管理（由 `topicanalysis` 包注册）
-- `/api/narratives`：叙事摘要列表、详情、历史（由 `narrative` 包注册）
+- `/api/narratives`：叙事摘要时间线、列表、详情、历史、重新生成（由 `narrative` 包注册）
+- `/api/narratives/boards`：Board 时间线和详情
+- `/api/narratives/board-concepts`：板块概念 CRUD 和 LLM 建议（由 `narrative` 包注册）
+- `/api/narratives/unclassified`：未分类标签桶
 
 ## 具体数据链路示例
 
@@ -329,3 +395,4 @@ topictypes
 - 再看 `backend-go/internal/app/router.go`
 - 再看 `backend-go/internal/app/runtime.go`
 - 再按用例追具体域：`feeds` -> `contentprocessing` -> `topic*` -> `narrative`
+- 叙事域能力可以按以下顺序跟：`narrative/service.go` → `narrative/collector.go` → `narrative/board_creation.go` → `narrative/concept_matcher.go` → `narrative/concept_service.go`

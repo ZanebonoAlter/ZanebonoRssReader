@@ -32,6 +32,8 @@
 | `firecrawl_jobs` | Firecrawl 抓取任务 | `models.FirecrawlJob` |
 | `tag_jobs` | 标签任务 | `models.TagJob` |
 | `narrative_summaries` | 叙事摘要 | `models.NarrativeSummary` |
+| `narrative_boards` | 叙事板块 | `models.NarrativeBoard` |
+| `board_concepts` | 板块概念 | `models.BoardConcept` |
 | `schema_migrations` | 迁移版本追踪 | （框架管理） |
 
 ---
@@ -394,6 +396,8 @@ HNSW 索引：`idx_topic_tag_embeddings_embedding USING hnsw (embedding vector_c
 | `low_similarity_threshold` | `0.78` | 低相似度阈值，自动创建新标签 |
 | `embedding_model` | （空） | 覆盖 embedding 模型名 |
 | `embedding_dimension` | `1536` | 向量维度 |
+| `narrative_board_embedding_threshold` | `0.7` | 板块概念 embedding 匹配阈值 |
+| `narrative_board_hotspot_threshold` | `6` | 热点板抽象树节点数阈值 |
 
 #### embedding_queues（向量生成队列）
 
@@ -475,19 +479,60 @@ HNSW 索引：`idx_topic_tag_embeddings_embedding USING hnsw (embedding vector_c
 | `title` | VARCHAR(300) NOT NULL | 叙事标题 |
 | `summary` | TEXT NOT NULL | 叙事内容 |
 | `status` | VARCHAR(20) NOT NULL | 状态（`emerging`/`continuing`/`splitting`/`merging`/`ending`） |
-| `period` | VARCHAR(20) DEFAULT 'daily' | 周期 |
+| `period` | VARCHAR(20) DEFAULT 'daily' | 周期（`daily` / `watched_tag`） |
 | `period_date` | TIMESTAMP NOT NULL | 周期日期 |
 | `generation` | INTEGER DEFAULT 0 | 代际 |
 | `parent_ids` | TEXT | 父叙事 ID 列表 |
 | `related_tag_ids` | TEXT | 关联标签 ID 列表 |
 | `related_article_ids` | TEXT | 关联文章 ID 列表 |
 | `source` | VARCHAR(20) DEFAULT 'ai' | 来源 |
+| `scope_type` | VARCHAR(20) NOT NULL DEFAULT 'global' | 作用域类型（global / feed_category） |
+| `scope_category_id` | INTEGER | 分类 ID（索引 idx_narrative_scope） |
+| `scope_label` | VARCHAR(100) | 分类名称 |
+| `board_id` | INTEGER | 所属 Board ID（索引，FK→narrative_boards.id） |
 | `created_at` | TIMESTAMP | 创建时间 |
 | `updated_at` | TIMESTAMP | 更新时间 |
 
 ---
 
-### 11. 其他表
+### 11. narrative_boards（叙事板块表）
+
+| 字段名 | 类型 | 用途 |
+|--------|------|------|
+| `id` | SERIAL PK | 主键 |
+| `period_date` | TIMESTAMP NOT NULL | 周期日期（索引 idx_narrative_boards_period） |
+| `name` | VARCHAR(300) NOT NULL | 板块名称 |
+| `description` | TEXT | 板块描述 |
+| `scope_type` | VARCHAR(20) NOT NULL DEFAULT 'global' | 作用域类型（global / feed_category） |
+| `scope_category_id` | INTEGER | 分类 ID（索引 idx_narrative_boards_scope） |
+| `scope_label` | VARCHAR(100) | 分类名称 |
+| `event_tag_ids` | TEXT | 关联 event 标签 ID 列表（JSON 数组） |
+| `abstract_tag_ids` | TEXT | 关联抽象标签 ID 列表（JSON 数组） |
+| `prev_board_ids` | TEXT | 前日关联 Board ID 列表（JSON 数组，用于跨日延续） |
+| `abstract_tag_id` | INTEGER | 热点板关联的抽象标签 ID（索引） |
+| `board_concept_id` | INTEGER | 概念板关联的板块概念 ID（索引，FK→board_concepts.id） |
+| `is_system` | BOOLEAN NOT NULL DEFAULT false | 是否为系统自动生成的热点板 |
+| `created_at` | TIMESTAMP | 创建时间 |
+
+### 12. board_concepts（板块概念表）
+
+| 字段名 | 类型 | 用途 |
+|--------|------|------|
+| `id` | SERIAL PK | 主键 |
+| `name` | VARCHAR(300) NOT NULL | 概念名称 |
+| `description` | TEXT | 概念描述 |
+| `embedding` | vector(1536) | pgvector 语义向量，用于 embedding 匹配 |
+| `scope_type` | VARCHAR(20) NOT NULL DEFAULT 'global' | 作用域类型（global / feed_category） |
+| `scope_category_id` | INTEGER | 分类 ID |
+| `is_system` | BOOLEAN NOT NULL DEFAULT false | 是否为系统概念 |
+| `is_active` | BOOLEAN NOT NULL DEFAULT true | 是否启用（索引） |
+| `display_order` | INTEGER NOT NULL DEFAULT 0 | 显示排序 |
+| `created_at` | TIMESTAMP | 创建时间 |
+| `updated_at` | TIMESTAMP | 更新时间 |
+
+---
+
+### 13. 其他表
 
 #### reading_behaviors（阅读行为）
 
@@ -663,6 +708,13 @@ complete（默认）→ incomplete（Firecrawl 完成后设置）→ pending →
 ---
 
 ## 更新日志
+
+### 2026-05-01
+
+- 新增 `narrative_boards`（叙事板块）和 `board_concepts`（板块概念）两个完整表的字段说明
+- 新增 `narrative_summaries` 的 `scope_type`、`scope_category_id`、`scope_label`、`board_id` 字段
+- 新增 `ai_settings` 的 `narrative_board_embedding_threshold` 和 `narrative_board_hotspot_threshold` 配置项
+- `narrative_summaries.period` 新增 `watched_tag` 值
 
 ### 2026-04-16
 

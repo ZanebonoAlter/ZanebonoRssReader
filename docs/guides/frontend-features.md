@@ -204,12 +204,19 @@ Topic Graph 是独立页面，不走主阅读页三栏壳。
 - 支持文章预览，且复用 `ArticleContentView`
 - 支持标签层级视图和抽象标签浏览
 - 支持标签质量评分和低质量标签过滤
+- 支持叙事面板，查看每日叙事摘要和 Board 时间线
+- 支持叙事分类版块切换，按分类查看 Board 列表
+- 支持板块概念管理（创建/编辑/停用/LLM 建议）
+- 支持 Board 可视化画布（NarrativeBoardCanvas），区分概念板和热点板
 
 ### 数据链路特点
 
 - 图谱主体、热点分类、topic detail 是分开拉取的
 - 点击热点标签后，时间线会优先切到反查 digest 结果
 - 底部 analysis 面板会按 topic 类型自动加载对应 analysis
+- 叙事面板通过 `/api/narratives/boards/timeline` 和 `/api/narratives/scopes` 拉取 Board 时间线和分类列表
+- Board 概念管理通过 `/api/narratives/board-concepts` CRUD API 操作
+- 分类版块切换时调用 `loadScopes()` 加载分类列表，展示 `board_count`
 
 更完整的组件分层和数据流说明见 `docs/guides/topic-graph.md`。
 
@@ -232,3 +239,8 @@ Topic Graph 是独立页面，不走主阅读页三栏壳。
 - 文章内容源切换和 Firecrawl 状态已经进主阅读链路
 - 文章标签展示已进入主阅读链路和 Topic Graph 文章预览
 - AI Provider 和路由管理通过 `/api/ai/providers` 和 `/api/ai/routes` 端点管理
+- 叙事面板支持 global/category 双 scope 切换，分类模式下展示 board 数量
+- `BoardConceptManager.vue` 支持手动创建和 LLM 建议两种概念创建方式
+- `NarrativeBoardCanvas.client.vue` 通过 `board_concept_id` 区分概念板和热点板渲染样式
+- 叙事重新生成改为 `POST /api/narratives/regenerate`（JSON body），替代旧的 DELETE + trigger 模式
+- 板块概念 API 客户端在 `front/app/api/boardConcepts.ts`

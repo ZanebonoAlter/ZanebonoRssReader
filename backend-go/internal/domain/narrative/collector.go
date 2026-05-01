@@ -612,6 +612,14 @@ func buildTree(id uint, tagMap map[uint]models.TopicTag, countMap map[uint]int, 
 	return node
 }
 
+func CountTreeNodes(tree AbstractTreeNode) int {
+	count := 1
+	for _, child := range tree.Children {
+		count += CountTreeNodes(child)
+	}
+	return count
+}
+
 func CollectUnclassifiedEventTagsByCategory(date time.Time, categoryID uint) ([]TagInput, error) {
 	startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
 	endOfDay := startOfDay.Add(24 * time.Hour)

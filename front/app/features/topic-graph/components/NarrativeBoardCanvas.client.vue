@@ -13,6 +13,7 @@ const props = defineProps<Props>()
 const emit = defineEmits<{
   select: [id: number]
   hover: [id: number | null]
+  'board-toggle': [ids: Set<number>]
 }>()
 
 const containerRef = ref<HTMLDivElement | null>(null)
@@ -175,6 +176,11 @@ async function initP5() {
             bh += (board.narratives ?? []).length * (SUB_H + SUB_GAP) + BOARD_PAD
           }
 
+          const tagCount = (board.event_tags ?? []).length + (board.abstract_tags ?? []).length
+          if (isExpanded && tagCount > 0) {
+            bh += 6 + 18 + 4
+          }
+
           bm.set(board.id, {
             board,
             col,
@@ -245,7 +251,7 @@ async function initP5() {
       canvasH = Math.max(maxCanvasH + PAD_TOP, 400)
     }
 
-    function hitTest(mx: number, my: number): { type: 'narrative'; id: number } | { type: 'board'; id: number } | null {
+    function hitTest(mx: number, my: number): { type: 'narrative'; id: number } | { type: 'board'; id: number } | { type: 'boardTags'; id: number } | null {
       for (const [, sn] of narrativeNodes) {
         if (mx >= sn.x && mx <= sn.x + sn.w &&
             my >= sn.y && my <= sn.y + sn.h) {
@@ -256,6 +262,17 @@ async function initP5() {
         if (mx >= bl.x && mx <= bl.x + bl.w &&
             my >= bl.y && my <= bl.y + BOARD_HEADER_H) {
           return { type: 'board', id }
+        }
+        const tagCount = (bl.board.event_tags ?? []).length + (bl.board.abstract_tags ?? []).length
+        if (bl.expanded && tagCount > 0) {
+          const badgeW = 76
+          const badgeH = 18
+          const badgeX = bl.x + (bl.w - badgeW) / 2
+          const badgeY = bl.y + bl.h - badgeH - 4
+          if (mx >= badgeX && mx <= badgeX + badgeW &&
+              my >= badgeY && my <= badgeY + badgeH) {
+            return { type: 'boardTags', id }
+          }
         }
       }
       return null
@@ -469,6 +486,11 @@ async function initP5() {
         const isSelected = props.selectedId !== null && (bl.board.narratives ?? []).some(n => n.id === props.selectedId)
         const isHovered = hoveredId !== null && (bl.board.narratives ?? []).some(n => n.id === hoveredId)
 
+        const isHotspotBoard = bl.board.is_system === true
+        const isConceptBoard = !isHotspotBoard && bl.board.board_concept_id !== undefined && bl.board.board_concept_id !== null && bl.board.board_concept_id > 0
+        const typeAccent = isHotspotBoard ? [251, 191, 36] : isConceptBoard ? [96, 165, 250] : [107, 114, 128]
+        const typeBg = isHotspotBoard ? [32, 26, 16] : isConceptBoard ? [18, 26, 38] : [16, 22, 32]
+
         p.push()
 
         if (isSelected || isHovered) {
@@ -477,33 +499,37 @@ async function initP5() {
           p.rect(bl.x - 4, bl.y - 4, bl.w + 8, bl.h + 8, 14)
         }
 
-        p.fill(16, 22, 32, 240)
+        p.fill(typeBg[0]!, typeBg[1]!, typeBg[2]!, 240)
         p.stroke(255, 255, 255, isSelected || isHovered ? 25 : 10)
         p.strokeWeight(isSelected || isHovered ? 1.2 : 0.8)
         p.rect(bl.x, bl.y, bl.w, bl.h, 10)
 
         p.noStroke()
-        p.fill(st.dot[0]!, st.dot[1]!, st.dot[2]!, 200)
+        p.fill(typeAccent[0]!, typeAccent[1]!, typeAccent[2]!, 200)
         p.rect(bl.x, bl.y + 6, ACCENT_W, BOARD_HEADER_H - 12, 2, 0, 0, 2)
+
+        const typeLabel = isHotspotBoard ? '热点' : isConceptBoard ? '概念' : ''
+        p.textSize(9)
+        if (typeLabel) {
+          const tlw = p.textWidth(typeLabel) + 10
+          const tlx = bl.x + bl.w - tlw - 8
+          p.fill(typeAccent[0]!, typeAccent[1]!, typeAccent[2]!, 35)
+          p.rect(tlx, bl.y + 6, tlw, 16, 5)
+          p.fill(typeAccent[0]!, typeAccent[1]!, typeAccent[2]!, 220)
+          p.textAlign(p.CENTER, p.CENTER)
+          p.text(typeLabel, tlx + tlw / 2, bl.y + 14)
+        }
 
         p.fill(241, 247, 252, 230)
         p.textSize(12)
         p.textAlign(p.LEFT, p.CENTER)
-        const nameLines = wrapText(bl.board.name, bl.w - 60, 2)
+        const nameMaxW = typeLabel ? bl.w - 68 : bl.w - 20
+        const nameLines = wrapText(bl.board.name, nameMaxW, 2)
         for (let li = 0; li < nameLines.length; li++) {
           p.text(nameLines[li]!, bl.x + ACCENT_W + 8, bl.y + BOARD_HEADER_H / 2 - (nameLines.length - 1) * 7 + li * 14)
         }
 
-        p.fill(st.badge[0]!, st.badge[1]!, st.badge[2]!, 50)
-        const statusLabel = STATUS_LABELS[status] ?? ''
-        p.textSize(9)
-        const sw = p.textWidth(statusLabel) + 10
-        p.rect(bl.x + bl.w - sw - 8, bl.y + 6, sw, 15, 7)
-        p.fill(st.dot[0]!, st.dot[1]!, st.dot[2]!, 220)
-        p.textAlign(p.CENTER, p.CENTER)
-        p.text(statusLabel, bl.x + bl.w - sw / 2 - 8, bl.y + 13)
-
-        p.fill(186, 206, 226, 60)
+        p.fill(186, 206, 226, 55)
         p.textSize(9)
         p.textAlign(p.RIGHT, p.CENTER)
         p.text(`${bl.board.narrative_count}条叙事`, bl.x + bl.w - 8, bl.y + BOARD_HEADER_H - 10)
@@ -557,6 +583,23 @@ async function initP5() {
             const tLines = wrapText(sn.narrative.title, titleMaxW, 1)
             p.text(tLines[0] ?? '', sn.x + 7, sn.y + sn.h / 2 + (isAbstract ? 4 : 0))
           }
+
+          const tagCount = (bl.board.event_tags ?? []).length + (bl.board.abstract_tags ?? []).length
+          if (tagCount > 0) {
+            p.fill(186, 206, 226, 16)
+            p.stroke(186, 206, 226, 25)
+            p.strokeWeight(0.5)
+            const badgeW = 76
+            const badgeH = 18
+            const badgeX = bl.x + (bl.w - badgeW) / 2
+            const badgeY = bl.y + bl.h - badgeH - 4
+            p.rect(badgeX, badgeY, badgeW, badgeH, 6)
+            p.noStroke()
+            p.fill(186, 206, 226, 55)
+            p.textSize(9)
+            p.textAlign(p.CENTER, p.CENTER)
+            p.text(`${tagCount} 个标签 ▸`, badgeX + badgeW / 2, badgeY + badgeH / 2)
+          }
         } else {
           p.fill(186, 206, 226, 30)
           p.textSize(10)
@@ -581,6 +624,9 @@ async function initP5() {
         if (hit.type === 'narrative') {
           newHoveredId = hit.id
         }
+        canvasEl.style.cursor = 'pointer'
+      } else {
+        canvasEl.style.cursor = 'default'
       }
 
       if (newHoveredId !== hoveredId) {
@@ -605,6 +651,7 @@ async function initP5() {
           set.add(hit.id)
         }
         expandedBoardIds.value = set
+        emit('board-toggle', set)
         computeLayout()
         if (p5Instance.value) {
           p5Instance.value.resizeCanvas(canvasW, canvasH)

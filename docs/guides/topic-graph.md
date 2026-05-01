@@ -821,16 +821,33 @@ TopicTag 模型新增 `metadata` JSONB 字段（类型 `MetadataMap = map[string
 
 叙事功能追踪话题从兴起到演化的完整生命周期。系统每天自动生成叙事摘要，将活跃标签组织成连贯的故事线，并追踪叙事之间的继承/分化/融合关系。
 
+当前叙事系统采用**双轨制 Board 创建**模型：大抽象树走"热点板"轨道自动生成，小树和未分类事件走"概念板"轨道通过 embedding 匹配到持久化的板块概念。
+
 ### 后端架构
 
 | 文件 | 职责 |
 |------|------|
-| `backend-go/internal/domain/models/narrative.go` | 数据模型 `NarrativeSummary`，状态常量 |
+| `backend-go/internal/domain/models/narrative.go` | 数据模型 NarrativeSummary，状态常量 |
+| `backend-go/internal/domain/models/narrative_board.go` | 数据模型 NarrativeBoard |
+| `backend-go/internal/domain/models/board_concept.go` | 数据模型 BoardConcept |
+| `backend-go/internal/domain/narrative/service.go` | 服务编排：双轨生成、保存、查询、历史追溯 |
 | `backend-go/internal/domain/narrative/collector.go` | 数据采集：抽象树、未分类 event 标签、前日叙事、活跃分类 |
-| `backend-go/internal/domain/narrative/generator.go` | AI 生成叙事（抽象树叙事 / 未分类 event 叙事 / 跨分类叙事） |
-| `backend-go/internal/domain/narrative/service.go` | 服务编排：生成、保存、查询、历史追溯 |
+| `backend-go/internal/domain/narrative/board_creation.go` | Board 创建：从抽象树/匹配标签构建 Board |
+| `backend-go/internal/domain/narrative/board_generator.go` | Board 级叙事生成 |
+| `backend-go/internal/domain/narrative/board_narrative_generator.go` | Board 叙事生成（接收概念上下文） |
+| `backend-go/internal/domain/narrative/board_collector.go` | Board 数据收集 |
+| `backend-go/internal/domain/narrative/board_merge.go` | Board 合并逻辑（旧路径，部分废弃） |
+| `backend-go/internal/domain/narrative/board_postprocess.go` | Board 后处理（连接派生） |
+| `backend-go/internal/domain/narrative/concept_service.go` | Board Concept CRUD |
+| `backend-go/internal/domain/narrative/concept_handler.go` | Board Concept REST API |
+| `backend-go/internal/domain/narrative/concept_embedding.go` | 概念 embedding 生成 |
+| `backend-go/internal/domain/narrative/concept_matcher.go` | Embedding 匹配引擎 |
+| `backend-go/internal/domain/narrative/concept_suggestion.go` | LLM 冷启动建议 |
+| `backend-go/internal/domain/narrative/generator.go` | AI 生成叙事（抽象树/未分类 event/跨分类） |
+| `backend-go/internal/domain/narrative/watched_narrative.go` | 关注标签叙事维度总结 |
+| `backend-go/internal/domain/narrative/tag_feedback.go` | 叙事反馈到事件标签合并 |
 | `backend-go/internal/domain/narrative/handler.go` | REST API 路由注册 |
-| `backend-go/internal/jobs/narrative_summary.go` | 定时调度器，支持手动触发 |
+| `backend-go/internal/jobs/narrative_summary.go` | 定时调度器 |
 
 ### 叙事状态
 
@@ -844,37 +861,108 @@ TopicTag 模型新增 `metadata` JSONB 字段（类型 `MetadataMap = map[string
 
 ### 生成流程
 
-1. `CollectActiveCategories` 采集当日活跃分类
-2. 对每个活跃分类执行两遍生成：
-   - Pass 1: `CollectAbstractTreeInputsByCategory` 采集该分类下的抽象标签树（保留层级+description）
-     → `GenerateNarrativesFromAbstractTrees` 生成叙事
-   - Pass 2: `CollectUnclassifiedEventTagsByCategory` 采集该分类下未归入抽象树的 event 标签（带 description）
-     → `GenerateNarrativesFromUnclassifiedEvents` 生成叙事
-   - 两遍结果合并保存为 `feed_category` 叙事集
-3. `CollectCategoryNarrativeSummaries` 收集各分类叙事卡片
-4. `GenerateCrossCategoryNarratives` 从各分类叙事中总结跨分类叙事
-5. `markEndedNarratives` / `markEndedGlobalNarratives` 标记终结叙事
+`GenerateAndSave(date)` 作为统一入口，依次执行以下步骤：
+
+1. `GenerateAndSaveForAllCategories(date)` — 逐分类生成叙事
+2. `GenerateAndSaveGlobal(ctx, date)` — 全局生成（概念板匹配）
+3. `runFallbackAssociations` — 关联前日叙事
+4. `DeriveBoardConnections` — 派生 Board 间连接
+5. `runFeedbackFromTodayNarratives` — 叙事反馈到标签
+6. `cleanEmptyBoards` — 清理无叙事关联的空 Board
+
+#### 分类级生成（GenerateAndSaveForCategory）
+
+对每个活跃分类执行两遍采集和双轨分发：
+
+**Pass 1**：`CollectAbstractTreeInputsByCategory` 按节点数分轨：
+- 大抽象树（≥6 节点，阈值可配置）→ **热点板轨道**（`is_system=true`）
+- 小抽象树 → **概念板轨道**（embedding 匹配 `board_concepts`）
+
+**Pass 2**：`CollectUnclassifiedEventTagsByCategory` 采集未分类 event：
+- 通过 `MatchTagToConcept` 匹配到概念板
+- 未匹配 → 加入未归类桶
+
+最后生成叙事并保存。
+
+#### 全局生成（GenerateAndSaveGlobal）
+
+1. `CollectTagInputs` 采集全局标签
+2. 逐个 `MatchTagToConcept` embedding 匹配
+3. 按概念分组创建 Board
+4. 生成叙事
+
+#### 双轨制图示
+
+```
+┌──────────────────────┐     ┌──────────────────────────────┐
+│ 热点板轨道             │     │ 概念板轨道                     │
+│ 大抽象树(≥6节点)       │     │ 小树 + 未分类 event            │
+│ → is_system=true      │     │ → embedding 匹配 board_concept │
+│ → board_concept_id=NULL│    │ → 匹配上→概念板                │
+│ → 跨日延续 prev_board  │     │ → 匹配不上→未归类桶             │
+└──────────────────────┘     └──────────────────────────────┘
+```
+
+### 板块概念管理
+
+`board_concepts` 表存储持久化板块概念，跨天存在，是概念板轨道的核心匹配目标。
+
+- **LLM 冷启动**：扫描 active abstract tags 建议初始概念列表
+- **用户审阅**：通过 `BoardConceptManager.vue` 审阅/接受/拒绝建议
+- **Embedding 匹配**：cosine similarity ≥ threshold（默认 0.7）则匹配
+- **未归类桶**：超过 5 个未匹配项触发 LLM 建议新概念
+- **生命周期**：概念可手动增删改，停用（`is_active=false`）不删除
+
+### 关注标签叙事
+
+`GenerateWatchedTagNarratives` 在每次叙事生成后异步执行：
+
+1. 获取所有 watched 标签及其子标签
+2. 查询最近 3 天有 ≥2 篇活跃文章的 watched 标签
+3. 为每个活跃 watched 标签生成独立的发展脉络总结（300-800 字）
+4. 结果保存到 `narrative_summaries` 表，`period = "watched_tag"`
+
+### 叙事反馈
+
+叙事生成后 `feedbackNarrativesToTags` 检查每条叙事关联的 event 标签：
+
+1. 对标签对做 embedding 相似度检查
+2. 中间带的标签对触发 `ExtractAbstractTag` 并注入叙事上下文
 
 ### 调度与手动触发
 
 - 自动调度：`NarrativeSummaryScheduler` 按配置间隔运行，使用 `GenerateAndSave`（追加模式）
-- 手动触发：`POST /api/schedulers/trigger/narrative_summary?date=YYYY-MM-DD`
-- 手动触发使用 `RegenerateAndSave`：先删除目标日期已有叙事，再重新生成
+- 手动触发：`POST /api/narratives/regenerate`（JSON body: `date`、`scope_type`、`category_id`）
+- `scope_type` 和 `category_id` 参数控制重新生成范围
 - 调度器支持 `TriggerNow()` 和 `TriggerNowWithDate(date)` 两种触发方式
 
 ### API 端点
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/narratives?date=YYYY-MM-DD` | 获取指定日期的叙事列表 |
-| DELETE | `/api/narratives?date=YYYY-MM-DD` | 删除指定日期的所有叙事 |
-| GET | `/api/narratives/:id` | 获取单条叙事详情（含子叙事） |
-| GET | `/api/narratives/:id/history` | 获取叙事的完整历史链（递归追溯 parent） |
+| GET | `/api/narratives/timeline` | 叙事时间线（支持 days 参数） |
+| GET | `/api/narratives/scopes` | 作用域列表（从 boards 聚合，支持 days 参数） |
+| POST | `/api/narratives/regenerate` | 重新生成叙事（JSON body: date, scope_type, category_id） |
+| GET | `/api/narratives?date=YYYY-MM-DD` | 获取指定日期叙事列表 |
+| GET | `/api/narratives?board_id=N` | 按 Board 获取叙事 |
+| DELETE | `/api/narratives?date=YYYY-MM-DD` | 删除指定日期叙事 |
+| GET | `/api/narratives/:id` | 叙事详情（含树形结构） |
+| GET | `/api/narratives/:id/history` | 叙事历史链 |
+| GET | `/api/narratives/boards/timeline` | Board 时间线 |
+| GET | `/api/narratives/boards/:id` | Board 详情 |
+| GET | `/api/narratives/board-concepts` | 板块概念列表 |
+| POST | `/api/narratives/board-concepts` | 创建板块概念 |
+| PUT | `/api/narratives/board-concepts/:id` | 更新板块概念 |
+| DELETE | `/api/narratives/board-concepts/:id` | 停用板块概念 |
+| POST | `/api/narratives/board-concepts/suggest` | LLM 建议板块概念 |
+| GET | `/api/narratives/unclassified` | 未分类标签桶 |
 
 ### 前端组件
 
-- `NarrativePanel.vue`：叙事面板，展示当日叙事列表，支持展开/收起摘要、查看历史脉络、重新整理（先删后建）
-- `TopicGraphPage.vue` 中 `activeTab === 'narrative'` 时展示 NarrativePanel
+- `NarrativePanel.vue`：叙事面板，支持 global/category 切换，分类列表展示 board 数量
+- `NarrativeBoardCanvas.client.vue`：Board 可视化画布，区分概念板和热点板
+- `BoardConceptManager.vue`：板块概念管理 UI（列表/创建/编辑/停用/LLM 建议）
+- `TopicGraphPage.vue` 中可切换显示 BoardConceptManager
 
 ### 标签点击交互
 
@@ -885,20 +973,33 @@ TopicTag 模型新增 `metadata` JSONB 字段（类型 `MetadataMap = map[string
 ```
 NarrativePanel
   ├─ loadNarratives(date) → GET /api/narratives?date=...
-  ├─ triggerGeneration() → DELETE /api/narratives?date=... + POST /api/schedulers/trigger/narrative_summary?date=...
+  ├─ loadBoardTimeline(date) → GET /api/narratives/boards/timeline?date=...
+  ├─ loadScopes(date) → GET /api/narratives/scopes?date=...&days=7
+  ├─ switchScope('global'|'category') → 切换后重新加载
+  ├─ triggerGeneration() → POST /api/narratives/regenerate {date, scope_type, category_id}
   ├─ loadHistory(id) → GET /api/narratives/:id/history
-  └─ emit('select-tag', tag) → TopicGraphPage.handleNarrativeTagSelect → handleTagSelect(slug, category)
+  └─ emit('select-tag', tag) → TopicGraphPage.handleTagSelect
+
+BoardConceptManager
+  ├─ loadConcepts() → GET /api/narratives/board-concepts
+  ├─ createConcept(data) → POST /api/narratives/board-concepts
+  ├─ updateConcept(id, data) → PUT /api/narratives/board-concepts/:id
+  ├─ deactivateConcept(id) → DELETE /api/narratives/board-concepts/:id
+  └─ suggestConcepts() → POST /api/narratives/board-concepts/suggest
 ```
 
 ## 相关文件
 
 - `front/app/pages/topics.vue`
 - `front/app/api/topicGraph.ts`
+- `front/app/api/boardConcepts.ts`
 - `front/app/features/topic-graph/components/TopicGraphPage.vue`
 - `front/app/features/topic-graph/components/TopicGraphCanvas.client.vue`
 - `front/app/features/topic-graph/components/TopicGraphSidebar.vue`
 - `front/app/features/topic-graph/components/TopicGraphFooterPanels.vue`
 - `front/app/features/topic-graph/components/NarrativePanel.vue`
+- `front/app/features/topic-graph/components/NarrativeBoardCanvas.client.vue`
+- `front/app/features/topic-graph/components/BoardConceptManager.vue`
 - `front/app/features/topic-graph/utils/buildTopicGraphViewModel.ts`
 
 ## 建议阅读顺序

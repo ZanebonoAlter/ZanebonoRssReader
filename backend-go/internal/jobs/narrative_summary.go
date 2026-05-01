@@ -165,7 +165,7 @@ func (s *NarrativeSummaryScheduler) TriggerNowWithDate(dateStr string) map[strin
 
 	targetDate := time.Now()
 	if dateStr != "" {
-		parsed, err := time.Parse("2006-01-02", dateStr)
+		parsed, err := time.ParseInLocation("2006-01-02", dateStr, time.Local)
 		if err != nil {
 			s.executionMutex.Unlock()
 			return map[string]interface{}{
@@ -249,7 +249,7 @@ func (s *NarrativeSummaryScheduler) runNarrativeCycleFromCron() {
 			}
 		}()
 
-		s.runNarrativeCycle("scheduled", time.Now())
+		s.runNarrativeCycle("scheduled", time.Now().In(time.Local))
 	})
 }
 

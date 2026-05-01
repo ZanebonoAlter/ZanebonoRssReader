@@ -417,7 +417,20 @@ export interface BoardItem {
   prev_board_ids: number[]
   abstract_tag_id: number | null
   abstract_tag_slug: string
+  board_concept_id: number | null
+  concept_name: string
+  is_system: boolean
   created_at: string
+  event_tags: TagBrief[]
+  abstract_tags: TagBrief[]
+}
+
+export interface TagBrief {
+  id: number
+  slug: string
+  label: string
+  category: string
+  kind?: string
 }
 
 export interface BoardTimelineDay {

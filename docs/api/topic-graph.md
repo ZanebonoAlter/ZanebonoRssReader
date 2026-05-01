@@ -361,15 +361,97 @@ POST 请求还支持 JSON body 传入 `windowType` 和 `anchorDate`。
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/narratives` | 按日期获取叙事列表 |
+| GET | `/api/narratives/timeline` | 叙事时间线 |
+| GET | `/api/narratives/scopes` | 作用域列表（按分类聚合 Board） |
+| GET | `/api/narratives` | 按日期或 Board 获取叙事列表 |
+| DELETE | `/api/narratives` | 删除指定日期叙事 |
+| POST | `/api/narratives/regenerate` | 重新生成叙事 |
 | GET | `/api/narratives/:id` | 叙事详情（含树形结构） |
-| GET | `/api/narratives/:id/history` | 叙事历史 |
+| GET | `/api/narratives/:id/history` | 叙事历史链 |
+| GET | `/api/narratives/boards/timeline` | Board 时间线 |
+| GET | `/api/narratives/boards/:id` | Board 详情 |
+| GET | `/api/narratives/board-concepts` | 板块概念列表 |
+| POST | `/api/narratives/board-concepts` | 创建板块概念 |
+| PUT | `/api/narratives/board-concepts/:id` | 更新板块概念 |
+| DELETE | `/api/narratives/board-concepts/:id` | 停用板块概念 |
+| POST | `/api/narratives/board-concepts/suggest` | LLM 建议板块概念 |
+| GET | `/api/narratives/unclassified` | 未分类标签桶 |
+
+### GET /api/narratives/timeline
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `date` | string | `YYYY-MM-DD`，锚点日期，默认今天 |
+| `days` | int | 天数范围，默认 7 |
+| `scope_type` | string | `global` / `feed_category` |
+| `category_id` | uint | 分类 ID |
+
+返回按日期分组的叙事数量时间线。
+
+### GET /api/narratives/scopes
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `date` | string | `YYYY-MM-DD`，锚点日期，默认今天 |
+| `days` | int | 查询天数范围，默认 7 |
+
+返回分类列表，每个分类包含 `board_count`（该时间范围内的 Board 数量）。数据源从 `narrative_boards` 聚合。
+
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "category_id": 1,
+      "name": "AI",
+      "icon": "brain",
+      "color": "#3b82f6",
+      "board_count": 5
+    }
+  ]
+}
+```
 
 ### GET /api/narratives
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
 | `date` | string | `YYYY-MM-DD`，默认今天 |
+| `board_id` | uint | 指定 Board ID 获取该 Board 下的叙事 |
+| `scope_type` | string | `global` / `feed_category` |
+| `category_id` | uint | 分类 ID |
+
+`board_id` 和 `date` 互斥，优先使用 `board_id`。
+
+### DELETE /api/narratives
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `date` | string | `YYYY-MM-DD`，默认今天 |
+| `scope_type` | string | 可选，限定作用域 |
+| `category_id` | uint | 可选，限定分类 |
+
+删除指定日期和范围的叙事及关联 Board。
+
+### POST /api/narratives/regenerate
+
+请求体：
+
+```json
+{
+  "date": "2026-05-01",
+  "scope_type": "feed_category",
+  "category_id": 1
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `date` | string | `YYYY-MM-DD`，默认今天 |
+| `scope_type` | string | 可选，`feed_category` 时需搭配 `category_id` |
+| `category_id` | uint | 可选，指定分类重新生成 |
+
+先删除再重新生成。返回 `{"success": true, "data": {"saved": 12}}`。
 
 ### GET /api/narratives/:id
 
@@ -378,3 +460,92 @@ POST 请求还支持 JSON body 传入 `windowType` 和 `anchorDate`。
 ### GET /api/narratives/:id/history
 
 返回指定叙事的历史记录列表。
+
+### GET /api/narratives/boards/timeline
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `date` | string | `YYYY-MM-DD`，锚点日期，默认今天 |
+| `days` | int | 天数范围，默认 7 |
+| `scope_type` | string | `global` / `feed_category` |
+| `category_id` | uint | 分类 ID |
+
+返回按日期分组的 Board 列表时间线。每个 Board 包含 `id`、`name`、`description`、`board_concept_id`、`is_system` 等字段。
+
+### GET /api/narratives/boards/:id
+
+返回 Board 详情，包含关联的叙事列表。
+
+### GET /api/narratives/board-concepts
+
+返回所有活跃的板块概念列表。
+
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": 1,
+      "name": "AI 前沿",
+      "description": "人工智能领域最新研究与应用",
+      "scope_type": "global",
+      "scope_category_id": null,
+      "is_system": false,
+      "is_active": true,
+      "display_order": 0
+    }
+  ]
+}
+```
+
+### POST /api/narratives/board-concepts
+
+请求体：
+
+```json
+{
+  "name": "AI 前沿",
+  "description": "人工智能领域最新研究与应用",
+  "scope_type": "global",
+  "scope_category_id": null
+}
+```
+
+创建后自动生成 embedding。返回创建的概念对象。
+
+### PUT /api/narratives/board-concepts/:id
+
+请求体：
+
+```json
+{
+  "name": "新名称",
+  "description": "新描述"
+}
+```
+
+更新后自动重新生成 embedding。
+
+### DELETE /api/narratives/board-concepts/:id
+
+软删除（设置 `is_active=false`）。
+
+### POST /api/narratives/board-concepts/suggest
+
+LLM 扫描所有活跃抽象标签，建议初始板块概念列表。
+
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "name": "编程工具",
+      "description": "开发者工具、IDE、框架更新"
+    }
+  ]
+}
+```
+
+### GET /api/narratives/unclassified
+
+返回当前未匹配到任何概念板的标签列表（未归类桶）。

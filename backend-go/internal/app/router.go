@@ -88,6 +88,8 @@ func SetupRoutes(r *gin.Engine) {
 			ai.DELETE("/providers/:provider_id", aiadmindomain.DeleteProvider)
 			ai.GET("/routes", aiadmindomain.ListRoutes)
 			ai.PUT("/routes/:capability", aiadmindomain.UpdateRoute)
+			ai.GET("/settings", aiadmindomain.GetSettings)
+			ai.POST("/settings", aiadmindomain.SaveSettings)
 		}
 
 		opml := api.Group("")

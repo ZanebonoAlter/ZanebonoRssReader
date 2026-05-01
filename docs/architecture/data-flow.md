@@ -181,7 +181,9 @@ DigestListView
 - 阻塞文章恢复
 - 标签自动合并
 - 标签质量分数重算
-- 叙事摘要生成
+- 叙事摘要生成（双轨制：热点板 + 概念板匹配）
+- 叙事后处理（Board 连接派生、标签反馈、空 Board 清理）
+- 关注标签叙事维度总结
 
 ### scheduler 状态回传
 
@@ -225,6 +227,49 @@ auto_summary scheduler
   -> 调 AI 生成 summary
   -> 把 feed 数 / 生成数 / 跳过数 / 失败数写回 scheduler_tasks.last_execution_result
   -> 手动 trigger 时也走同一套执行链路
+```
+
+## 叙事数据流
+
+### 每日叙事生成
+
+```text
+NarrativeSummaryScheduler 触发
+  → GenerateAndSave(date)
+    → GenerateAndSaveForAllCategories
+      → 逐分类双轨生成:
+        Pass 1: CollectAbstractTreeInputs
+          → 大树(≥6) → 热点板 (is_system=true)
+          → 小树 → MatchTagToConcept → 概念板或未归类
+        Pass 2: CollectUnclassifiedEventTags
+          → MatchTagToConcept → 概念板或未归类
+    → GenerateAndSaveGlobal
+      → CollectTagInputs → MatchTagToConcept → 概念板
+    → runFallbackAssociations (关联前日叙事)
+    → DeriveBoardConnections (派生 Board 连接)
+    → runFeedbackFromTodayNarratives (反馈标签)
+    → cleanEmptyBoards (清理空 Board)
+```
+
+### Board Concept 管理
+
+```text
+BoardConceptManager
+  → suggestConcepts() → LLM 扫描 abstract tags → 返回建议列表
+  → 用户审阅 → createConcept() → 生成 embedding → 保存
+  → 日常: MatchTagToConcept 使用 embedding cosine similarity 匹配
+  → 未归类桶 > 5 → 自动触发 suggestConcepts
+```
+
+### 叙事面板数据流
+
+```text
+NarrativePanel
+  → loadBoardTimeline(date) → GET /api/narratives/boards/timeline
+  → loadScopes(date) → GET /api/narratives/scopes
+  → loadNarratives(date) → GET /api/narratives?date=...
+  → switchScope('category') → loadScopes → 展示 board_count
+  → triggerGeneration() → POST /api/narratives/regenerate
 ```
 
 ## 约束

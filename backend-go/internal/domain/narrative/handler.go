@@ -13,6 +13,8 @@ import (
 var service = NewNarrativeService()
 
 func RegisterNarrativeRoutes(rg *gin.RouterGroup) {
+	registerConceptRoutes(rg)
+
 	group := rg.Group("/narratives")
 	{
 		group.GET("/timeline", getNarrativeTimeline)
@@ -48,7 +50,7 @@ func getNarrativeTimeline(c *gin.Context) {
 	var date time.Time
 	if dateStr != "" {
 		var err error
-		date, err = time.Parse("2006-01-02", dateStr)
+		date, err = time.ParseInLocation("2006-01-02", dateStr, time.Local)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid date format, use YYYY-MM-DD"})
 			return
@@ -97,7 +99,7 @@ func getNarratives(c *gin.Context) {
 	var date time.Time
 	if dateStr != "" {
 		var err error
-		date, err = time.Parse("2006-01-02", dateStr)
+		date, err = time.ParseInLocation("2006-01-02", dateStr, time.Local)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid date format, use YYYY-MM-DD"})
 			return
@@ -122,7 +124,7 @@ func deleteNarratives(c *gin.Context) {
 	var date time.Time
 	if dateStr != "" {
 		var err error
-		date, err = time.Parse("2006-01-02", dateStr)
+		date, err = time.ParseInLocation("2006-01-02", dateStr, time.Local)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid date format, use YYYY-MM-DD"})
 			return
@@ -147,7 +149,7 @@ func getNarrativeScopes(c *gin.Context) {
 	var date time.Time
 	if dateStr != "" {
 		var err error
-		date, err = time.Parse("2006-01-02", dateStr)
+		date, err = time.ParseInLocation("2006-01-02", dateStr, time.Local)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid date format, use YYYY-MM-DD"})
 			return
@@ -219,7 +221,7 @@ func regenerateNarratives(c *gin.Context) {
 	var date time.Time
 	if req.Date != "" {
 		var err error
-		date, err = time.Parse("2006-01-02", req.Date)
+		date, err = time.ParseInLocation("2006-01-02", req.Date, time.Local)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid date format, use YYYY-MM-DD"})
 			return

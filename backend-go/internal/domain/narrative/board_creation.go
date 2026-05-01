@@ -39,6 +39,7 @@ func createBoardFromAbstractTree(tree AbstractTreeNode, date time.Time, category
 		AbstractTagIDs:  string(abstractIDsJSON),
 		PrevBoardIDs:    string(prevIDsJSON),
 		AbstractTagID:   &abstractTagID,
+		IsSystem:        true,
 	}
 
 	if err := database.DB.Create(board).Error; err != nil {

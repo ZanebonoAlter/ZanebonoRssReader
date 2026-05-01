@@ -35,9 +35,11 @@ const boardNarrativeSystemPrompt = `你是一名专业的新闻叙事分析师�
 6. 只返回一个合法 JSON 对象，不要输出 Markdown 代码块、解释文字、前后缀，禁止输出第二个 JSON 块`
 
 type BoardNarrativeContext struct {
-	Board          models.NarrativeBoard
-	EventTags      []TagInput
-	PrevNarratives []PreviousNarrative
+	Board              models.NarrativeBoard
+	EventTags          []TagInput
+	PrevNarratives     []PreviousNarrative
+	ConceptName        string
+	ConceptDescription string
 }
 
 func buildBoardNarrativePrompt(ctx BoardNarrativeContext) string {
@@ -46,6 +48,13 @@ func buildBoardNarrativePrompt(ctx BoardNarrativeContext) string {
 	sb.WriteString(fmt.Sprintf("## 看板上下文\n\n"))
 	sb.WriteString(fmt.Sprintf("- 看板名称: %s\n", ctx.Board.Name))
 	sb.WriteString(fmt.Sprintf("- 看板描述: %s\n", ctx.Board.Description))
+
+	if ctx.ConceptName != "" {
+		sb.WriteString(fmt.Sprintf("- 板块概念: %s\n", ctx.ConceptName))
+		if ctx.ConceptDescription != "" {
+			sb.WriteString(fmt.Sprintf("- 概念描述: %s\n", ctx.ConceptDescription))
+		}
+	}
 
 	sb.WriteString("\n## 看板事件标签\n\n")
 	for _, t := range ctx.EventTags {
@@ -179,6 +188,73 @@ func SaveNarrativesForBoard(outputs []NarrativeOutput, board models.NarrativeBoa
 
 	if err := database.DB.CreateInBatches(records, 20).Error; err != nil {
 		logging.Warnf("board-narrative: batch save failed for board %d: %v, falling back to individual saves", boardID, err)
+		saved := 0
+		for _, record := range records {
+			if err := database.DB.Create(&record).Error; err != nil {
+				logging.Warnf("board-narrative: failed to save '%s': %v", record.Title, err)
+				continue
+			}
+			saved++
+		}
+		return saved, nil
+	}
+
+	logging.Infof("board-narrative: saved %d narratives for board %d (%s)",
+		len(records), boardID, board.Name)
+	return len(records), nil
+}
+
+func saveNarrativesWithBoard(outputs []NarrativeOutput, board models.NarrativeBoard, date time.Time, scopeOpts *ScopeSaveOpts) (int, error) {
+	if len(outputs) == 0 {
+		return 0, nil
+	}
+
+	startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
+	boardID := board.ID
+
+	records := make([]models.NarrativeSummary, 0, len(outputs))
+	for _, out := range outputs {
+		parentIDsJSON, _ := json.Marshal(out.ParentIDs)
+		tagIDsJSON, _ := json.Marshal(out.RelatedTagIDs)
+		articleIDs := resolveArticleIDs(out.RelatedTagIDs, date)
+		articleIDsJSON, _ := json.Marshal(articleIDs)
+
+		generation := 0
+		if scopeOpts != nil && scopeOpts.ScopeType == models.NarrativeScopeTypeGlobal {
+			generation = resolveGlobalGeneration(date)
+		} else {
+			generation = resolveGeneration(out, date)
+		}
+
+		status := out.Status
+		if status == "" {
+			status = models.NarrativeStatusEmerging
+		}
+
+		record := models.NarrativeSummary{
+			Title:             out.Title,
+			Summary:           out.Summary,
+			Status:            status,
+			Period:            "daily",
+			PeriodDate:        startOfDay,
+			Generation:        generation,
+			ParentIDs:         string(parentIDsJSON),
+			RelatedTagIDs:     string(tagIDsJSON),
+			RelatedArticleIDs: string(articleIDsJSON),
+			Source:            "ai",
+			BoardID:           &boardID,
+			ScopeType:         models.NarrativeScopeTypeGlobal,
+		}
+		if scopeOpts != nil {
+			record.ScopeType = scopeOpts.ScopeType
+			record.ScopeCategoryID = scopeOpts.CategoryID
+			record.ScopeLabel = scopeOpts.Label
+		}
+		records = append(records, record)
+	}
+
+	if err := database.DB.CreateInBatches(records, 20).Error; err != nil {
+		logging.Warnf("board-narrative: batch save failed for board %d: %v", boardID, err)
 		saved := 0
 		for _, record := range records {
 			if err := database.DB.Create(&record).Error; err != nil {

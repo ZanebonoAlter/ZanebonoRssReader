@@ -24,6 +24,7 @@ import TopicGraphHeader from '~/features/topic-graph/components/TopicGraphHeader
 import TopicGraphSidebar from '~/features/topic-graph/components/TopicGraphSidebar.vue'
 import TopicTimeline from '~/features/topic-graph/components/TopicTimeline.vue'
 import NarrativePanel from '~/features/topic-graph/components/NarrativePanel.vue'
+import BoardConceptManager from '~/features/topic-graph/components/BoardConceptManager.vue'
 import TagHierarchy from '~/features/topic-graph/components/TagHierarchy.vue'
 import { buildDisplayedTopicGraph, collectRelatedTopicSlugs } from '~/features/topic-graph/utils/buildDisplayedTopicGraph'
 import { buildTopicGraphViewModel } from '~/features/topic-graph/utils/buildTopicGraphViewModel'
@@ -147,6 +148,7 @@ const selectedChildTagSlug = ref<string | null>(null)
 
 // Timeline floating panel state
 const timelineOpen = ref(false)
+const showConceptManager = ref(false)
 
 watch(timelineOpen, (open) => {
   if (!open) {
@@ -1476,6 +1478,16 @@ await loadGraph()
                 <!-- Narrative view -->
                 <template v-else-if="activeTab === 'narrative'">
                   <article class="rounded-[30px] p-4 md:p-5 border border-[rgba(255,255,255,0.08)] bg-[rgba(11,18,24,0.4)] backdrop-blur-xl">
+                    <div class="flex items-center justify-between mb-4">
+                      <h3 class="text-base font-medium text-[rgba(255,233,220,0.88)]">叙事板块</h3>
+                      <button
+                        class="px-3 py-1.5 rounded-lg border border-[rgba(255,255,255,0.1)] bg-[rgba(255,255,255,0.04)] text-xs text-[rgba(255,233,220,0.6)] hover:bg-[rgba(255,255,255,0.08)] hover:text-[rgba(255,233,220,0.88)] transition-colors"
+                        @click="showConceptManager = !showConceptManager"
+                      >
+                        板块概念
+                      </button>
+                    </div>
+                    <BoardConceptManager v-if="showConceptManager" class="mb-4" />
                     <NarrativePanel
                       :date="selectedDate"
                       @select-tag="handleNarrativeTagSelect"
