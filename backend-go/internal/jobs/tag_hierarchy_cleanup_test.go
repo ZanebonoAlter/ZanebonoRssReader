@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -42,7 +43,7 @@ func TestRunCleanupCycleSummaryOmitsLegacyTreeFields(t *testing.T) {
 	db := setupTagHierarchyCleanupSchedulerTestDB(t)
 
 	scheduler := NewTagHierarchyCleanupScheduler(60)
-	scheduler.runCleanupCycle("test")
+	scheduler.runCleanupCycle(context.Background(), "test")
 
 	var task models.SchedulerTask
 	if err := db.Where("name = ?", "tag_hierarchy_cleanup").First(&task).Error; err != nil {

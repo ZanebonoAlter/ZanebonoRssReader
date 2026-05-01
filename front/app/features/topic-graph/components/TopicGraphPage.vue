@@ -614,7 +614,7 @@ async function loadGraph() {
         category: selectedCategory.value || 'keyword',
       }
       void loadTopicDetail(selectedTopicSlug.value)
-      void loadHotspotDigests(selectedTopicSlug.value)
+      void loadHotspotDigests(selectedTopicSlug.value, selectedCategory.value || undefined)
       void loadPendingArticles(selectedTopicSlug.value)
     } else {
       detail.value = null
@@ -700,7 +700,7 @@ async function handleTagSelect(slug: string, category: TopicCategory) {
     await loadAbstractTagDigests(childSlugs)
   } else {
     // Load digests for this tag (reverse trace: tag -> articles -> digests)
-    await loadHotspotDigests(slug)
+    await loadHotspotDigests(slug, category)
   }
 
   // Load pending articles for this tag
@@ -713,14 +713,15 @@ async function handleTagSelect(slug: string, category: TopicCategory) {
   void loadTopicDetail(slug)
 }
 
-async function loadHotspotDigests(tagSlug: string) {
+async function loadHotspotDigests(tagSlug: string, kind?: TopicCategory) {
   loadingHotspotDigests.value = true
   try {
     const response = await topicGraphApi.getDigestsByArticleTag(
       tagSlug,
       undefined,
       undefined,
-      20
+      20,
+      kind,
     )
     if (response.success && response.data) {
       hotspotDigests.value = response.data.digests || []
@@ -776,7 +777,7 @@ async function handleChildTagSelect(childSlug: string, childLabel: string) {
   }
 
   // Load digests for the child tag (not the abstract parent)
-  await loadHotspotDigests(childSlug)
+  await loadHotspotDigests(childSlug, selectedHotspotTag.value.category)
 
   // Open timeline panel if not already open
   if (!timelineOpen.value) {
@@ -830,7 +831,7 @@ async function handleAbstractTagSelect(abstractSlug: string) {
   if (childSlugs.length > 0) {
     await loadAbstractTagDigests(childSlugs)
   } else {
-    await loadHotspotDigests(abstractSlug)
+    await loadHotspotDigests(abstractSlug, selectedHotspotTag.value.category)
   }
 
   // Open timeline panel if not already open
@@ -1064,7 +1065,7 @@ function handleNodeClick(node: { slug?: string; kind: string; category?: TopicCa
   selectedPendingNode.value = false
 
   // Load digests for this node (similar to handleTagSelect)
-  void loadHotspotDigests(node.slug)
+  void loadHotspotDigests(node.slug, node.category)
 
   // Load pending articles for this node
   void loadPendingArticles(node.slug)

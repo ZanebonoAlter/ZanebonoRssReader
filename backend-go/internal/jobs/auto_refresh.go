@@ -355,6 +355,10 @@ func (s *AutoRefreshScheduler) initSchedulerTask() {
 	nextRun := now.Add(s.checkInterval)
 
 	if err := database.DB.Where("name = ?", "auto_refresh").First(&task).Error; err == nil {
+		if task.CheckInterval > 0 {
+			s.checkInterval = time.Duration(task.CheckInterval) * time.Second
+			nextRun = now.Add(s.checkInterval)
+		}
 		updates := map[string]interface{}{
 			"description":         "Auto-refresh RSS feeds",
 			"check_interval":      int(s.checkInterval.Seconds()),

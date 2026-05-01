@@ -128,6 +128,7 @@ type AICallLog struct {
 	ErrorMessage    string    `gorm:"type:text" json:"error_message"`
 	RequestMeta     string    `gorm:"type:text" json:"request_meta"`
 	ResponseSnippet string    `gorm:"type:text" json:"response_snippet"`
+	TraceID         string    `gorm:"size:64" json:"trace_id,omitempty"`
 	CreatedAt       time.Time `json:"created_at"`
 }
 

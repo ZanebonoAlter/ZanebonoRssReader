@@ -7,6 +7,9 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/baggage"
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/domain/topictypes"
 	"my-robot-backend/internal/platform/database"
@@ -221,7 +224,7 @@ func (q *TagQueue) drainRemaining() {
 			sem <- struct{}{}
 			go func(j models.TagJob) {
 				defer func() { <-sem; jobWg.Done() }()
-				q.processJob(j)
+				q.processJob(context.Background(), j)
 			}(job)
 		}
 		jobWg.Wait()
@@ -246,13 +249,13 @@ func (q *TagQueue) processAvailableJobs() {
 		sem <- struct{}{}
 		go func(j models.TagJob) {
 			defer func() { <-sem; jobWg.Done() }()
-			q.processJob(j)
+			q.processJob(context.Background(), j)
 		}(job)
 	}
 	jobWg.Wait()
 }
 
-func (q *TagQueue) processJob(job models.TagJob) {
+func (q *TagQueue) processJob(ctx context.Context, job models.TagJob) {
 	defer func() {
 		if r := recover(); r != nil {
 			msg := fmt.Sprintf("panic: %v", r)
@@ -261,6 +264,19 @@ func (q *TagQueue) processJob(job models.TagJob) {
 			q.broadcastTagFailed(job.ID, job.ArticleID, msg)
 		}
 	}()
+
+	ctx, span := otel.Tracer("rss-reader-backend").Start(ctx, "workflow.article_tagging")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("workflow.name", "article_tagging"),
+		attribute.String("workflow.domain", "tag_management"),
+		attribute.String("workflow.trigger", "article_created"),
+	)
+	m1, _ := baggage.NewMember("workflow.name", "article_tagging")
+	m2, _ := baggage.NewMember("workflow.domain", "tag_management")
+	m3, _ := baggage.NewMember("workflow.trigger", "article_created")
+	bag, _ := baggage.New(m1, m2, m3)
+	ctx = baggage.ContextWithBaggage(ctx, bag)
 
 	var article models.Article
 	if err := database.DB.First(&article, job.ArticleID).Error; err != nil {
@@ -272,9 +288,9 @@ func (q *TagQueue) processJob(job models.TagJob) {
 
 	var err error
 	if job.ForceRetag {
-		err = RetagArticle(&article, job.FeedNameSnapshot, job.CategoryNameSnapshot)
+		err = RetagArticle(ctx, &article, job.FeedNameSnapshot, job.CategoryNameSnapshot)
 	} else {
-		err = TagArticle(&article, job.FeedNameSnapshot, job.CategoryNameSnapshot)
+		err = TagArticle(ctx, &article, job.FeedNameSnapshot, job.CategoryNameSnapshot)
 	}
 	if err != nil {
 		logging.Warnf("Failed to tag article %d: %v", job.ArticleID, err)

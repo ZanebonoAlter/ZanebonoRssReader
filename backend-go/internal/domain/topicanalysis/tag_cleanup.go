@@ -186,7 +186,7 @@ func BuildFlatMergePrompt(tags []FlatTagInfo, category string) string {
 6. 只返回真正有把握的建议`, category, string(promptJSON))
 }
 
-func ExecuteFlatMerge(category string, batchSize int) (int, []string, error) {
+func ExecuteFlatMerge(ctx context.Context, category string, batchSize int) (int, []string, error) {
 	tags, err := CollectFlatTagBatch(category, batchSize)
 	if err != nil {
 		return 0, nil, fmt.Errorf("collect tags: %w", err)
@@ -196,7 +196,7 @@ func ExecuteFlatMerge(category string, batchSize int) (int, []string, error) {
 	}
 
 	prompt := BuildFlatMergePrompt(tags, category)
-	judgment, err := callFlatMergeLLM(prompt)
+	judgment, err := callFlatMergeLLM(ctx, prompt)
 	if err != nil {
 		return 0, nil, fmt.Errorf("LLM call: %w", err)
 	}
@@ -244,7 +244,7 @@ func validateFlatMerge(merge flatMergeItem, tagMap map[uint]*FlatTagInfo) error 
 	return nil
 }
 
-func callFlatMergeLLM(prompt string) (*flatMergeJudgment, error) {
+func callFlatMergeLLM(ctx context.Context, prompt string) (*flatMergeJudgment, error) {
 	router := airouter.NewRouter()
 	req := airouter.ChatRequest{
 		Capability: airouter.CapabilityTopicTagging,
@@ -275,7 +275,7 @@ func callFlatMergeLLM(prompt string) (*flatMergeJudgment, error) {
 		Metadata:    map[string]any{"operation": "tag_flat_merge"},
 	}
 
-	result, err := router.Chat(context.Background(), req)
+	result, err := router.Chat(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("LLM call failed: %w", err)
 	}
@@ -467,4 +467,74 @@ func CleanupEmptyAbstractNodes() (int, error) {
 
 	logging.Infof("CleanupEmptyAbstractNodes: deactivated %d empty abstract tags", len(ids))
 	return len(ids), nil
+}
+
+type singleChildRow struct {
+	ParentID uint
+	ChildID  uint
+}
+
+func CleanupSingleChildAbstractNodes() (int, error) {
+	var rows []singleChildRow
+	if err := database.DB.Raw(`
+		SELECT r.parent_id, MIN(r.child_id) AS child_id
+		FROM topic_tag_relations r
+		JOIN topic_tags p ON p.id = r.parent_id
+		WHERE r.relation_type = 'abstract'
+		  AND p.source = 'abstract'
+		  AND p.status = 'active'
+		GROUP BY r.parent_id
+		HAVING COUNT(DISTINCT r.child_id) = 1
+	`).Scan(&rows).Error; err != nil {
+		return 0, fmt.Errorf("load single-child abstract nodes: %w", err)
+	}
+	if len(rows) == 0 {
+		return 0, nil
+	}
+
+	count := 0
+	for _, row := range rows {
+		if err := promoteSingleChild(row.ParentID, row.ChildID); err != nil {
+			logging.Warnf("CleanupSingleChildAbstractNodes: failed to promote child %d for parent %d: %v",
+				row.ChildID, row.ParentID, err)
+			continue
+		}
+		count++
+	}
+
+	logging.Infof("CleanupSingleChildAbstractNodes: promoted %d children, deactivated single-child abstract parents", count)
+	return count, nil
+}
+
+func promoteSingleChild(parentID, childID uint) error {
+	return database.DB.Transaction(func(tx *gorm.DB) error {
+		var grandparentIDs []uint
+		tx.Model(&models.TopicTagRelation{}).
+			Where("relation_type = ? AND child_id = ?", "abstract", parentID).
+			Pluck("parent_id", &grandparentIDs)
+
+		for _, gpID := range grandparentIDs {
+			var existing int64
+			tx.Model(&models.TopicTagRelation{}).
+				Where("relation_type = ? AND parent_id = ? AND child_id = ?", "abstract", gpID, childID).
+				Count(&existing)
+			if existing == 0 {
+				if err := tx.Create(&models.TopicTagRelation{
+					ParentID:       gpID,
+					ChildID:        childID,
+					RelationType:   "abstract",
+					SimilarityScore: 0,
+				}).Error; err != nil {
+					return fmt.Errorf("link grandparent %d to child %d: %w", gpID, childID, err)
+				}
+			}
+		}
+
+		tx.Where("relation_type = ? AND child_id = ?", "abstract", parentID).Delete(&models.TopicTagRelation{})
+		tx.Where("relation_type = ? AND parent_id = ? AND child_id = ?", "abstract", parentID, childID).Delete(&models.TopicTagRelation{})
+
+		tx.Where("topic_tag_id = ?", parentID).Delete(&models.TopicTagEmbedding{})
+		return tx.Model(&models.TopicTag{}).Where("id = ?", parentID).
+			Updates(map[string]interface{}{"status": "inactive"}).Error
+	})
 }

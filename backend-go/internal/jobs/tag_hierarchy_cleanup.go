@@ -10,6 +10,9 @@ import (
 	"time"
 
 	"github.com/robfig/cron/v3"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/baggage"
 	"my-robot-backend/internal/domain/models"
 	"my-robot-backend/internal/domain/topicanalysis"
 	"my-robot-backend/internal/domain/topicextraction"
@@ -40,6 +43,7 @@ type TagHierarchyCleanupRunSummary struct {
 	OrphanedRelations      int    `json:"orphaned_relations"`
 	MultiParentFixed       int    `json:"multi_parent_fixed"`
 	EmptyAbstracts         int    `json:"empty_abstracts"`
+	SingleChildAbstracts   int    `json:"single_child_abstracts"`
 	AdoptNarrowerProcessed int    `json:"adopt_narrower_processed"`
 	AbstractUpdateProcessed int   `json:"abstract_update_processed"`
 	TreesReviewed          int    `json:"trees_reviewed"`
@@ -168,7 +172,7 @@ func (s *TagHierarchyCleanupScheduler) TriggerNow() map[string]interface{} {
 				s.updateSchedulerStatus("idle", fmt.Sprintf("Panic: %v", r), nil, nil)
 			}
 		}()
-		s.runCleanupCycle("manual")
+		s.runCleanupCycle(context.Background(), "manual")
 	}()
 
 	return map[string]interface{}{
@@ -185,6 +189,10 @@ func (s *TagHierarchyCleanupScheduler) initSchedulerTask() {
 	nextRun := now.Add(s.checkInterval)
 
 	if err := database.DB.Where("name = ?", "tag_hierarchy_cleanup").First(&task).Error; err == nil {
+		if task.CheckInterval > 0 {
+			s.checkInterval = time.Duration(task.CheckInterval) * time.Second
+			nextRun = now.Add(s.checkInterval)
+		}
 		updates := map[string]interface{}{
 			"description":         "multi-phase tag cleanup: zombie, zero-article, low-quality, stale-zero-score, flat merge, hierarchy pruning, clustering, queued multi-parent, adopt narrower, abstract update, tree review, description backfill",
 			"check_interval":      int(s.checkInterval.Seconds()),
@@ -209,7 +217,6 @@ func (s *TagHierarchyCleanupScheduler) initSchedulerTask() {
 
 func (s *TagHierarchyCleanupScheduler) cleanupHierarchy() {
 	tracing.TraceSchedulerTick("tag_hierarchy_cleanup", "cron", func(ctx context.Context) {
-		_ = ctx
 		if !s.executionMutex.TryLock() {
 			logging.Infoln("Tag hierarchy cleanup already in progress, skipping this cycle")
 			return
@@ -224,11 +231,24 @@ func (s *TagHierarchyCleanupScheduler) cleanupHierarchy() {
 			}
 		}()
 
-		s.runCleanupCycle("scheduled")
+		s.runCleanupCycle(ctx, "scheduled")
 	})
 }
 
-func (s *TagHierarchyCleanupScheduler) runCleanupCycle(triggerSource string) {
+func (s *TagHierarchyCleanupScheduler) runCleanupCycle(ctx context.Context, triggerSource string) {
+	ctx, span := otel.Tracer("rss-reader-backend").Start(ctx, "workflow.hierarchy_cleanup.cycle")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("workflow.name", "hierarchy_cleanup"),
+		attribute.String("workflow.domain", "tag_management"),
+		attribute.String("workflow.trigger", triggerSource),
+	)
+	m1, _ := baggage.NewMember("workflow.name", "hierarchy_cleanup")
+	m2, _ := baggage.NewMember("workflow.domain", "tag_management")
+	m3, _ := baggage.NewMember("workflow.trigger", triggerSource)
+	bag, _ := baggage.New(m1, m2, m3)
+	ctx = baggage.ContextWithBaggage(ctx, bag)
+
 	startTime := time.Now()
 	summary := &TagHierarchyCleanupRunSummary{
 		TriggerSource: triggerSource,
@@ -237,7 +257,7 @@ func (s *TagHierarchyCleanupScheduler) runCleanupCycle(triggerSource string) {
 	s.updateSchedulerStatus("running", "", nil, nil)
 
 	budget := NewCleanupBudget(60, 30*time.Minute)
-	budget.SetPhaseQuota("phase6", 10)
+	budget.SetPhaseQuota("phase6", 50)
 
 	logging.Infoln("Starting tag cleanup cycle (multi-phase)")
 
@@ -291,7 +311,7 @@ func (s *TagHierarchyCleanupScheduler) runCleanupCycle(triggerSource string) {
 			logging.Infoln("Phase 2: budget timed out, skipping remaining categories")
 			break
 		}
-		merged, mergeErrors, err := topicanalysis.ExecuteFlatMerge(category, 50)
+		merged, mergeErrors, err := topicanalysis.ExecuteFlatMerge(ctx, category, 50)
 		if err != nil {
 			logging.Errorf("Phase 2 flat merge failed for %s: %v", category, err)
 			summary.Errors++
@@ -335,6 +355,14 @@ func (s *TagHierarchyCleanupScheduler) runCleanupCycle(triggerSource string) {
 	summary.EmptyAbstracts = emptied
 	logging.Infof("Phase 3: deactivated %d empty abstract tags", emptied)
 
+	singleChild, err := topicanalysis.CleanupSingleChildAbstractNodes()
+	if err != nil {
+		logging.Errorf("Phase 3 single-child abstract cleanup failed: %v", err)
+		summary.Errors++
+	}
+	summary.SingleChildAbstracts = singleChild
+	logging.Infof("Phase 3: promoted %d children from single-child abstract parents", singleChild)
+
 	// Phase 4: Adopt narrower queue processing (before tree review)
 	phaseStart = time.Now()
 	var adopted int
@@ -376,7 +404,7 @@ func (s *TagHierarchyCleanupScheduler) runCleanupCycle(triggerSource string) {
 			logging.Infoln("Phase 6: budget timed out, skipping remaining categories")
 			break
 		}
-		reviewResult, reviewErr := topicanalysis.ReviewHierarchyTrees(category, 14, budget)
+		reviewResult, reviewErr := topicanalysis.ReviewHierarchyTrees(category, 7, budget)
 		if reviewErr != nil {
 			logging.Errorf("Phase 6 tree review failed for %s: %v", category, reviewErr)
 			summary.Errors++
@@ -417,8 +445,8 @@ func (s *TagHierarchyCleanupScheduler) runCleanupCycle(triggerSource string) {
 	summary.LLMCallsTotal = budgetStats.TotalConsumed
 	summary.LLMBudgetTotal = budgetStats.TotalBudget
 	summary.TimedOut = budgetStats.TimedOut
-	summary.Reason = fmt.Sprintf("zombie=%d, zero_article=%d, low_quality_single=%d, stale_zero_score=%d, flat_merges=%d, orphaned_rels=%d, multi_parent=%d, empty_abstracts=%d, adopt_narrower=%d, abstract_update=%d, trees_reviewed=%d, merges=%d, moves=%d, groups_created=%d, groups_reused=%d, desc_backfilled=%d",
-		summary.ZombieDeactivated, summary.ZeroArticleTagsDeactivated, summary.LowQualitySingleArticleRemoved, summary.StaleZeroScoreDeactivated, summary.FlatMergesApplied, summary.OrphanedRelations, summary.MultiParentFixed, summary.EmptyAbstracts, summary.AdoptNarrowerProcessed, summary.AbstractUpdateProcessed, summary.TreesReviewed, summary.MergesApplied, summary.MovesApplied, summary.GroupsCreated, summary.GroupsReused, summary.DescriptionBackfilled)
+	summary.Reason = fmt.Sprintf("zombie=%d, zero_article=%d, low_quality_single=%d, stale_zero_score=%d, flat_merges=%d, orphaned_rels=%d, multi_parent=%d, empty_abstracts=%d, single_child_abstracts=%d, adopt_narrower=%d, abstract_update=%d, trees_reviewed=%d, merges=%d, moves=%d, groups_created=%d, groups_reused=%d, desc_backfilled=%d",
+		summary.ZombieDeactivated, summary.ZeroArticleTagsDeactivated, summary.LowQualitySingleArticleRemoved, summary.StaleZeroScoreDeactivated, summary.FlatMergesApplied, summary.OrphanedRelations, summary.MultiParentFixed, summary.EmptyAbstracts, summary.SingleChildAbstracts, summary.AdoptNarrowerProcessed, summary.AbstractUpdateProcessed, summary.TreesReviewed, summary.MergesApplied, summary.MovesApplied, summary.GroupsCreated, summary.GroupsReused, summary.DescriptionBackfilled)
 
 	logging.Infof("Tag cleanup cycle completed: %s", summary.Reason)
 

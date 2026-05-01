@@ -438,6 +438,9 @@ func BuildTopicsByCategory(kind string, anchor time.Time, categoryID, feedID *ui
 		}
 	}
 
+	// Include abstract parent tags that have no direct article_topic_tags associations
+	includeAbstractParents(database.DB, eventScores, personScores, keywordScores)
+
 	enrichAbstractTags(database.DB, eventScores, personScores, keywordScores)
 	finalizeTopicTagQuality(eventScores, personScores, keywordScores)
 
@@ -763,6 +766,65 @@ func findAbstractSlugs(db *gorm.DB, topicNodes map[string]*topictypes.GraphNode)
 	for slug, node := range topicNodes {
 		if abstractSlugs[slug] {
 			node.IsAbstract = true
+		}
+	}
+}
+
+// includeAbstractParents adds abstract parent tags that have no direct source='llm'
+// article_topic_tags associations into the category maps, so enrichAbstractTags can
+// set IsAbstract=true and ChildSlugs on them.
+func includeAbstractParents(db *gorm.DB, tagMaps ...map[string]*topictypes.TopicTag) {
+	var parentIDs []uint
+	db.Model(&models.TopicTagRelation{}).
+		Where("relation_type = ?", "abstract").
+		Select("DISTINCT parent_id").Pluck("parent_id", &parentIDs)
+	if len(parentIDs) == 0 {
+		return
+	}
+
+	for _, pid := range parentIDs {
+		var pt models.TopicTag
+		if err := db.First(&pt, pid).Error; err != nil {
+			continue
+		}
+		if pt.Status != "" && pt.Status != "active" {
+			continue
+		}
+
+		cat := topictypes.NormalizeDisplayCategory(pt.Kind, pt.Category)
+
+		var targetMap map[string]*topictypes.TopicTag
+		switch cat {
+		case "event":
+			if len(tagMaps) > 0 {
+				targetMap = tagMaps[0]
+			}
+		case "person":
+			if len(tagMaps) > 1 {
+				targetMap = tagMaps[1]
+			}
+		default:
+			if len(tagMaps) > 2 {
+				targetMap = tagMaps[2]
+			}
+		}
+		if targetMap == nil {
+			continue
+		}
+
+		if _, exists := targetMap[pt.Slug]; !exists {
+			targetMap[pt.Slug] = &topictypes.TopicTag{
+				ID:           pt.ID,
+				Label:        pt.Label,
+				Slug:         pt.Slug,
+				Category:     cat,
+				Kind:         topictypes.NormalizeTopicKind(pt.Kind, pt.Category),
+				Icon:         pt.Icon,
+				Description:  pt.Description,
+				Score:        0,
+				QualityScore: pt.QualityScore,
+				IsLowQuality: pt.Source != "abstract" && pt.QualityScore < 0.3,
+			}
 		}
 	}
 }

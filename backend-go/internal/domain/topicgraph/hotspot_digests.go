@@ -43,14 +43,18 @@ type HotspotDigestCard struct {
 	Tags        []topictypes.AggregatedTopicTag `json:"tags,omitempty"`
 }
 
-func GetDigestsByArticleTag(tagSlug string, kind string, anchor time.Time, limit int) ([]HotspotDigestCard, error) {
-	windowStart, windowEnd, _, err := topictypes.ResolveWindow(kind, anchor)
+func GetDigestsByArticleTag(tagSlug string, windowKind string, anchor time.Time, limit int, tagKind string) ([]HotspotDigestCard, error) {
+	windowStart, windowEnd, _, err := topictypes.ResolveWindow(windowKind, anchor)
 	if err != nil {
 		return nil, err
 	}
 
 	var topicTag models.TopicTag
-	err = database.DB.Where("slug = ?", tagSlug).First(&topicTag).Error
+	query := database.DB.Where("slug = ?", tagSlug)
+	if tagKind != "" {
+		query = query.Where("kind = ?", tagKind)
+	}
+	err = query.First(&topicTag).Error
 	if err != nil {
 		return nil, fmt.Errorf("topic tag not found: %w", err)
 	}

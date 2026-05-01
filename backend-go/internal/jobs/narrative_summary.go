@@ -206,6 +206,10 @@ func (s *NarrativeSummaryScheduler) initSchedulerTask() {
 	nextRun := now.Add(s.checkInterval)
 
 	if err := database.DB.Where("name = ?", "narrative_summary").First(&task).Error; err == nil {
+		if task.CheckInterval > 0 {
+			s.checkInterval = time.Duration(task.CheckInterval) * time.Second
+			nextRun = now.Add(s.checkInterval)
+		}
 		updates := map[string]interface{}{
 			"description":         "Generate daily narrative summaries from active topic tags",
 			"check_interval":      int(s.checkInterval.Seconds()),
@@ -270,8 +274,6 @@ func (s *NarrativeSummaryScheduler) runNarrativeCycle(triggerSource string, targ
 		s.updateSchedulerStatus("failed", err.Error(), &startTime, summary)
 		return
 	}
-
-	go narrative.GenerateWatchedTagNarratives(targetDate)
 
 	summary.FinishedAt = time.Now().Format(time.RFC3339)
 	summary.SavedCount = savedCount

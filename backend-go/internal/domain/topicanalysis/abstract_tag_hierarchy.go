@@ -261,6 +261,20 @@ func linkAbstractParentChild(childID, parentID uint) error {
 			return nil
 		}
 
+		var existingParents []models.TopicTagRelation
+		if err := tx.Where("child_id = ? AND relation_type = ?", childID, "abstract").Find(&existingParents).Error; err != nil {
+			return fmt.Errorf("check existing parents for child %d: %w", childID, err)
+		}
+		for _, old := range existingParents {
+			if old.ParentID == parentID {
+				continue
+			}
+			logging.Infof("linkAbstractParentChild: removing old parent %d from child %d before linking to new parent %d", old.ParentID, childID, parentID)
+			if err := tx.Delete(&models.TopicTagRelation{}, old.ID).Error; err != nil {
+				return fmt.Errorf("remove old parent relation %d for child %d: %w", old.ID, childID, err)
+			}
+		}
+
 		relation := models.TopicTagRelation{
 			ParentID:     parentID,
 			ChildID:      childID,
@@ -272,9 +286,6 @@ func linkAbstractParentChild(childID, parentID uint) error {
 		return err
 	}
 
-	go func(id uint) {
-		_, _ = resolveMultiParentConflict(id)
-	}(childID)
 	go enqueueEmbeddingsForNormalChildren(parentID)
 	go EnqueueAbstractTagUpdate(parentID, "hierarchy_linked")
 

@@ -1,6 +1,7 @@
 package topicextraction
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -65,7 +66,7 @@ func TestBackfillArticleTagsOnlyTagsUntaggedArticles(t *testing.T) {
 	}
 
 	articles := []models.Article{preTagged, untagged}
-	if err := BackfillArticleTags(articles, feed.Title, ""); err != nil {
+	if err := BackfillArticleTags(context.Background(), articles, feed.Title, ""); err != nil {
 		t.Fatalf("backfill article tags: %v", err)
 	}
 
@@ -146,7 +147,7 @@ func TestTagArticleStoresOnlyTopFiveTags(t *testing.T) {
 		t.Fatalf("create article: %v", err)
 	}
 
-	if err := TagArticle(&article, feed.Title, "AI"); err != nil {
+	if err := TagArticle(context.Background(), &article, feed.Title, "AI"); err != nil {
 		t.Fatalf("tag article: %v", err)
 	}
 

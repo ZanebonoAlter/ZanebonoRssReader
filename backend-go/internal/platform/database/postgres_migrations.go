@@ -336,6 +336,49 @@ func postgresMigrations() []Migration {
 			},
 		},
 		{
+			Version:     "20260430_0001",
+			Description: "Create narrative_boards table and add board_id to narrative_summaries.",
+			Up: func(db *gorm.DB) error {
+				stmts := []string{
+					`CREATE TABLE IF NOT EXISTS narrative_boards (
+						id SERIAL PRIMARY KEY,
+						period_date TIMESTAMP NOT NULL,
+						name VARCHAR(300) NOT NULL,
+						description TEXT,
+						scope_type VARCHAR(20) NOT NULL DEFAULT 'global',
+						scope_category_id INTEGER,
+						event_tag_ids TEXT,
+						abstract_tag_ids TEXT,
+						prev_board_ids TEXT,
+						created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+					)`,
+					"CREATE INDEX IF NOT EXISTS idx_narrative_boards_period ON narrative_boards(period_date)",
+					"CREATE INDEX IF NOT EXISTS idx_narrative_boards_scope ON narrative_boards(scope_category_id)",
+					"ALTER TABLE narrative_summaries ADD COLUMN IF NOT EXISTS board_id INTEGER",
+					"CREATE INDEX IF NOT EXISTS idx_narrative_summaries_board_id ON narrative_summaries(board_id)",
+				}
+				for _, s := range stmts {
+					if err := db.Exec(s).Error; err != nil {
+						return fmt.Errorf("narrative_boards migration: %w", err)
+					}
+				}
+				return nil
+			},
+		},
+		{
+			Version:     "20260430_0002",
+			Description: "Add abstract_tag_id column to narrative_boards for deterministic prev-board matching.",
+			Up: func(db *gorm.DB) error {
+				if err := db.Exec("ALTER TABLE narrative_boards ADD COLUMN IF NOT EXISTS abstract_tag_id INTEGER REFERENCES topic_tags(id) ON DELETE SET NULL").Error; err != nil {
+					return fmt.Errorf("add abstract_tag_id to narrative_boards: %w", err)
+				}
+				if err := db.Exec("CREATE INDEX IF NOT EXISTS idx_narrative_boards_abstract_tag_id ON narrative_boards(abstract_tag_id)").Error; err != nil {
+					return fmt.Errorf("create idx_narrative_boards_abstract_tag_id: %w", err)
+				}
+				return nil
+			},
+		},
+		{
 			Version:     "20260426_0001",
 			Description: "Create adopt_narrower_queues table with partial unique index for dedup.",
 			Up: func(db *gorm.DB) error {
@@ -355,6 +398,16 @@ func postgresMigrations() []Migration {
 				}
 				if err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_adopt_narrower_active ON adopt_narrower_queues (abstract_tag_id) WHERE status IN ('pending', 'processing')`).Error; err != nil {
 					return fmt.Errorf("create adopt_narrower active unique index: %w", err)
+				}
+				return nil
+			},
+		},
+		{
+			Version:     "20260430_0003",
+			Description: "Add scope_label column to narrative_boards for category label display.",
+			Up: func(db *gorm.DB) error {
+				if err := db.Exec("ALTER TABLE narrative_boards ADD COLUMN IF NOT EXISTS scope_label VARCHAR(100) DEFAULT ''").Error; err != nil {
+					return fmt.Errorf("add scope_label to narrative_boards: %w", err)
 				}
 				return nil
 			},

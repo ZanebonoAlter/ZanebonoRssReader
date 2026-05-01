@@ -158,6 +158,10 @@ func (s *TagQualityScoreScheduler) initSchedulerTask() {
 	nextRun := now.Add(s.checkInterval)
 
 	if err := database.DB.Where("name = ?", "tag_quality_score").First(&task).Error; err == nil {
+		if task.CheckInterval > 0 {
+			s.checkInterval = time.Duration(task.CheckInterval) * time.Second
+			nextRun = now.Add(s.checkInterval)
+		}
 		updates := map[string]interface{}{
 			"description":         "Recompute persistent quality scores for topic tags",
 			"check_interval":      int(s.checkInterval.Seconds()),

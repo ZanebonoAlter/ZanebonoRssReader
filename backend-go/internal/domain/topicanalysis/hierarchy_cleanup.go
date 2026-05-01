@@ -166,9 +166,13 @@ func createVirtualRoot(trees []*TreeNode) *TreeNode {
 
 // BuildTagForest builds all tag trees for a given category, filtering trees with depth >= minDepth.
 func BuildTagForest(category string, minDepth ...int) ([]*TreeNode, error) {
-	// Load all abstract relations
 	var relations []models.TopicTagRelation
-	if err := database.DB.Where("relation_type = ?", "abstract").Find(&relations).Error; err != nil {
+	if err := database.DB.
+		Table("topic_tag_relations").
+		Joins("JOIN topic_tags p ON topic_tag_relations.parent_id = p.id AND p.status = ?", "active").
+		Joins("JOIN topic_tags c ON topic_tag_relations.child_id = c.id AND c.status = ?", "active").
+		Where("topic_tag_relations.relation_type = ?", "abstract").
+		Find(&relations).Error; err != nil {
 		return nil, fmt.Errorf("query tag relations: %w", err)
 	}
 
@@ -213,7 +217,7 @@ func BuildTagForest(category string, minDepth ...int) ([]*TreeNode, error) {
 	}
 
 	var tags []models.TopicTag
-	if err := database.DB.Where("id IN ? AND status = ? AND category = ?", tagIDs, "active", category).Find(&tags).Error; err != nil {
+	if err := database.DB.Where("id IN ? AND category = ?", tagIDs, category).Find(&tags).Error; err != nil {
 		return nil, fmt.Errorf("load tags: %w", err)
 	}
 
@@ -248,6 +252,15 @@ func BuildTagForest(category string, minDepth ...int) ([]*TreeNode, error) {
 
 // buildTreeNode recursively builds a tree from the root
 func buildTreeNode(tag *models.TopicTag, depth int, childrenMap map[uint][]uint, tagMap map[uint]*models.TopicTag, articleCounts map[uint]int) *TreeNode {
+	return buildTreeNodeWithVisited(tag, depth, childrenMap, tagMap, articleCounts, make(map[uint]bool))
+}
+
+func buildTreeNodeWithVisited(tag *models.TopicTag, depth int, childrenMap map[uint][]uint, tagMap map[uint]*models.TopicTag, articleCounts map[uint]int, visited map[uint]bool) *TreeNode {
+	if visited[tag.ID] {
+		return nil
+	}
+	visited[tag.ID] = true
+
 	node := &TreeNode{
 		Tag:          tag,
 		Depth:        depth,
@@ -259,7 +272,10 @@ func buildTreeNode(tag *models.TopicTag, depth int, childrenMap map[uint][]uint,
 		if !ok {
 			continue
 		}
-		childNode := buildTreeNode(childTag, depth+1, childrenMap, tagMap, articleCounts)
+		childNode := buildTreeNodeWithVisited(childTag, depth+1, childrenMap, tagMap, articleCounts, visited)
+		if childNode == nil {
+			continue
+		}
 		childNode.Parent = node
 		node.Children = append(node.Children, childNode)
 	}
@@ -269,12 +285,20 @@ func buildTreeNode(tag *models.TopicTag, depth int, childrenMap map[uint][]uint,
 
 // calculateTreeDepth calculates the maximum depth of a tree
 func calculateTreeDepth(node *TreeNode) int {
+	return calculateTreeDepthVisited(node, make(map[uint]bool))
+}
+
+func calculateTreeDepthVisited(node *TreeNode, visited map[uint]bool) int {
+	if node == nil || node.Tag == nil || visited[node.Tag.ID] {
+		return 0
+	}
+	visited[node.Tag.ID] = true
 	if len(node.Children) == 0 {
 		return 1
 	}
 	maxChildDepth := 0
 	for _, child := range node.Children {
-		d := calculateTreeDepth(child)
+		d := calculateTreeDepthVisited(child, visited)
 		if d > maxChildDepth {
 			maxChildDepth = d
 		}
@@ -284,18 +308,39 @@ func calculateTreeDepth(node *TreeNode) int {
 
 // countNodes counts total nodes in a tree
 func countNodes(node *TreeNode) int {
+	return countNodesVisited(node, make(map[uint]bool))
+}
+
+func countNodesVisited(node *TreeNode, visited map[uint]bool) int {
+	if node == nil || node.Tag == nil {
+		return 0
+	}
+	if visited[node.Tag.ID] {
+		return 0
+	}
+	visited[node.Tag.ID] = true
 	count := 1
 	for _, child := range node.Children {
-		count += countNodes(child)
+		count += countNodesVisited(child, visited)
 	}
 	return count
 }
 
-// collectAllTags collects all tags in a tree
 func collectAllTags(node *TreeNode) []*TreeNode {
+	return collectAllTagsVisited(node, make(map[uint]bool))
+}
+
+func collectAllTagsVisited(node *TreeNode, visited map[uint]bool) []*TreeNode {
+	if node == nil || node.Tag == nil {
+		return nil
+	}
+	if visited[node.Tag.ID] {
+		return nil
+	}
+	visited[node.Tag.ID] = true
 	result := []*TreeNode{node}
 	for _, child := range node.Children {
-		result = append(result, collectAllTags(child)...)
+		result = append(result, collectAllTagsVisited(child, visited)...)
 	}
 	return result
 }
@@ -364,11 +409,19 @@ func filterTreesWithRecentRelations(forest []*TreeNode, windowDays int) []*TreeN
 }
 
 func treeContainsTag(node *TreeNode, tagSet map[uint]bool) bool {
+	return treeContainsTagVisited(node, tagSet, make(map[uint]bool))
+}
+
+func treeContainsTagVisited(node *TreeNode, tagSet map[uint]bool, visited map[uint]bool) bool {
+	if node == nil || node.Tag == nil || visited[node.Tag.ID] {
+		return false
+	}
+	visited[node.Tag.ID] = true
 	if tagSet[node.Tag.ID] {
 		return true
 	}
 	for _, child := range node.Children {
-		if treeContainsTag(child, tagSet) {
+		if treeContainsTagVisited(child, tagSet, visited) {
 			return true
 		}
 	}
@@ -376,19 +429,33 @@ func treeContainsTag(node *TreeNode, tagSet map[uint]bool) bool {
 }
 
 func splitReviewTrees(root *TreeNode, maxNodes int) []*TreeNode {
+	return splitReviewTreesVisited(root, maxNodes, make(map[uint]bool))
+}
+
+func splitReviewTreesVisited(root *TreeNode, maxNodes int, visited map[uint]bool) []*TreeNode {
+	if root == nil || root.Tag == nil || visited[root.Tag.ID] {
+		return nil
+	}
+	visited[root.Tag.ID] = true
 	if countNodes(root) <= maxNodes {
 		return []*TreeNode{root}
 	}
 	parts := []*TreeNode{rootLevelReviewTree(root)}
 	for _, child := range root.Children {
-		parts = append(parts, splitReviewTrees(child, maxNodes)...)
+		parts = append(parts, splitReviewTreesVisited(child, maxNodes, visited)...)
 	}
 	return parts
 }
 
 func rootLevelReviewTree(root *TreeNode) *TreeNode {
 	clone := &TreeNode{Tag: root.Tag, Depth: root.Depth, ArticleCount: root.ArticleCount}
+	seen := make(map[uint]bool)
+	seen[root.Tag.ID] = true
 	for _, child := range root.Children {
+		if child.Tag == nil || seen[child.Tag.ID] {
+			continue
+		}
+		seen[child.Tag.ID] = true
 		childClone := &TreeNode{Tag: child.Tag, Depth: child.Depth, ArticleCount: child.ArticleCount, Parent: clone}
 		clone.Children = append(clone.Children, childClone)
 	}
@@ -515,11 +582,15 @@ func findCycleRoots(relations []models.TopicTagRelation, parentSet map[uint]bool
 
 func serializeTreeForReview(node *TreeNode) string {
 	var sb strings.Builder
-	serializeNodeForReview(&sb, node, "", true)
+	serializeNodeForReview(&sb, node, "", true, make(map[uint]bool))
 	return sb.String()
 }
 
-func serializeNodeForReview(sb *strings.Builder, node *TreeNode, prefix string, isLast bool) {
+func serializeNodeForReview(sb *strings.Builder, node *TreeNode, prefix string, isLast bool, visited map[uint]bool) {
+	if node == nil || node.Tag == nil || visited[node.Tag.ID] {
+		return
+	}
+	visited[node.Tag.ID] = true
 	connector := "├── "
 	if isLast {
 		connector = "└── "
@@ -543,7 +614,7 @@ func serializeNodeForReview(sb *strings.Builder, node *TreeNode, prefix string, 
 		} else {
 			newPrefix = prefix + "│   "
 		}
-		serializeNodeForReview(sb, child, newPrefix, i == len(node.Children)-1)
+		serializeNodeForReview(sb, child, newPrefix, i == len(node.Children)-1, visited)
 	}
 }
 

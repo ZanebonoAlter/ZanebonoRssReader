@@ -33,16 +33,15 @@ type tagArticleOptions struct {
 }
 
 // TagArticle extracts and stores tags for a single article.
-func TagArticle(article *models.Article, feedName, categoryName string) error {
-	return tagArticle(article, feedName, categoryName, tagArticleOptions{})
+func TagArticle(ctx context.Context, article *models.Article, feedName, categoryName string) error {
+	return tagArticle(ctx, article, feedName, categoryName, tagArticleOptions{})
 }
 
-// RetagArticle replaces existing tags using the latest article content.
-func RetagArticle(article *models.Article, feedName, categoryName string) error {
-	return tagArticle(article, feedName, categoryName, tagArticleOptions{Force: true})
+func RetagArticle(ctx context.Context, article *models.Article, feedName, categoryName string) error {
+	return tagArticle(ctx, article, feedName, categoryName, tagArticleOptions{Force: true})
 }
 
-func tagArticle(article *models.Article, feedName, categoryName string, options tagArticleOptions) error {
+func tagArticle(ctx context.Context, article *models.Article, feedName, categoryName string, options tagArticleOptions) error {
 	if article == nil || article.ID == 0 {
 		return nil
 	}
@@ -200,7 +199,7 @@ func tagArticle(article *models.Article, feedName, categoryName string, options 
 		}
 	}
 
-	ctx := WithBatchJudgments(context.Background(), precomputed)
+	ctx = WithBatchJudgments(ctx, precomputed)
 	seenTagIDs := make(map[uint]struct{})
 	for _, tag := range dedupedTags {
 		dbTag, err := findOrCreateTag(ctx, tag, source, articleContext, article.ID)
@@ -269,14 +268,13 @@ func buildArticleSummary(article models.Article) string {
 
 // TagArticles batch tags multiple articles for a feed
 // This is called from auto_summary when processing a feed's articles
-func TagArticles(articles []models.Article, feedName, categoryName string) error {
+func TagArticles(ctx context.Context, articles []models.Article, feedName, categoryName string) error {
 	if len(articles) == 0 {
 		return nil
 	}
 
 	for i := range articles {
-		if err := TagArticle(&articles[i], feedName, categoryName); err != nil {
-			// Log error but continue processing other articles
+		if err := TagArticle(ctx, &articles[i], feedName, categoryName); err != nil {
 			logging.Warnf("Failed to tag article %d: %v", articles[i].ID, err)
 		}
 	}
@@ -284,9 +282,7 @@ func TagArticles(articles []models.Article, feedName, categoryName string) error
 	return nil
 }
 
-// BackfillArticleTags only tags articles that currently have no article tags.
-// This is a fallback path for summary-time repair, not the main tagging flow.
-func BackfillArticleTags(articles []models.Article, feedName, categoryName string) error {
+func BackfillArticleTags(ctx context.Context, articles []models.Article, feedName, categoryName string) error {
 	if len(articles) == 0 {
 		return nil
 	}
@@ -301,7 +297,7 @@ func BackfillArticleTags(articles []models.Article, feedName, categoryName strin
 			continue
 		}
 
-		if err := TagArticle(&articles[i], feedName, categoryName); err != nil {
+		if err := TagArticle(ctx, &articles[i], feedName, categoryName); err != nil {
 			logging.Warnf("Failed to backfill article %d tags: %v", articles[i].ID, err)
 		}
 	}

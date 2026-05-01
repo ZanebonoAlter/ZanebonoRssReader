@@ -22,6 +22,8 @@ type WatchedTagNarrativeOutput struct {
 	DateRange string `json:"date_range"`
 }
 
+// Deprecated: GenerateWatchedTagNarratives is removed from the main narrative generation flow.
+// Kept for potential future use or manual invocation.
 func GenerateWatchedTagNarratives(date time.Time) {
 	watchedIDs, childIDs, err := topicanalysis.GetWatchedTagIDsExpanded(database.DB)
 	if err != nil {

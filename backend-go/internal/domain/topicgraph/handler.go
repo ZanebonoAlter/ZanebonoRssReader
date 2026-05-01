@@ -141,7 +141,9 @@ func GetDigestsByArticleTagHandler(c *gin.Context) {
 		}
 	}
 
-	digests, err := GetDigestsByArticleTag(tagSlug, kind, anchor, limit)
+	tagKind := c.Query("kind")
+
+	digests, err := GetDigestsByArticleTag(tagSlug, kind, anchor, limit, tagKind)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 		return

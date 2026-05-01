@@ -770,10 +770,10 @@ func setupAbstractTagServiceTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("open sqlite: %v", err)
 	}
 
-	database.DB = db
 	if abstractTagUpdateQueueService != nil {
 		abstractTagUpdateQueueService.db = db
 	}
+	database.DB = db
 	t.Cleanup(func() {
 		database.DB = nil
 	})

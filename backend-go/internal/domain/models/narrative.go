@@ -16,9 +16,11 @@ type NarrativeSummary struct {
 	Source            string    `gorm:"size:20;default:ai" json:"source"`
 	ScopeType         string    `gorm:"size:20;not null;default:global" json:"scope_type"`
 	ScopeCategoryID   *uint     `gorm:"index:idx_narrative_scope" json:"scope_category_id"`
-	ScopeLabel        string    `gorm:"size:100" json:"scope_label"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	ScopeLabel        string          `gorm:"size:100" json:"scope_label"`
+	BoardID           *uint           `gorm:"index" json:"board_id"`
+	Board             NarrativeBoard  `gorm:"foreignKey:BoardID" json:"board,omitempty"`
+	CreatedAt         time.Time       `json:"created_at"`
+	UpdatedAt         time.Time       `json:"updated_at"`
 }
 
 func (NarrativeSummary) TableName() string {

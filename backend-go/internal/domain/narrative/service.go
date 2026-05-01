@@ -35,7 +35,20 @@ func (s *NarrativeService) DeleteByDate(date time.Time, scopeType string, catego
 		return 0, fmt.Errorf("delete narratives for %s: %w", date.Format("2006-01-02"), result.Error)
 	}
 
-	logging.Infof("narrative: deleted %d existing narratives for %s (scope=%s)", result.RowsAffected, date.Format("2006-01-02"), scopeType)
+	boardQuery := database.DB.Where("period_date >= ? AND period_date < ?", startOfDay, endOfDay)
+	if scopeType != "" {
+		boardQuery = boardQuery.Where("scope_type = ?", scopeType)
+		if categoryID != nil {
+			boardQuery = boardQuery.Where("scope_category_id = ?", *categoryID)
+		}
+	}
+	boardResult := boardQuery.Delete(&models.NarrativeBoard{})
+	if boardResult.Error != nil {
+		logging.Warnf("narrative: failed to delete boards for %s: %v", date.Format("2006-01-02"), boardResult.Error)
+	}
+
+	logging.Infof("narrative: deleted %d existing narratives and %d boards for %s (scope=%s)",
+		result.RowsAffected, boardResult.RowsAffected, date.Format("2006-01-02"), scopeType)
 	return int(result.RowsAffected), nil
 }
 
@@ -71,113 +84,237 @@ type ScopeSaveOpts struct {
 }
 
 func (s *NarrativeService) GenerateAndSave(date time.Time) (int, error) {
-	catSaved, catErr := s.GenerateAndSaveForAllCategories(date)
-	_ = catErr
-
-	categoryInputs, err := CollectCategoryNarrativeSummaries(date)
+	catSaved, err := s.GenerateAndSaveForAllCategories(date)
 	if err != nil {
-		return catSaved, fmt.Errorf("collect category narrative summaries: %w", err)
-	}
-	if len(categoryInputs) == 0 {
-		logging.Infof("narrative: no category narratives for %s, skipping global", date.Format("2006-01-02"))
-		return catSaved, nil
-	}
-
-	prevGlobalNarratives, err := CollectPreviousNarratives(date, models.NarrativeScopeTypeGlobal, nil)
-	if err != nil {
-		logging.Warnf("narrative: failed to collect previous global narratives: %v", err)
+		logging.Warnf("narrative: category generation had errors: %v", err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	outputs, err := GenerateCrossCategoryNarratives(ctx, categoryInputs, prevGlobalNarratives)
-	if err != nil {
-		return catSaved, fmt.Errorf("generate cross-category narratives: %w", err)
-	}
-	if len(outputs) == 0 {
-		logging.Infof("narrative: no cross-category narratives for %s", date.Format("2006-01-02"))
-		return catSaved, nil
-	}
 
-	narrativeOutputs := make([]NarrativeOutput, 0, len(outputs))
-	for _, o := range outputs {
-		narrativeOutputs = append(narrativeOutputs, o.NarrativeOutput)
+	categoryBoards, bErr := CollectAllCategoryBoards(date)
+	if bErr != nil {
+		logging.Warnf("narrative: failed to collect category boards for merge: %v", bErr)
+	} else if len(categoryBoards) > 0 {
+		if mErr := MergeGlobalBoards(ctx, date, categoryBoards); mErr != nil {
+			logging.Warnf("narrative: global board merge failed: %v", mErr)
+		}
 	}
 
-	saved, err := saveNarratives(narrativeOutputs, date, nil)
-	if err != nil {
-		return catSaved, fmt.Errorf("save global narratives: %w", err)
+	allPrev, pErr := CollectPreviousNarratives(date, "", nil)
+	if pErr != nil {
+		logging.Warnf("narrative: failed to collect previous narratives for fallback: %v", pErr)
+	} else if len(allPrev) > 0 {
+		s.runFallbackAssociations(ctx, date, allPrev)
 	}
 
-	markEndedGlobalNarratives(date, narrativeOutputs, prevGlobalNarratives)
+	if _, cErr := DeriveBoardConnections(); cErr != nil {
+		logging.Warnf("narrative: failed to derive board connections: %v", cErr)
+	}
 
-	logging.Infof("narrative: saved %d global + %d category narratives for %s", saved, catSaved, date.Format("2006-01-02"))
-	return saved + catSaved, nil
+	s.runFeedbackFromTodayNarratives(date)
+
+	cleanEmptyBoards(date, nil)
+
+	logging.Infof("narrative: GenerateAndSave complete — %d category narratives saved for %s",
+		catSaved, date.Format("2006-01-02"))
+	return catSaved, nil
 }
 
 func (s *NarrativeService) GenerateAndSaveForCategory(date time.Time, categoryID uint, categoryLabel string) (int, error) {
-	prevNarratives, err := CollectPreviousNarratives(date, models.NarrativeScopeTypeFeedCategory, &categoryID)
+	abstractTrees, err := CollectAbstractTreeInputsByCategory(date, categoryID)
 	if err != nil {
-		logging.Warnf("narrative: failed to collect previous narratives for category %d: %v", categoryID, err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
-	defer cancel()
-
-	var allOutputs []NarrativeOutput
-
-	trees, err := CollectAbstractTreeInputsByCategory(date, categoryID)
-	if err != nil {
-		return 0, fmt.Errorf("collect abstract tree inputs for category %d: %w", categoryID, err)
-	}
-	if len(trees) > 0 {
-		treeOutputs, err := GenerateNarrativesFromAbstractTrees(ctx, trees, prevNarratives)
-		if err != nil {
-			logging.Warnf("narrative: Pass 1 (abstract trees) failed for category %d: %v", categoryID, err)
-		} else {
-			allOutputs = append(allOutputs, treeOutputs...)
-		}
+		return 0, fmt.Errorf("collect abstract trees for category %d: %w", categoryID, err)
 	}
 
 	events, err := CollectUnclassifiedEventTagsByCategory(date, categoryID)
 	if err != nil {
-		return 0, fmt.Errorf("collect unclassified event tags for category %d: %w", categoryID, err)
-	}
-	if len(events) > 0 {
-		eventOutputs, err := GenerateNarrativesFromUnclassifiedEvents(ctx, events, prevNarratives)
-		if err != nil {
-			logging.Warnf("narrative: Pass 2 (unclassified events) failed for category %d: %v", categoryID, err)
-		} else {
-			allOutputs = append(allOutputs, eventOutputs...)
-		}
+		return 0, fmt.Errorf("collect event tags for category %d: %w", categoryID, err)
 	}
 
-	if len(allOutputs) == 0 {
-		logging.Infof("narrative: no narratives generated for category %d on %s", categoryID, date.Format("2006-01-02"))
+	if len(abstractTrees) == 0 && len(events) == 0 {
+		logging.Infof("narrative: no abstract trees or event tags for category %d on %s, skipping", categoryID, date.Format("2006-01-02"))
 		return 0, nil
 	}
 
-	if len(allOutputs) > 8 {
-		allOutputs = allOutputs[:8]
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	defer cancel()
+
+	var allBoards []models.NarrativeBoard
+
+	for _, tree := range abstractTrees {
+		board, bErr := createBoardFromAbstractTree(tree, date, categoryID)
+		if bErr != nil {
+			logging.Warnf("narrative: failed to create board from abstract tree %d: %v", tree.ID, bErr)
+			continue
+		}
+		if board != nil {
+			allBoards = append(allBoards, *board)
+		}
 	}
 
-	catID := categoryID
-	opts := &ScopeSaveOpts{
-		ScopeType:  models.NarrativeScopeTypeFeedCategory,
-		CategoryID: &catID,
-		Label:      categoryLabel,
+	if len(events) > 0 {
+		miscBoards, mErr := createMiscBoardsFromEvents(events, date, categoryID)
+		if mErr != nil {
+			logging.Warnf("narrative: failed to create misc boards for category %d: %v", categoryID, mErr)
+		} else {
+			allBoards = append(allBoards, miscBoards...)
+		}
 	}
 
-	saved, err := saveNarratives(allOutputs, date, opts)
-	if err != nil {
-		return 0, fmt.Errorf("save category narratives: %w", err)
+	if len(allBoards) == 0 {
+		logging.Infof("narrative: no boards created for category %d on %s", categoryID, date.Format("2006-01-02"))
+		return 0, nil
 	}
 
-	go feedbackNarrativesToTags(allOutputs)
+	totalSaved := 0
+	for _, board := range allBoards {
+		eventTags, lErr := LoadBoardEventTags(board)
+		if lErr != nil {
+			logging.Warnf("narrative: failed to load event tags for board %d: %v", board.ID, lErr)
+			continue
+		}
+		if len(eventTags) == 0 {
+			continue
+		}
 
-	logging.Infof("narrative: saved %d narratives (pass1_trees=%d, pass2_events=%d) for category %d (%s) on %s",
-		saved, len(trees), len(events), categoryID, categoryLabel, date.Format("2006-01-02"))
-	return saved, nil
+		var prevBoardIDs []uint
+		if board.PrevBoardIDs != "" {
+			json.Unmarshal([]byte(board.PrevBoardIDs), &prevBoardIDs)
+		}
+
+		var prevNarrs []PreviousNarrative
+		if len(prevBoardIDs) > 0 {
+			var prevSummaries []models.NarrativeSummary
+			database.DB.Where("board_id IN ?", prevBoardIDs).Order("id ASC").Find(&prevSummaries)
+			for _, ps := range prevSummaries {
+				prevNarrs = append(prevNarrs, PreviousNarrative{
+					ID:         uint64(ps.ID),
+					Title:      ps.Title,
+					Summary:    ps.Summary,
+					Status:     ps.Status,
+					Generation: ps.Generation,
+				})
+			}
+		}
+
+		boardCtx := BoardNarrativeContext{
+			Board:          board,
+			EventTags:      eventTags,
+			PrevNarratives: prevNarrs,
+		}
+
+		outputs, gErr := GenerateNarrativesForBoard(ctx, boardCtx)
+		if gErr != nil {
+			logging.Warnf("narrative: failed to generate narratives for board %d: %v", board.ID, gErr)
+			continue
+		}
+
+		saved, sErr := SaveNarrativesForBoard(outputs, board, date, categoryID)
+		if sErr != nil {
+			logging.Warnf("narrative: failed to save narratives for board %d: %v", board.ID, sErr)
+			continue
+		}
+		totalSaved += saved
+	}
+
+	logging.Infof("narrative: saved %d narratives across %d boards for category %d (%s) on %s",
+		totalSaved, len(allBoards), categoryID, categoryLabel, date.Format("2006-01-02"))
+
+	cleanEmptyBoards(date, &categoryID)
+
+	return totalSaved, nil
+}
+
+func (s *NarrativeService) runFallbackAssociations(ctx context.Context, date time.Time, allPrev []PreviousNarrative) {
+	startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
+	endOfDay := startOfDay.Add(24 * time.Hour)
+
+	var todayNarratives []models.NarrativeSummary
+	database.DB.Where("period_date >= ? AND period_date < ? AND parent_ids != '' AND parent_ids != '[]'",
+		startOfDay, endOfDay).
+		Order("id ASC").
+		Find(&todayNarratives)
+
+	resolved := 0
+	for _, n := range todayNarratives {
+		if resolved >= 10 {
+			break
+		}
+
+		newParentIDs, err := fallbackNarrativeAssociation(ctx, n, allPrev)
+		if err != nil {
+			logging.Warnf("narrative: fallback association failed for narrative %d: %v", n.ID, err)
+			continue
+		}
+		if newParentIDs != nil {
+			parentIDsJSON, _ := json.Marshal(newParentIDs)
+			database.DB.Model(&models.NarrativeSummary{}).Where("id = ?", n.ID).Update("parent_ids", string(parentIDsJSON))
+			resolved++
+		}
+	}
+
+	if resolved > 0 {
+		logging.Infof("narrative: resolved %d narrative parent associations via fallback", resolved)
+	}
+}
+
+func (s *NarrativeService) runFeedbackFromTodayNarratives(date time.Time) {
+	startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
+	endOfDay := startOfDay.Add(24 * time.Hour)
+
+	var todayNarratives []models.NarrativeSummary
+	database.DB.Where("period_date >= ? AND period_date < ? AND source = ?",
+		startOfDay, endOfDay, "ai").Find(&todayNarratives)
+
+	if len(todayNarratives) == 0 {
+		return
+	}
+
+	var feedbackOutputs []NarrativeOutput
+	for _, n := range todayNarratives {
+		var tagIDs []uint
+		if n.RelatedTagIDs != "" {
+			json.Unmarshal([]byte(n.RelatedTagIDs), &tagIDs)
+		}
+		var parentIDs []uint
+		if n.ParentIDs != "" {
+			json.Unmarshal([]byte(n.ParentIDs), &parentIDs)
+		}
+		feedbackOutputs = append(feedbackOutputs, NarrativeOutput{
+			Title:         n.Title,
+			Summary:       n.Summary,
+			Status:        n.Status,
+			RelatedTagIDs: tagIDs,
+			ParentIDs:     parentIDs,
+		})
+	}
+
+	go FeedbackNarrativesToTagsWithBoard(feedbackOutputs)
+}
+
+func cleanEmptyBoards(date time.Time, categoryID *uint) {
+	startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
+	endOfDay := startOfDay.Add(24 * time.Hour)
+
+	subQuery := database.DB.Model(&models.NarrativeSummary{}).
+		Select("DISTINCT board_id").
+		Where("board_id IS NOT NULL AND period_date >= ? AND period_date < ?", startOfDay, endOfDay)
+
+	boardQuery := database.DB.Where("period_date >= ? AND period_date < ?", startOfDay, endOfDay).
+		Where("id NOT IN (?)", subQuery)
+	if categoryID != nil {
+		boardQuery = boardQuery.Where("scope_category_id = ?", *categoryID)
+	}
+
+	result := boardQuery.Delete(&models.NarrativeBoard{})
+	if result.Error != nil {
+		logging.Warnf("narrative: cleanEmptyBoards failed for %s: %v", date.Format("2006-01-02"), result.Error)
+		return
+	}
+	if result.RowsAffected > 0 {
+		logging.Infof("narrative: cleaned %d empty boards for %s", result.RowsAffected, date.Format("2006-01-02"))
+	}
 }
 
 func (s *NarrativeService) GenerateAndSaveForAllCategories(date time.Time) (int, error) {
@@ -409,12 +546,14 @@ type NarrativeListItem struct {
 	Title       string     `json:"title"`
 	Summary     string     `json:"summary"`
 	Status      string     `json:"status"`
+	Source      string     `json:"source"`
 	Period      string     `json:"period"`
 	PeriodDate  string     `json:"period_date"`
 	Generation  int        `json:"generation"`
 	ParentIDs   []uint64   `json:"parent_ids"`
 	RelatedTags []TagBrief `json:"related_tags"`
 	ChildIDs    []uint64   `json:"child_ids"`
+	BoardID     *uint      `json:"board_id,omitempty"`
 }
 
 type TagBrief struct {
@@ -426,8 +565,42 @@ type TagBrief struct {
 }
 
 type TimelineDay struct {
-	Date       string              `json:"date"`
-	Narratives []NarrativeListItem `json:"narratives"`
+	Date       string                `json:"date"`
+	Narratives []NarrativeListItem   `json:"narratives"`
+	Boards     []BoardNarrativeGroup `json:"boards,omitempty"`
+}
+
+type BoardNarrativeGroup struct {
+	ID          uint                `json:"id"`
+	Name        string              `json:"name"`
+	Description string              `json:"description"`
+	Status      string              `json:"status"`
+	Narratives  []NarrativeListItem `json:"narratives"`
+}
+
+type BoardSummaryItem struct {
+	ID              uint                `json:"id"`
+	Name            string              `json:"name"`
+	Description     string              `json:"description"`
+	NarrativeCount  int                 `json:"narrative_count"`
+	AggregateStatus string              `json:"aggregate_status"`
+	ScopeType       string              `json:"scope_type"`
+	ScopeCategoryID *uint               `json:"scope_category_id,omitempty"`
+	Narratives      []NarrativeListItem `json:"narratives"`
+	PrevBoardIDs    []uint              `json:"prev_board_ids"`
+	AbstractTagID   *uint               `json:"abstract_tag_id,omitempty"`
+	AbstractTagSlug string              `json:"abstract_tag_slug,omitempty"`
+	CreatedAt       string              `json:"created_at"`
+}
+
+type BoardTimelineDay struct {
+	Date   string             `json:"date"`
+	Boards []BoardSummaryItem `json:"boards"`
+}
+
+type BoardDetailResponse struct {
+	Board      models.NarrativeBoard `json:"board"`
+	Narratives []NarrativeListItem   `json:"narratives"`
 }
 
 func (s *NarrativeService) GetTimeline(anchorDate time.Time, days int, scopeType string, categoryID *uint) ([]TimelineDay, error) {
@@ -473,6 +646,24 @@ func (s *NarrativeService) GetTimeline(anchorDate time.Time, days int, scopeType
 		itemByID[item.ID] = item
 	}
 
+	var boardsInRange []models.NarrativeBoard
+	boardQuery := database.DB.Where("period_date >= ? AND period_date < ?", rangeStart, rangeEnd)
+	if scopeType != "" {
+		boardQuery = boardQuery.Where("scope_type = ?", scopeType)
+		if categoryID != nil {
+			boardQuery = boardQuery.Where("scope_category_id = ?", *categoryID)
+		}
+	} else {
+		boardQuery = boardQuery.Where("scope_type = ?", models.NarrativeScopeTypeGlobal)
+	}
+	boardQuery.Order("id ASC").Find(&boardsInRange)
+
+	boardsByDate := make(map[string][]models.NarrativeBoard)
+	for _, b := range boardsInRange {
+		key := b.PeriodDate.Format("2006-01-02")
+		boardsByDate[key] = append(boardsByDate[key], b)
+	}
+
 	var result []TimelineDay
 	for d := rangeStart; d.Before(rangeEnd); d = d.AddDate(0, 0, 1) {
 		key := d.Format("2006-01-02")
@@ -484,10 +675,47 @@ func (s *NarrativeService) GetTimeline(anchorDate time.Time, days int, scopeType
 				}
 			}
 		}
-		result = append(result, TimelineDay{
+
+		var boardGroups []BoardNarrativeGroup
+		if dayBoards, ok := boardsByDate[key]; ok {
+			for _, b := range dayBoards {
+				var boardNarItems = make([]NarrativeListItem, 0)
+				statusMap := make(map[string]int)
+				for _, item := range dayItems {
+					if item.BoardID != nil && *item.BoardID == b.ID {
+						boardNarItems = append(boardNarItems, item)
+						statusMap[item.Status]++
+					}
+				}
+				boardGroups = append(boardGroups, BoardNarrativeGroup{
+					ID:          b.ID,
+					Name:        b.Name,
+					Description: b.Description,
+					Status:      aggregateBoardStatus(statusMap),
+					Narratives:  boardNarItems,
+				})
+			}
+		}
+
+		if len(boardGroups) > 0 {
+			var ungrouped []NarrativeListItem
+			for _, item := range dayItems {
+				if item.BoardID == nil {
+					ungrouped = append(ungrouped, item)
+				}
+			}
+			dayItems = ungrouped
+		}
+
+		day := TimelineDay{
 			Date:       key,
 			Narratives: dayItems,
-		})
+		}
+		if len(boardGroups) > 0 {
+			day.Boards = boardGroups
+		}
+
+		result = append(result, day)
 	}
 
 	return result, nil
@@ -519,12 +747,186 @@ func (s *NarrativeService) GetByDate(date time.Time, scopeType string, categoryI
 	return toListItems(narratives), nil
 }
 
+func (s *NarrativeService) GetByBoardID(boardID uint) ([]NarrativeListItem, error) {
+	var narratives []models.NarrativeSummary
+	if err := database.DB.Where("board_id = ?", boardID).
+		Order("source ASC, generation ASC, id ASC").
+		Find(&narratives).Error; err != nil {
+		return nil, fmt.Errorf("query narratives for board %d: %w", boardID, err)
+	}
+
+	return toListItems(narratives), nil
+}
+
+func aggregateBoardStatus(statusMap map[string]int) string {
+	if len(statusMap) == 0 {
+		return ""
+	}
+	if statusMap[models.NarrativeStatusEmerging] > 0 {
+		return models.NarrativeStatusEmerging
+	}
+	if statusMap[models.NarrativeStatusContinuing] > 0 {
+		return models.NarrativeStatusContinuing
+	}
+	if statusMap[models.NarrativeStatusSplitting] > 0 {
+		return models.NarrativeStatusSplitting
+	}
+	if statusMap[models.NarrativeStatusMerging] > 0 {
+		return models.NarrativeStatusMerging
+	}
+	return models.NarrativeStatusEnding
+}
+
+func (s *NarrativeService) GetBoardTimeline(startDate, endDate time.Time, scopeType string, categoryID *uint) ([]BoardTimelineDay, error) {
+	query := database.DB.Where("period_date >= ? AND period_date < ?", startDate, endDate)
+
+	if scopeType != "" && scopeType != "all" {
+		if categoryID != nil {
+			query = query.Where("scope_category_id = ?", *categoryID)
+		} else {
+			query = query.Where("scope_type = ?", scopeType)
+		}
+	}
+
+	var boards []models.NarrativeBoard
+	if err := query.Order("period_date ASC, id ASC").Find(&boards).Error; err != nil {
+		return nil, fmt.Errorf("query board timeline: %w", err)
+	}
+
+	if len(boards) == 0 {
+		return []BoardTimelineDay{}, nil
+	}
+
+	boardIDs := make([]uint, 0, len(boards))
+	for _, b := range boards {
+		boardIDs = append(boardIDs, b.ID)
+	}
+
+	var narratives []models.NarrativeSummary
+	database.DB.Where("board_id IN ?", boardIDs).
+		Order("source ASC, generation ASC, id ASC").
+		Find(&narratives)
+
+	narrativeItems := toListItems(narratives)
+	if narrativeItems == nil {
+		narrativeItems = []NarrativeListItem{}
+	}
+
+	narrativesByBoard := make(map[uint][]NarrativeListItem)
+	for _, item := range narrativeItems {
+		if item.BoardID != nil {
+			narrativesByBoard[*item.BoardID] = append(narrativesByBoard[*item.BoardID], item)
+		}
+	}
+
+	boardStatuses := make(map[uint]map[string]int)
+	for _, item := range narrativeItems {
+		if item.BoardID != nil {
+			if boardStatuses[*item.BoardID] == nil {
+				boardStatuses[*item.BoardID] = make(map[string]int)
+			}
+			boardStatuses[*item.BoardID][item.Status]++
+		}
+	}
+
+	grouped := make(map[string][]models.NarrativeBoard)
+	for _, b := range boards {
+		key := b.PeriodDate.In(time.Local).Format("2006-01-02")
+		grouped[key] = append(grouped[key], b)
+	}
+
+	abstractTagIDs := make(map[uint]bool)
+	for _, b := range boards {
+		if b.AbstractTagID != nil {
+			abstractTagIDs[*b.AbstractTagID] = true
+		}
+	}
+	abstractTagMap := make(map[uint]models.TopicTag)
+	if len(abstractTagIDs) > 0 {
+		tagIDs := make([]uint, 0, len(abstractTagIDs))
+		for id := range abstractTagIDs {
+			tagIDs = append(tagIDs, id)
+		}
+		var tags []models.TopicTag
+		database.DB.Where("id IN ?", tagIDs).Find(&tags)
+		for _, t := range tags {
+			abstractTagMap[t.ID] = t
+		}
+	}
+
+	var result []BoardTimelineDay
+	for d := startDate; d.Before(endDate); d = d.AddDate(0, 0, 1) {
+		key := d.Format("2006-01-02")
+		day := BoardTimelineDay{Date: key}
+		if bs, ok := grouped[key]; ok {
+			for _, b := range bs {
+				var prevBoardIDs []uint
+				if b.PrevBoardIDs != "" {
+					json.Unmarshal([]byte(b.PrevBoardIDs), &prevBoardIDs)
+				}
+				if prevBoardIDs == nil {
+					prevBoardIDs = []uint{}
+				}
+
+				boardNarItems := narrativesByBoard[b.ID]
+				if boardNarItems == nil {
+					boardNarItems = []NarrativeListItem{}
+				}
+
+				day.Boards = append(day.Boards, BoardSummaryItem{
+					ID:              b.ID,
+					Name:            b.Name,
+					Description:     b.Description,
+					NarrativeCount:  len(boardNarItems),
+					AggregateStatus: aggregateBoardStatus(boardStatuses[b.ID]),
+					ScopeType:       b.ScopeType,
+					ScopeCategoryID: b.ScopeCategoryID,
+					Narratives:      boardNarItems,
+					PrevBoardIDs:    prevBoardIDs,
+					AbstractTagID:   b.AbstractTagID,
+					AbstractTagSlug: func() string {
+						if b.AbstractTagID != nil {
+							if tag, ok := abstractTagMap[*b.AbstractTagID]; ok {
+								return tag.Slug
+							}
+						}
+						return ""
+					}(),
+					CreatedAt:       b.CreatedAt.Format("2006-01-02T15:04:05Z"),
+				})
+			}
+		}
+		result = append(result, day)
+	}
+
+	return result, nil
+}
+
+func (s *NarrativeService) GetBoardDetail(boardID uint) (*BoardDetailResponse, error) {
+	var board models.NarrativeBoard
+	if err := database.DB.Where("id = ?", boardID).First(&board).Error; err != nil {
+		return nil, fmt.Errorf("board %d not found: %w", boardID, err)
+	}
+
+	var narratives []models.NarrativeSummary
+	if err := database.DB.Where("board_id = ?", boardID).
+		Order("source ASC, generation ASC, id ASC").
+		Find(&narratives).Error; err != nil {
+		return nil, fmt.Errorf("query narratives for board %d: %w", boardID, err)
+	}
+
+	return &BoardDetailResponse{
+		Board:      board,
+		Narratives: toListItems(narratives),
+	}, nil
+}
+
 type NarrativeScopeItem struct {
 	CategoryID      uint   `json:"category_id"`
 	CategoryName    string `json:"category_name"`
 	CategoryIcon    string `json:"category_icon"`
 	CategoryColor   string `json:"category_color"`
-	NarrativeCount  int    `json:"narrative_count"`
+	BoardCount      int    `json:"board_count"`
 	LastGeneratedAt string `json:"last_generated_at"`
 }
 
@@ -534,13 +936,21 @@ type NarrativeScopesResponse struct {
 	Categories  []NarrativeScopeItem `json:"categories"`
 }
 
-func (s *NarrativeService) GetScopes(date time.Time) (*NarrativeScopesResponse, error) {
-	startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
-	endOfDay := startOfDay.Add(24 * time.Hour)
+func (s *NarrativeService) GetScopes(date time.Time, days int) (*NarrativeScopesResponse, error) {
+	if days <= 0 {
+		days = 7
+	}
+	if days > 30 {
+		days = 30
+	}
+
+	startOfAnchor := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
+	rangeStart := startOfAnchor.AddDate(0, 0, -(days - 1))
+	rangeEnd := startOfAnchor.Add(24 * time.Hour)
 
 	var globalCount int64
-	database.DB.Model(&models.NarrativeSummary{}).
-		Where("scope_type = ? AND period_date >= ? AND period_date < ?", models.NarrativeScopeTypeGlobal, startOfDay, endOfDay).
+	database.DB.Model(&models.NarrativeBoard{}).
+		Where("scope_type = ? AND period_date >= ? AND period_date < ?", models.NarrativeScopeTypeGlobal, rangeStart, rangeEnd).
 		Count(&globalCount)
 
 	type catRow struct {
@@ -549,9 +959,9 @@ func (s *NarrativeService) GetScopes(date time.Time) (*NarrativeScopesResponse, 
 		Cnt             int    `json:"cnt"`
 	}
 	var catRows []catRow
-	database.DB.Model(&models.NarrativeSummary{}).
+	database.DB.Model(&models.NarrativeBoard{}).
 		Select("scope_category_id, scope_label, COUNT(*) as cnt").
-		Where("scope_type = ? AND period_date >= ? AND period_date < ?", models.NarrativeScopeTypeFeedCategory, startOfDay, endOfDay).
+		Where("scope_type = ? AND period_date >= ? AND period_date < ?", models.NarrativeScopeTypeFeedCategory, rangeStart, rangeEnd).
 		Group("scope_category_id, scope_label").
 		Scan(&catRows)
 
@@ -573,10 +983,10 @@ func (s *NarrativeService) GetScopes(date time.Time) (*NarrativeScopesResponse, 
 			CreatedAt       string `json:"created_at"`
 		}
 		var lastRows []lastRow
-		database.DB.Model(&models.NarrativeSummary{}).
+		database.DB.Model(&models.NarrativeBoard{}).
 			Select("scope_category_id, MAX(created_at) as created_at").
 			Where("scope_type = ? AND scope_category_id IN ? AND period_date >= ? AND period_date < ?",
-				models.NarrativeScopeTypeFeedCategory, catIDs, startOfDay, endOfDay).
+				models.NarrativeScopeTypeFeedCategory, catIDs, rangeStart, rangeEnd).
 			Group("scope_category_id").
 			Scan(&lastRows)
 		lastMap := make(map[uint]string, len(lastRows))
@@ -592,14 +1002,14 @@ func (s *NarrativeService) GetScopes(date time.Time) (*NarrativeScopesResponse, 
 					CategoryName:    cat.Name,
 					CategoryIcon:    cat.Icon,
 					CategoryColor:   cat.Color,
-					NarrativeCount:  row.Cnt,
+					BoardCount:      row.Cnt,
 					LastGeneratedAt: lastMap[cat.ID],
 				})
 			} else {
 				items = append(items, NarrativeScopeItem{
 					CategoryID:      row.ScopeCategoryID,
 					CategoryName:    row.ScopeLabel,
-					NarrativeCount:  row.Cnt,
+					BoardCount:      row.Cnt,
 					LastGeneratedAt: lastMap[row.ScopeCategoryID],
 				})
 			}
@@ -607,7 +1017,7 @@ func (s *NarrativeService) GetScopes(date time.Time) (*NarrativeScopesResponse, 
 	}
 
 	return &NarrativeScopesResponse{
-		Date:        startOfDay.Format("2006-01-02"),
+		Date:        startOfAnchor.Format("2006-01-02"),
 		GlobalCount: int(globalCount),
 		Categories:  items,
 	}, nil
@@ -735,12 +1145,14 @@ func toListItems(narratives []models.NarrativeSummary) []NarrativeListItem {
 			Title:       n.Title,
 			Summary:     n.Summary,
 			Status:      n.Status,
+			Source:      n.Source,
 			Period:      n.Period,
 			PeriodDate:  n.PeriodDate.Format("2006-01-02"),
 			Generation:  n.Generation,
 			ParentIDs:   parentIDs,
 			RelatedTags: tagBriefs,
 			ChildIDs:    childIDs,
+			BoardID:     n.BoardID,
 		})
 	}
 
